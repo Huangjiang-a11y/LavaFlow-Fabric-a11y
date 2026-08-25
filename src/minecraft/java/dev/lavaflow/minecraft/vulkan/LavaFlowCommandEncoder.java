@@ -335,7 +335,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdCopyBufferToImage(commandBuffer, buffer(source).handle(), texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
         }
         if ((target.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            transition(texture, VK_IMAGE_LAYOUT_GENERAL);
         }
     }
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, Runnable callback, int mip) {
@@ -403,7 +403,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     private void restoreSampledLayout(LavaFlowGpuTexture texture) {
         if ((texture.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            transition(texture, VK_IMAGE_LAYOUT_GENERAL);
         }
     }
 
