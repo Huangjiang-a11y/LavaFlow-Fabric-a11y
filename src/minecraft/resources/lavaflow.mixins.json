@@ -6,7 +6,8 @@
   "client": [
     "FrameStatsMixin",
     "FramerateLimitMixin",
-    "PreferredGraphicsApiMixin"
+    "PreferredGraphicsApiMixin",
+    "TextureAtlasMaxSizeDebugMixin"
   ],
   "injectors": {
     "defaultRequire": 1
