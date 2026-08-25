@@ -57,6 +57,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // Interleaved multi-draw is emulated as a loop of single indexed draws, so no device limit
         // constrains how many draws one call may carry.
         int maxInterleavedDraws = Integer.MAX_VALUE;
+        LOGGER.log(System.Logger.Level.INFO, "LavaFlow maxTextureSize override=8192; device raw limits.maxImageDimension2D=" + limits.maxImageDimension2D());
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
                 8192, maxMemoryAllocationSize, maxInterleavedDraws,
                 limits.maxColorAttachments());
