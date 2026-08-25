@@ -123,6 +123,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void submit() {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         if (renderPassOpen) submitRenderPass();
+        try (MemoryStack stack = stackPush()) {
+            memoryBarrier(stack);
+        }
         check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
         transientMemory.flushMappedRanges();
         try (MemoryStack stack = stackPush()) {
@@ -385,6 +388,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void writeTimestamp(GpuQueryPool pool, int index) {
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ((LavaFlowQueryPool)pool).handle(), index);
+    }
+
+    private void memoryBarrier(MemoryStack stack) {
+        VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
