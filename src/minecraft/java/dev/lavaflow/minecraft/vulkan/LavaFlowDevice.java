@@ -58,7 +58,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // constrains how many draws one call may carry.
         int maxInterleavedDraws = Integer.MAX_VALUE;
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
-                limits.maxImageDimension2D(), maxMemoryAllocationSize, maxInterleavedDraws,
+                8192, maxMemoryAllocationSize, maxInterleavedDraws,
                 limits.maxColorAttachments());
         // The multi-draw capabilities describe what LavaFlow's render pass accepts, not what the Vulkan
         // device exposes natively. Each is emulated with a loop of core Vulkan commands when the device
