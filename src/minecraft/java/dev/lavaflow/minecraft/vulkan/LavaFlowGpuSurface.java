@@ -109,8 +109,13 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             int[] format = chooseSurfaceFormat(stack);
             int imageCount = Math.max(3, capabilities.minImageCount());
             if (capabilities.maxImageCount() > 0) imageCount = Math.min(imageCount, capabilities.maxImageCount());
-            int presentMode = supportedPresentModes.contains(configuration.presentMode())
-                    ? toVk(configuration.presentMode()) : VK_PRESENT_MODE_FIFO_KHR;
+            int presentMode;
+            if (Boolean.getBoolean("lavaflow.forceFifo")) {
+                presentMode = VK_PRESENT_MODE_FIFO_KHR;
+            } else {
+                presentMode = supportedPresentModes.contains(configuration.presentMode())
+                        ? toVk(configuration.presentMode()) : VK_PRESENT_MODE_FIFO_KHR;
+            }
 
             VkSwapchainCreateInfoKHR info = VkSwapchainCreateInfoKHR.calloc(stack).sType$Default()
                     .surface(surface).minImageCount(imageCount).imageFormat(format[0]).imageColorSpace(format[1])

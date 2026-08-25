@@ -395,6 +395,14 @@ public final class LavaFlowRenderer implements AutoCloseable {
     }
 
     private static int choosePresentMode(int[] modes) {
+        if (Boolean.getBoolean("lavaflow.forceFifo")) {
+            for (int mode : modes) {
+                if (mode == VK_PRESENT_MODE_FIFO_KHR || mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
+                    return VK_PRESENT_MODE_FIFO_KHR;
+                }
+            }
+            return VK_PRESENT_MODE_FIFO_KHR;
+        }
         for (int mode : modes) {
             if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
                 return mode;
