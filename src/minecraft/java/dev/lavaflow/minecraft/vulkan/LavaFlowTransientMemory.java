@@ -182,6 +182,10 @@ final class LavaFlowTransientMemory implements TransientMemory {
         return allocation.slice();
     }
 
+    void flushMappedRanges() {
+        for (MappedBlock block : mappedBlocks) block.buffer.flushMapped();
+    }
+
     Retired retire() {
         if (cpuAllocations.isEmpty()) return null;
         Retired retired = new Retired(cpuAllocations);

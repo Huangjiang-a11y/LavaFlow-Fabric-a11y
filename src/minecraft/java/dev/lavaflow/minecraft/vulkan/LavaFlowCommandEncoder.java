@@ -124,6 +124,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         if (renderPassOpen) submitRenderPass();
         check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
+        transientMemory.flushMappedRanges();
         try (MemoryStack stack = stackPush()) {
             VkSubmitInfo submit = VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
             if (waitSemaphore != NULL) {

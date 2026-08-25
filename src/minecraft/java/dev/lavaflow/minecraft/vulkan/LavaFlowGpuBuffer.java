@@ -7,6 +7,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
+import org.lwjgl.vulkan.VkMappedMemoryRange;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 
 import java.nio.ByteBuffer;
@@ -85,6 +86,9 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
             MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
+            VkMappedMemoryRange flushRange = VkMappedMemoryRange.calloc(stack).sType$Default()
+                    .memory(memory).offset(0).size(VK_WHOLE_SIZE);
+            vkFlushMappedMemoryRanges(context.device(), flushRange);
             vkUnmapMemory(context.device(), memory);
         }
     }
@@ -115,6 +119,17 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         mappedPhysicalBase = 0;
         vkUnmapMemory(context.device(), memory);
         mappingCount = 0;
+    }
+
+    // Ensures CPU writes to this mapped buffer are visible to the GPU. Required on some mobile
+    // drivers (Mali) where HOST_COHERENT writes are not reliably visible without an explicit flush.
+    void flushMapped() {
+        if (mappingCount == 0) return;
+        try (MemoryStack stack = stackPush()) {
+            VkMappedMemoryRange range = VkMappedMemoryRange.calloc(stack).sType$Default()
+                    .memory(memory).offset(0).size(VK_WHOLE_SIZE);
+            vkFlushMappedMemoryRanges(context.device(), range);
+        }
     }
 
     @Override public synchronized boolean isClosed() { return closed; }
