@@ -53,13 +53,21 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
         long maxMemoryAllocationSize = context.maxMemoryAllocationSize();
-        if (maxMemoryAllocationSize < 0) maxMemoryAllocationSize = Long.MAX_VALUE;
+        // Mali-G76 reports 0 (or a truncated/overflowed value) for this; feed a sane ceiling
+        // instead of 0, which would make LavaFlow believe the device cannot allocate any memory.
+        if (maxMemoryAllocationSize <= 0 || maxMemoryAllocationSize > (1L << 40)) {
+            maxMemoryAllocationSize = 256L << 30; // 256 GiB
+        }
         // Interleaved multi-draw is emulated as a loop of single indexed draws, so no device limit
         // constrains how many draws one call may carry.
         int maxInterleavedDraws = Integer.MAX_VALUE;
-        LOGGER.log(System.Logger.Level.INFO, "LavaFlow maxTextureSize override=8192; device raw limits.maxImageDimension2D=" + limits.maxImageDimension2D());
+        int physMaxTex = limits.maxImageDimension2D();
+        // Trust the hardware when it reports a plausible value (capped at 8192 to keep a safe
+        // floor); fall back to 8192 only when the driver reports 0/garbage (the Mali bug).
+        int maxTex = physMaxTex > 0 ? Math.min(physMaxTex, 8192) : 8192;
+        LOGGER.log(System.Logger.Level.INFO, "LavaFlow maxTextureSize=" + maxTex + "; device raw limits.maxImageDimension2D=" + physMaxTex);
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
-                8192, maxMemoryAllocationSize, maxInterleavedDraws,
+                maxTex, maxMemoryAllocationSize, maxInterleavedDraws,
                 limits.maxColorAttachments());
         // The multi-draw capabilities describe what LavaFlow's render pass accepts, not what the Vulkan
         // device exposes natively. Each is emulated with a loop of core Vulkan commands when the device
