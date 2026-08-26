@@ -53,10 +53,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
         long maxMemoryAllocationSize = context.maxMemoryAllocationSize();
-        // Mali-G76 reports 0 (or a truncated/overflowed value) for this; feed a sane ceiling
-        // instead of 0, which would make LavaFlow believe the device cannot allocate any memory.
+        // Mali-G76 reports 0 here (spec-legal "bounded by heap"). The context already falls back to
+        // the largest device-local heap size; this second guard only triggers if that returned 0.
         if (maxMemoryAllocationSize <= 0 || maxMemoryAllocationSize > (1L << 40)) {
-            maxMemoryAllocationSize = 256L << 30; // 256 GiB
+            long heap = context.largestDeviceLocalHeapSize();
+            maxMemoryAllocationSize = heap > 0 ? heap : (4L << 30);
         }
         // Interleaved multi-draw is emulated as a loop of single indexed draws, so no device limit
         // constrains how many draws one call may carry.

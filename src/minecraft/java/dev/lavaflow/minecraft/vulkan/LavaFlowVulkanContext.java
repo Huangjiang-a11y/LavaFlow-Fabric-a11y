@@ -233,6 +233,21 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         queryVulkan11Properties();
     }
 
+    public long largestDeviceLocalHeapSize() {
+        try (MemoryStack stack = stackPush()) {
+            VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
+            long largest = 0;
+            for (int i = 0; i < memory.memoryHeapCount(); i++) {
+                VkMemoryHeap heap = memory.memoryHeaps(i);
+                if ((heap.flags() & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+                    largest = Math.max(largest, heap.size());
+                }
+            }
+            return largest;
+        }
+    }
+
     private void queryVulkan11Properties() {
         try (MemoryStack stack = stackPush()) {
             VkPhysicalDeviceVulkan11Properties vulkan11 = VkPhysicalDeviceVulkan11Properties.calloc(stack)
@@ -240,7 +255,17 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             VkPhysicalDeviceProperties2 properties2 = VkPhysicalDeviceProperties2.calloc(stack)
                     .sType$Default().pNext(vulkan11.address());
             vkGetPhysicalDeviceProperties2(physicalDevice, properties2);
-            maxMemoryAllocationSize = vulkan11.maxMemoryAllocationSize();
+            long reported = vulkan11.maxMemoryAllocationSize();
+            // Some drivers (e.g. Mali) report 0 here, which per the Vulkan spec means the limit is
+            // bounded by the heap rather than a fixed value. Fall back to the largest device-local
+            // heap size instead of a fabricated huge ceiling, so allocation sizing stays within what
+            // the device can actually satisfy. A 256 GiB ceiling made texture/staging memory land in
+            // regions the driver could not honor, causing intermittent texture corruption.
+            if (reported <= 0 || reported > (1L << 40)) {
+                long heap = largestDeviceLocalHeapSize();
+                reported = heap > 0 ? heap : (4L << 30);
+            }
+            maxMemoryAllocationSize = reported;
         }
     }
 
