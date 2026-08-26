@@ -26,6 +26,14 @@ public final class LavaFlowShaderc {
         long result = 0;
         try {
             shaderc_compile_options_set_source_language(options, shaderc_source_language_glsl);
+            if (Boolean.getBoolean("lavaflow.dumpDynamicTransforms") && source.contains("DynamicTransforms")) {
+                try {
+                    String safe = name.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                    String suffix = kind == shaderc_fragment_shader ? "_frag" : "_vert";
+                    java.nio.file.Files.writeString(
+                            java.nio.file.Paths.get("lavaflow_debug_shader_" + safe + suffix + ".glsl"), source);
+                } catch (Exception ignored) {}
+            }
             shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
                     shaderc_env_version_vulkan_1_1);
             shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_3);
