@@ -507,7 +507,12 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // draw itself. When the parameters are in host memory that is currently mapped, read them here
         // and record plain indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
-        if (hostBase == 0) {
+        // The host-readback path below reads the mapped indirect-parameter buffer at record time.
+        // It exists to dodge repeated driver re-validation of the parameter buffer, but on Mali the
+        // read can race with the producer's writes, rendering stale draw parameters for some batches
+        // (partial texture corruption that appears randomly on world load). -Dlavaflow.disableIndirectReadback=true
+        // forces the always-correct per-draw GPU indirect path instead.
+        if (hostBase == 0 || Boolean.getBoolean("lavaflow.disableIndirectReadback")) {
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
