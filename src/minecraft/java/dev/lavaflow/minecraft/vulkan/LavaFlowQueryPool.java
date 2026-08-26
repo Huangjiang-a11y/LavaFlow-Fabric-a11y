@@ -31,6 +31,7 @@ final class LavaFlowQueryPool implements GpuQueryPool {
     long handle() { return pool; }
     @Override public int size() { return size; }
     @Override public OptionalLong getValue(int index) {
+        if (Boolean.getBoolean("lavaflow.disableTimerQueries")) return OptionalLong.empty();
         checkIndex(index);
         try (MemoryStack stack = stackPush()) {
             LongBuffer value = stack.mallocLong(1);

@@ -567,7 +567,12 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             }
         }
     }
-    @Override public void writeTimestamp(GpuQueryPool pool, int index) { encoder.writeTimestamp(pool, index); }
+    @Override public void writeTimestamp(GpuQueryPool pool, int index) {
+        if (Boolean.getBoolean("lavaflow.debugTimestamps") && begun && !ended) {
+            System.out.println("[LavaFlow] writeTimestamp recorded INSIDE an open render pass (invalid Vulkan; can corrupt the frame on Mali)");
+        }
+        encoder.writeTimestamp(pool, index);
+    }
 
     private static LavaFlowGpuTextureView view(GpuTextureView view) { return (LavaFlowGpuTextureView) view; }
 
