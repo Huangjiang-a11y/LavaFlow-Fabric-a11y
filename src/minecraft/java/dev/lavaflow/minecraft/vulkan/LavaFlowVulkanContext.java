@@ -227,6 +227,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         boolean baselineDevice = Boolean.getBoolean("lavaflow.baselineDevice");
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
+
+    private boolean forceLegacyRenderPass() {
+        return baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
+    }
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
@@ -350,7 +354,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .fillModeNonSolid(fillModeNonSolid)
                     .multiDrawIndirect(multiDrawIndirect);
             long featureChain = NULL;
-            if (dynamicRendering) {
+            if (dynamicRendering && !forceLegacyRenderPass()) {
                 featureChain = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default()
                         .dynamicRendering(true).pNext(featureChain).address();
             }
@@ -363,7 +367,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             PointerBuffer extensionNames = stack.mallocPointer(extensionCount);
             extensionNames.put(stack.UTF8(VK_KHR_SWAPCHAIN_EXTENSION_NAME));
             if (pushDescriptors) extensionNames.put(stack.UTF8(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME));
-            if (dynamicRendering) {
+            if (dynamicRendering && !forceLegacyRenderPass()) {
                 extensionNames.put(stack.UTF8(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME));
                 extensionNames.put(stack.UTF8(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME));
                 extensionNames.put(stack.UTF8(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME));
@@ -432,7 +436,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     public VkPhysicalDeviceProperties properties() { return properties; }
     public long maxMemoryAllocationSize() { return maxMemoryAllocationSize; }
     boolean pushDescriptors() { return pushDescriptors; }
-    boolean dynamicRendering() { return dynamicRendering; }
+    boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }

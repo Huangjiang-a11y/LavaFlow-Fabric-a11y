@@ -41,6 +41,8 @@ import static org.lwjgl.vulkan.VK10.*;
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
 final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
+
+    private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
     // Layout of the VkMultiDrawIndexedInfoEXT records that multiDrawIndexed receives, as int indices.
     private static final int INDEXED_INFO_INTS = VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES;
     private static final int INDEXED_INFO_FIRST_INDEX = VkMultiDrawIndexedInfoEXT.FIRSTINDEX / Integer.BYTES;
@@ -151,8 +153,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         begun = true;
         for (TextureBinding binding : textures.values()) {
             LavaFlowGpuTexture sampled = binding.view.texture();
-            if (sampled.layout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                encoder.transition(sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
+                encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
             }
         }
         for (LavaFlowGpuTextureView view : colorViews) {
@@ -161,6 +163,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         if (depthView != null) {
             encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         }
+        if (!LAYOUT_DEBUG.isEmpty()) debugValidateLayouts();
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, false);
             else beginLegacy(stack, false);
@@ -311,14 +314,54 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         else vkCmdEndRenderPass(encoder.commandBuffer());
         for (TextureBinding binding : textures.values()) {
             LavaFlowGpuTexture sampled = binding.view.texture();
-            if (sampled.layout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                encoder.transition(sampled, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
+                encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
             }
         }
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, true);
             else beginLegacy(stack, true);
         }
+    }
+
+    /**
+     * Layout precondition checks for render-pass begin. Mali enforces the Vulkan spec far more
+     * strictly than desktop drivers: an attachment or sampled texture left in an incompatible layout
+     * surfaces as texture corruption/tearing rather than a validation error. With
+     * -Dlavaflow.debugLayoutChecks=throw this throws (with the offending texture identity and its
+     * raw layout value) so the exact violation can be pinpointed on-device; with the flag set to any
+     * other non-empty value it only warns.
+     */
+    private void debugValidateLayouts() {
+        for (TextureBinding binding : textures.values()) {
+            LavaFlowGpuTexture t = binding.view.texture();
+            int l = t.layout();
+            if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                report("Sampled texture " + System.identityHashCode(t) + " has pre-begin layout " + l
+                        + " (expected GENERAL or SHADER_READ_ONLY_OPTIMAL)");
+            }
+        }
+        for (LavaFlowGpuTextureView view : colorViews) {
+            if (view == null) continue;
+            int l = view.texture().layout();
+            if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                report("Color attachment " + System.identityHashCode(view.texture()) + " has pre-begin layout " + l
+                        + " (expected GENERAL or COLOR_ATTACHMENT_OPTIMAL)");
+            }
+        }
+        if (depthView != null) {
+            int l = depthView.texture().layout();
+            if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                report("Depth attachment " + System.identityHashCode(depthView.texture()) + " has pre-begin layout " + l
+                        + " (expected GENERAL or DEPTH_STENCIL_ATTACHMENT_OPTIMAL)");
+            }
+        }
+    }
+
+    private static void report(String message) {
+        String full = "[LavaFlow layout-debug] " + message;
+        if (LAYOUT_DEBUG.equals("throw")) throw new IllegalStateException(full);
+        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, full);
     }
 
     private void setViewport(MemoryStack stack) {
@@ -536,7 +579,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             LavaFlowRenderPipeline.Entry entry = entries.get(i);
             if (entry.type() != LavaFlowRenderPipeline.EntryType.SAMPLED_IMAGE) continue;
             TextureBinding binding = textures.get(entry.name());
-            if (binding != null && binding.view.texture().layout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            if (binding != null && binding.view.texture().layout() != VK_IMAGE_LAYOUT_GENERAL) {
                 splitForSampledTransitions();
                 break;
             }
@@ -642,12 +685,12 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     TextureBinding binding = textures.get(entry.name());
                     if (binding == null) throw new IllegalStateException("Missing sampled image " + entry.name());
                     LavaFlowGpuTexture sampledTexture = binding.view.texture();
-                    if (sampledTexture.layout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                    if (sampledTexture.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                         throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
                     }
                     VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
                             .sampler(binding.sampler.handle()).imageView(binding.view.handle())
-                            .imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL);
                     write.pImageInfo(imageInfo);
                 }
                 case TEXEL_BUFFER -> {
