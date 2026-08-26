@@ -228,9 +228,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
 
-    private boolean forceLegacyRenderPass() {
-        return baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
-    }
+
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
@@ -250,6 +248,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             }
             return largest;
         }
+    }
+
+    private boolean forceLegacyRenderPass() {
+        return Boolean.getBoolean("lavaflow.baselineDevice") || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
     }
 
     private void queryVulkan11Properties() {
