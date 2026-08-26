@@ -26,13 +26,19 @@ public final class LavaFlowShaderc {
         long result = 0;
         try {
             shaderc_compile_options_set_source_language(options, shaderc_source_language_glsl);
-            if (Boolean.getBoolean("lavaflow.dumpDynamicTransforms") && source.contains("DynamicTransforms")) {
+            if (Boolean.getBoolean("lavaflow.dumpDynamicTransforms")) {
+                String safe = name.replaceAll("[^a-zA-Z0-9_.-]", "_");
+                String suffix = kind == shaderc_fragment_shader ? "_frag" : "_vert";
+                boolean hasDt = source.contains("DynamicTransforms");
+                System.out.println("[LavaFlow] dump shader name=" + name + " kind=" + suffix
+                        + " containsDynamicTransforms=" + hasDt);
                 try {
-                    String safe = name.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                    String suffix = kind == shaderc_fragment_shader ? "_frag" : "_vert";
+                    java.nio.file.Files.createDirectories(java.nio.file.Paths.get("lavaflow_shaders"));
                     java.nio.file.Files.writeString(
-                            java.nio.file.Paths.get("lavaflow_debug_shader_" + safe + suffix + ".glsl"), source);
-                } catch (Exception ignored) {}
+                            java.nio.file.Paths.get("lavaflow_shaders/" + safe + suffix + ".glsl"), source);
+                } catch (Exception e) {
+                    System.out.println("[LavaFlow] shader dump write failed: " + e);
+                }
             }
             shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
                     shaderc_env_version_vulkan_1_1);
