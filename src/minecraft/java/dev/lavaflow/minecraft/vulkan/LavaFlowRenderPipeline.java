@@ -62,8 +62,6 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         }
         // Push descriptor sets may not contain dynamic uniform buffers, so dynamic offsets are only
         // used on the descriptor-set path, and only while within the device's dynamic-buffer limit.
-        // Uniform offsets are baked into the descriptor rather than passed as dynamic offsets at bind
-        // time, because some Mali drivers mishandle non-zero dynamic offsets.
         this.dynamicUniforms = !device.context().pushDescriptors()
                 && uniformCount <= device.context().properties().limits().maxDescriptorSetUniformBuffersDynamic();
 

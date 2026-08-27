@@ -26,23 +26,6 @@ public final class LavaFlowShaderc {
         long result = 0;
         try {
             shaderc_compile_options_set_source_language(options, shaderc_source_language_glsl);
-            if (Boolean.getBoolean("lavaflow.dumpDynamicTransforms")) {
-                String safe = name.replaceAll("[^a-zA-Z0-9_.-]", "_");
-                String suffix = kind == shaderc_fragment_shader ? "_frag" : "_vert";
-                boolean hasDt = source.contains("DynamicTransforms");
-                System.out.println("[LavaFlow] dump shader name=" + name + " kind=" + suffix
-                        + " containsDynamicTransforms=" + hasDt
-                        + " uses_gl_VertexID=" + source.contains("gl_VertexID")
-                        + " uses_gl_InstanceID=" + source.contains("gl_InstanceID")
-                        + " uses_gl_VertexIndex=" + source.contains("gl_VertexIndex"));
-                try {
-                    java.nio.file.Files.createDirectories(java.nio.file.Paths.get("lavaflow_shaders"));
-                    java.nio.file.Files.writeString(
-                            java.nio.file.Paths.get("lavaflow_shaders/" + safe + suffix + ".glsl"), source);
-                } catch (Exception e) {
-                    System.out.println("[LavaFlow] shader dump write failed: " + e);
-                }
-            }
             shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
                     shaderc_env_version_vulkan_1_1);
             shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_3);
@@ -50,21 +33,6 @@ public final class LavaFlowShaderc {
             shaderc_compile_options_set_auto_map_locations(options, true);
             shaderc_compile_options_set_generate_debug_info(options);
             shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_zero);
-
-            // Vulkan GLSL names these gl_VertexIndex/gl_InstanceIndex; Mojang's OpenGL-style vanilla
-            // GLSL (every vanilla program and the main-menu panorama) relies on gl_VertexID/gl_InstanceID.
-            // Without this shim, vertex/instance indices are computed wrong on Vulkan, corrupting instanced
-            // and offset geometry and showing as per-frame flickering of vanilla (non-Sodium) content.
-            if (source.contains("gl_VertexID") || source.contains("gl_InstanceID")) {
-                String idDefine = "#define gl_VertexID gl_VertexIndex\n#define gl_InstanceID gl_InstanceIndex\n";
-                int versionAt = source.indexOf("#version");
-                if (versionAt >= 0) {
-                    int nl = source.indexOf('\n', versionAt);
-                    source = source.substring(0, nl + 1) + idDefine + source.substring(nl + 1);
-                } else {
-                    source = idDefine + source;
-                }
-            }
 
             result = shaderc_compile_into_spv(compiler, source, kind, name, "main", options);
             if (result == 0) throw new IllegalStateException("LavaFlow shaderc returned no result for " + name);

@@ -29,17 +29,14 @@ final class LavaFlowGpuSampler extends GpuSampler {
         this.device = device; this.context = device.context(); this.addressModeU = addressModeU; this.addressModeV = addressModeV;
         this.minFilter = minFilter; this.magFilter = magFilter; this.maxAnisotropy = maxAnisotropy; this.maxLod = maxLod;
         try (MemoryStack stack = stackPush()) {
-            // Some mobile drivers (Mali) return flickering/corrupt samples for scaled textures when
-            // anisotropic filtering or high-LOD mip sampling is involved, while flat (mip 0) sampling
             double lod = maxLod.orElse(1000.0);
-            int anisotropy = maxAnisotropy;
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(LavaFlowVk.filter(magFilter)).minFilter(LavaFlowVk.filter(minFilter))
                     .mipmapMode(lod > 0.25 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST)
                     .addressModeU(LavaFlowVk.addressMode(addressModeU)).addressModeV(LavaFlowVk.addressMode(addressModeV))
                     .addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).mipLodBias(0)
                     .minLod(0).maxLod((float)Math.max(0.25, lod))
-                    .anisotropyEnable(anisotropy > 1).maxAnisotropy(Math.max(1, anisotropy));
+                    .anisotropyEnable(maxAnisotropy > 1).maxAnisotropy(Math.max(1, maxAnisotropy));
             LongBuffer out = stack.mallocLong(1);
             int result = vkCreateSampler(context.device(), info, null, out);
             if (result != VK_SUCCESS) throw new IllegalStateException("vkCreateSampler failed with VkResult " + result);

@@ -7,7 +7,8 @@
     "FrameStatsMixin",
     "FramerateLimitMixin",
     "PreferredGraphicsApiMixin",
-    "TextureAtlasMaxSizeDebugMixin"
+    "TextureAtlasMaxSizeDebugMixin",
+    "AsyncParticlesVulkanBackendMixin"
   ],
   "injectors": {
     "defaultRequire": 1
