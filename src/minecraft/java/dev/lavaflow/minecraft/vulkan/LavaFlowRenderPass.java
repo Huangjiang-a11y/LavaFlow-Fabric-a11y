@@ -507,12 +507,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // draw itself. When the parameters are in host memory that is currently mapped, read them here
         // and record plain indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
-        // The host-readback path below reads the mapped indirect-parameter buffer at record time.
-        // It exists to dodge repeated driver re-validation of the parameter buffer, but on Mali the
-        // read can race with the producer's writes, rendering stale draw parameters for some batches
-        // (partial texture corruption that appears randomly on world load). -Dlavaflow.disableIndirectReadback=true
-        // forces the always-correct per-draw GPU indirect path instead.
-        if (hostBase == 0 || Boolean.getBoolean("lavaflow.disableIndirectReadback")) {
+        if (hostBase == 0) {
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
@@ -568,9 +563,6 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void writeTimestamp(GpuQueryPool pool, int index) {
-        if (Boolean.getBoolean("lavaflow.debugTimestamps") && begun && !ended) {
-            System.out.println("[LavaFlow] writeTimestamp recorded INSIDE an open render pass (invalid Vulkan; can corrupt the frame on Mali)");
-        }
         encoder.writeTimestamp(pool, index);
     }
 

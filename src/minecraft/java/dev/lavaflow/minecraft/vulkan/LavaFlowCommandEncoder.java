@@ -387,20 +387,20 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         return serial <= completedSerial;
     }
     @Override public void writeTimestamp(GpuQueryPool pool, int index) {
-        // Disabling timer queries makes the frame profiler fall back to CPU timing.
-        if (Boolean.getBoolean("lavaflow.disableTimerQueries")) return;
         // vkCmdWriteTimestamp is only valid OUTSIDE a render pass instance. If a pass is open, end it
         // first; the next draw call will lazily re-begin it via LavaFlowRenderPass.ensureBegun().
         // Recording the timestamp inside an open pass is undefined behaviour and is what made the F3
         // GPU frequency reading go negative on Mali.
         if (renderPassOpen) submitRenderPass();
         long handle = ((LavaFlowQueryPool)pool).handle();
-        // Reset the query slot before writing. Mojang's reference Vulkan backend does this every time
-        // and so does the Vulkan spec sample code: skipping the reset lets a query pool entry retain
-        // its previous GPU tick, which on TBDR drivers can be a smaller value than the next write
-        // (after counter wrap-around) and produces a negative end - start delta, i.e. a negative
-        // frequency on F3.
-        vkCmdResetQueryPool(context.device(), commandBuffer, handle, index, 1);
+        // Reset the query slot before writing. Mojang's reference Vulkan backend does this every
+        // time and so does the Vulkan spec sample code: skipping the reset lets a query pool entry
+        // retain its previous GPU tick, which on TBDR drivers can be a smaller value than the next
+        // write (after counter wrap-around) and produces a negative end - start delta, i.e. a
+        // negative frequency on F3. The CPU-side vkResetQueryPool is used here so the slot is
+        // guaranteed to be zeroed before the next vkCmdWriteTimestamp is recorded, regardless of
+        // when the command buffer is submitted.
+        vkResetQueryPool(context.device(), handle, index, 1);
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, handle, index);
     }
 

@@ -31,15 +31,8 @@ final class LavaFlowGpuSampler extends GpuSampler {
         try (MemoryStack stack = stackPush()) {
             // Some mobile drivers (Mali) return flickering/corrupt samples for scaled textures when
             // anisotropic filtering or high-LOD mip sampling is involved, while flat (mip 0) sampling
-            // is fine -- which surfaces as intermittent corruption of icons, the sun/moon, the main
-            // menu panorama and other small/scaled textures. -Dlavaflow.disableTextureLods=true pins
-            // every sampler to mip 0 with anisotropy off to confirm the cause.
             double lod = maxLod.orElse(1000.0);
             int anisotropy = maxAnisotropy;
-            if (Boolean.getBoolean("lavaflow.disableTextureLods")) {
-                lod = 0.25;
-                anisotropy = 1;
-            }
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(LavaFlowVk.filter(magFilter)).minFilter(LavaFlowVk.filter(minFilter))
                     .mipmapMode(lod > 0.25 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST)

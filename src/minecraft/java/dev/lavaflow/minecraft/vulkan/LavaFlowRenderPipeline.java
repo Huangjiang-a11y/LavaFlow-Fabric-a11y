@@ -62,14 +62,9 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         }
         // Push descriptor sets may not contain dynamic uniform buffers, so dynamic offsets are only
         // used on the descriptor-set path, and only while within the device's dynamic-buffer limit.
-        // -Dlavaflow.disableDynamicUniforms=true bakes uniform offsets into the descriptor instead of
-        // passing them as dynamic offsets at bind time. Some Mali drivers mishandle non-zero dynamic
-        // offsets (Minecraft's DynamicTransforms UBO binds a different offset per draw and can be
-        // reallocated mid-frame), surfacing as per-frame corruption/flicker of vanilla-rendered
-        // content while Sodium (which binds its global UBO at offset zero) stays clean. ArtVK bakes
-        // offsets into per-draw descriptors for the same reason.
-        this.dynamicUniforms = !Boolean.getBoolean("lavaflow.disableDynamicUniforms")
-                && !device.context().pushDescriptors()
+        // Uniform offsets are baked into the descriptor rather than passed as dynamic offsets at bind
+        // time, because some Mali drivers mishandle non-zero dynamic offsets.
+        this.dynamicUniforms = !device.context().pushDescriptors()
                 && uniformCount <= device.context().properties().limits().maxDescriptorSetUniformBuffersDynamic();
 
         long createdVertex = 0, createdFragment = 0, createdSetLayout = 0, createdPipelineLayout = 0;
