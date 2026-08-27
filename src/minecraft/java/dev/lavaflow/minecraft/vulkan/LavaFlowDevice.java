@@ -63,9 +63,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // constrains how many draws one call may carry.
         int maxInterleavedDraws = Integer.MAX_VALUE;
         int physMaxTex = limits.maxImageDimension2D();
-        // Trust the hardware when it reports a plausible value (capped at 8192 to keep a safe
-        // floor); fall back to 8192 only when the driver reports 0/garbage (the Mali bug).
-        int maxTex = physMaxTex > 0 ? Math.min(physMaxTex, 8192) : 8192;
+        // Trust the hardware-reported maxImageDimension2D when it is at least 8192. On modern
+        // desktop GPUs (GTX 1080 Ti / RTX 4090 etc.) that value is 16384; clamping to 8192 here
+        // would waste VRAM headroom. Fall back to 8192 only when the driver reports something
+        // smaller (the Mali-G76 bug returns 0 here).
+        int maxTex = physMaxTex >= 8192 ? physMaxTex : 8192;
         LOGGER.log(System.Logger.Level.INFO, "LavaFlow maxTextureSize=" + maxTex + "; device raw limits.maxImageDimension2D=" + physMaxTex);
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
                 maxTex, maxMemoryAllocationSize, maxInterleavedDraws,
