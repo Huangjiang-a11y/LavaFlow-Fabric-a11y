@@ -36,7 +36,7 @@ import java.lang.reflect.Field;
 public abstract class AsyncParticlesVulkanBackendMixin {
 
     @Inject(method = "getVkCaps", at = @At("HEAD"), cancellable = true)
-    private static void lavaflow$guardGetVkCaps(GpuDevice device, CallbackInfoReturnable<?> cir) {
+    private static void lavaflow$guardGetVkCaps(GpuDevice device, CallbackInfoReturnable cir) {
         Object backendObj;
         try {
             Field f = GpuDevice.class.getDeclaredField("backend");
