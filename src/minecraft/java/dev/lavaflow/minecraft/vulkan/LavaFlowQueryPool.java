@@ -35,8 +35,13 @@ final class LavaFlowQueryPool implements GpuQueryPool {
         checkIndex(index);
         try (MemoryStack stack = stackPush()) {
             LongBuffer value = stack.mallocLong(1);
+            // Wait until the query has actually been written by the GPU. Without VK_QUERY_RESULT_WAIT_BIT
+            // vkGetQueryPoolResults returns VK_NOT_READY on Mali when the timestamp hasn't been flushed
+            // yet, which on its own would just skip the value — but in practice the start/end pair reads
+            // race each other and one of them lands on a stale/zero entry, so end - start occasionally
+            // goes negative and the F3 GPU frequency reading goes negative.
             int result = vkGetQueryPoolResults(context.device(), pool, index, 1, value, Long.BYTES,
-                    VK_QUERY_RESULT_64_BIT);
+                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (result == VK_NOT_READY) return OptionalLong.empty();
             if (result != VK_SUCCESS) throw new IllegalStateException("vkGetQueryPoolResults failed with VkResult " + result);
             return OptionalLong.of(value.get(0));
