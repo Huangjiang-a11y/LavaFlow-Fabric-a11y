@@ -486,8 +486,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .colorAttachmentCount(colorReferences.remaining())
                     .pColorAttachments(colorReferences);
             if (depthReference != null) subpass.get(0).pDepthStencilAttachment(depthReference);
+            VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
+            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);
+            dependency.dstSubpass(0);
+            dependency.srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            dependency.dstStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            dependency.srcAccessMask(0);
+            dependency.dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+
             VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
-                    .pAttachments(attachments).pSubpasses(subpass);
+                    .pAttachments(attachments).pSubpasses(subpass).pDependencies(dependency);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateRenderPass(device, info, null, out), "vkCreateRenderPass(fallback)");
             long renderPass = out.get(0);
