@@ -139,6 +139,15 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// 最终产物文件名：模组名-游戏版本名-模组版本名 (例如 lavaflow-26.2-0.1.0-alpha.jar)
+// 应用到 jar / remapJar 等所有归档任务。
+val mcVersion = property("minecraft_version").toString()
+tasks.withType<org.gradle.jvm.tasks.AbstractArchiveTask>().configureEach {
+    archiveBaseName.set(rootProject.name)
+    archiveAppendix.set(mcVersion)
+    archiveVersion.set(project.version.toString())
+}
+
 // Tests that exercise classes in the minecraft sourceSet (Blaze3D API on the classpath).
 val minecraftTest by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft-test/java"))

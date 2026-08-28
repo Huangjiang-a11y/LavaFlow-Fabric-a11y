@@ -6,7 +6,7 @@
 > LavaFlow 的源代码与文档**100% 由 AI 在人类指导下生成**。请将其视为实验性实现：在依赖它之前，先审计代码并在你自己的硬件上测试。
 
 > [!NOTE]
-> 本仓库是基于原始项目 [BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow)（NeoForge 版）开发的 Fabric 移植版。Vulkan 后端的设计与实现全部归功于原项目。
+> 本仓库是 LavaFlow 的 **a11y 分支**（fork 自 [EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) 的 Fabric 移植版），而后者基于原始项目 [BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow)（NeoForge 版）开发。Vulkan 后端的设计与实现全部归功于原项目。本分支聚焦于**早期移动端GPU与第三方模组的兼容性修复**。
 
 LavaFlow 是 Minecraft Blaze3D API 的实验性 Vulkan 1.1 图形后端。它用 LavaFlow 自有的 LWJGL Vulkan 实现替换了实际执行的 Blaze3D 渲染路径，并且从不调用 OpenGL。
 
@@ -121,7 +121,7 @@ gradle --no-daemon clean test jar
 Fabric 模组产物输出至：
 
 ```text
-build/libs/lavaflow-0.1.0-alpha.jar
+build/libs/lavaflow-26.2-0.1.0-alpha.jar
 ```
 
 GitHub Actions 会对推送、拉取请求与手动触发运行相同的构建，然后将 JAR 作为工作流产物发布。
@@ -144,7 +144,7 @@ gradle run --args='--frames=120'
 
 ## 在 Fabric 上安装
 
-1. 将 `build/libs/lavaflow-0.1.0-alpha.jar` 复制到 Minecraft 26.2 实例的 `mods` 目录。
+1. 将 `build/libs/lavaflow-26.2-0.1.0-alpha.jar` 复制到 Minecraft 26.2 实例的 `mods` 目录。
 2. 选择 Vulkan 作为实例的图形后端。
 3. 使用 Java 25 启动 Minecraft。
 
@@ -162,7 +162,9 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 
 ## 致谢
 
-- 原项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现。
+- 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。
+- Fabric 移植：[EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) —— 将后端移植到 Fabric Loader。
+- 本 a11y 分支：[Huangjiang-a11y/LavaFlow-Fabric-a11y](https://github.com/Huangjiang-a11y/LavaFlow-Fabric-a11y) —— 面向移动端 Mali GPU 与第三方模组的 Vulkan 兼容性修复。
 - 工具链：[Fabric Loader](https://fabricmc.net/)、[Fabric Loom](https://github.com/FabricMC/fabric-loom)、[LWJGL 3](https://www.lwjgl.org/)。
 
 ## 许可证
