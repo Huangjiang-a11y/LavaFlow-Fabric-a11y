@@ -123,8 +123,14 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
 
     // Ensures CPU writes to this mapped buffer are visible to the GPU. Required on some mobile
     // drivers (Mali) where HOST_COHERENT writes are not reliably visible without an explicit flush.
+    // 整块 flush：确保 CPU 写入对 GPU 可见；部分移动驱动（Mali）非 HOST_COHERENT 时需要显式 flush。
     void flushMapped() {
-        flushMapped(0, VK_WHOLE_SIZE);
+        if (mappingCount == 0) return;
+        try (MemoryStack stack = stackPush()) {
+            VkMappedMemoryRange range = VkMappedMemoryRange.calloc(stack).sType$Default()
+                    .memory(memory).offset(0).size(VK_WHOLE_SIZE);
+            vkFlushMappedMemoryRanges(context.device(), range);
+        }
     }
 
     // 按脏区间 flush：Vulkan 要求 offset/size 对齐到 nonCoherentAtomSize，否则部分移动驱动
@@ -132,7 +138,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     void flushMapped(long offset, long length) {
         if (mappingCount == 0) return;
         if (length <= 0 || length >= VK_WHOLE_SIZE) {
-            flushMapped(0, VK_WHOLE_SIZE);
+            flushMapped();
             return;
         }
         long atom = context.properties().limits().nonCoherentAtomSize();
