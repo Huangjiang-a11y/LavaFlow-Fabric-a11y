@@ -28,6 +28,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
         final LavaFlowGpuBuffer buffer;
         final GpuBufferSlice.MappedView mapping;
         long offset;
+        boolean touched;
 
         MappedBlock(LavaFlowGpuBuffer buffer, GpuBufferSlice.MappedView mapping) {
             this.buffer = buffer;
@@ -139,6 +140,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
             offset = 0;
         }
         block.offset = offset + size;
+        block.touched = true;
         ByteBuffer data = MemoryUtil.memByteBuffer(
                 MemoryUtil.memAddress(block.mapping.data()) + offset, (int)size);
         return new GpuBufferSlice.MappedView(block.buffer.slice(offset, size), data, NOOP);
@@ -183,7 +185,9 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     void flushMappedRanges() {
-        for (MappedBlock block : mappedBlocks) block.buffer.flushMapped();
+        for (MappedBlock block : mappedBlocks) {
+            if (block.touched) block.buffer.flushMapped();
+        }
     }
 
     Retired retire() {
@@ -194,7 +198,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     void recycle() {
-        for (MappedBlock block : mappedBlocks) block.offset = 0;
+        for (MappedBlock block : mappedBlocks) { block.offset = 0; block.touched = false; }
         for (GpuBlock block : gpuBlocks) block.offset = 0;
         mappedBlockIndex = mappedBlocks.isEmpty() ? -1 : 0;
         gpuBlockIndex = gpuBlocks.isEmpty() ? -1 : 0;

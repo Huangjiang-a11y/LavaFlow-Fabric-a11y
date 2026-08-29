@@ -53,12 +53,6 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
         long maxMemoryAllocationSize = context.maxMemoryAllocationSize();
-        // Mali-G76 reports 0 here (spec-legal "bounded by heap"). The context already falls back to
-        // the largest device-local heap size; this second guard only triggers if that returned 0.
-        if (maxMemoryAllocationSize <= 0 || maxMemoryAllocationSize > (1L << 40)) {
-            long heap = context.largestDeviceLocalHeapSize();
-            maxMemoryAllocationSize = heap > 0 ? heap : (4L << 30);
-        }
         // Interleaved multi-draw is emulated as a loop of single indexed draws, so no device limit
         // constrains how many draws one call may carry.
         int maxInterleavedDraws = Integer.MAX_VALUE;
@@ -161,22 +155,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (batch == null) return;
         RuntimeException failure = null;
         completingBatch = batch;
-        int resourceIndex = 0;
-        for (; resourceIndex < batch.resources.size(); resourceIndex++) {
+        for (AutoCloseable resource : batch.resources) {
             try {
-                batch.resources.get(resourceIndex).close();
+                resource.close();
             } catch (Exception e) {
                 failure = new RuntimeException(e);
             }
         }
         for (Runnable callback : batch.callbacks) callback.run();
-        for (; resourceIndex < batch.resources.size(); resourceIndex++) {
-            try {
-                batch.resources.get(resourceIndex).close();
-            } catch (Exception e) {
-                failure = new RuntimeException(e);
-            }
-        }
         completingBatch = null;
         if (failure != null) throw failure;
     }
