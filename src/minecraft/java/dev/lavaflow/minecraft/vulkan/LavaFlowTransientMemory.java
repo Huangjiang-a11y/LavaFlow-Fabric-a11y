@@ -29,6 +29,8 @@ final class LavaFlowTransientMemory implements TransientMemory {
         final GpuBufferSlice.MappedView mapping;
         long offset;
         boolean touched;
+        long dirtyFrom = Long.MAX_VALUE;
+        long dirtyTo = 0;
 
         MappedBlock(LavaFlowGpuBuffer buffer, GpuBufferSlice.MappedView mapping) {
             this.buffer = buffer;
@@ -128,7 +130,8 @@ final class LavaFlowTransientMemory implements TransientMemory {
             int len = source.remaining();
             MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + off, len);
             GpuBufferSlice deviceLocal = allocateDeviceLocal(len, alignment);
-            encoder.copyToBuffer(staging.slice(off, len), deviceLocal);
+            GpuBufferSlice srcSlice = staging.slice().slice(off, len);
+            encoder.copyToBuffer(srcSlice, deviceLocal);
             result.add(deviceLocal);
             off += len;
         }
@@ -158,6 +161,8 @@ final class LavaFlowTransientMemory implements TransientMemory {
         }
         block.offset = offset + size;
         block.touched = true;
+        if (offset < block.dirtyFrom) block.dirtyFrom = offset;
+        if (offset + size > block.dirtyTo) block.dirtyTo = offset + size;
         ByteBuffer data = MemoryUtil.memByteBuffer(
                 MemoryUtil.memAddress(block.mapping.data()) + offset, (int)size);
         return new GpuBufferSlice.MappedView(block.buffer.slice(offset, size), data, NOOP);
@@ -203,7 +208,9 @@ final class LavaFlowTransientMemory implements TransientMemory {
 
     void flushMappedRanges() {
         for (MappedBlock block : mappedBlocks) {
-            if (block.touched) block.buffer.flushMapped();
+            if (block.touched && block.dirtyFrom < Long.MAX_VALUE) {
+                block.buffer.flushMapped(block.dirtyFrom, block.dirtyTo - block.dirtyFrom);
+            }
         }
     }
 
@@ -215,7 +222,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     void recycle() {
-        for (MappedBlock block : mappedBlocks) { block.offset = 0; block.touched = false; }
+        for (MappedBlock block : mappedBlocks) { block.offset = 0; block.touched = false; block.dirtyFrom = Long.MAX_VALUE; block.dirtyTo = 0; }
         for (GpuBlock block : gpuBlocks) block.offset = 0;
         mappedBlockIndex = mappedBlocks.isEmpty() ? -1 : 0;
         gpuBlockIndex = gpuBlocks.isEmpty() ? -1 : 0;
