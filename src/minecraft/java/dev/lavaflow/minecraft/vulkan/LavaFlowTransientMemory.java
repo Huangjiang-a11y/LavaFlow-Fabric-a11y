@@ -111,9 +111,26 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     @Override public List<GpuBufferSlice> multiUploadGpu(List<ByteBuffer> sources, long alignment, int usage) {
+        if (sources.isEmpty()) return List.of();
+        // 合并为单次大 staging 上传再分批 copy：把映射分配与帧末 flush 从 O(n) 降到 O(1)，
+        // 与 flushMappedRanges 的 per-block 收窄协同（只产生一个 touched 的 mapped block）。
+        // 每个子区间在 mapped 缓冲内按 reqAlign 对齐，等价于原各 source 独立 allocateMapped 的对齐行为，
+        // 因而 copyToBuffer 的 src/dst 偏移仍满足设备对齐要求。
+        long reqAlign = Math.max(1, alignment);
+        long total = 0;
+        for (ByteBuffer source : sources) total = Math.addExact(total, source.remaining());
+        GpuBufferSlice.MappedView staging = allocateMapped(total, alignment);
+        long base = MemoryUtil.memAddress(staging.data());
+        long off = 0;
         List<GpuBufferSlice> result = new ArrayList<>(sources.size());
         for (ByteBuffer source : sources) {
-            result.add(uploadGpu(List.of(source), alignment, usage, 0, 1));
+            off = alignUp(off, reqAlign);
+            int len = source.remaining();
+            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + off, len);
+            GpuBufferSlice deviceLocal = allocateDeviceLocal(len, alignment);
+            encoder.copyToBuffer(staging.slice(off, len), deviceLocal);
+            result.add(deviceLocal);
+            off += len;
         }
         return result;
     }
