@@ -155,9 +155,13 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (batch == null) return;
         RuntimeException failure = null;
         completingBatch = batch;
-        for (AutoCloseable resource : batch.resources) {
+        // 索引遍历而非 for-each：close() 可能在同一线程内重入 defer()，
+        // 而 defer() 在 completingBatch!=null 时会向本批 resources 追加，
+        // 改变 ArrayList 结构。索引遍历不触发 Iterator 的 fail-fast，
+        // 且能照原意把遍历期追加的资源一并回收。
+        for (int i = 0; i < batch.resources.size(); i++) {
             try {
-                resource.close();
+                batch.resources.get(i).close();
             } catch (Exception e) {
                 failure = new RuntimeException(e);
             }
