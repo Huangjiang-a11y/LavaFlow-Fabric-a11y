@@ -67,9 +67,10 @@ application {
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
-    // 直接加入 minecraft 的 compileClasspath，确保能解析 MC 类
-    compileClasspath += configurations.compileClasspath.get() + sourceSets.main.get().compileClasspath
+    // 直接复用主源集的 compileClasspath，确保能解析 MC 类
+    compileClasspath += sourceSets.main.get().compileClasspath
 }
+
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
