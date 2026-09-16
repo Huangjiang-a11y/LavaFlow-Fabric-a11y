@@ -165,9 +165,15 @@ val minecraftTest by sourceSets.creating {
 }
 
 configurations[minecraftTest.compileClasspathConfigurationName]
-    .extendsFrom(configurations.testCompileClasspath.get(), minecraft.compileClasspathConfigurationName)
+    .extendsFrom(
+        configurations.testCompileClasspath.get(),
+        configurations.named(minecraft.compileClasspathConfigurationName)
+    )
 configurations[minecraftTest.runtimeClasspathConfigurationName]
-    .extendsFrom(configurations.testRuntimeClasspath.get(), minecraft.runtimeClasspathConfigurationName)
+    .extendsFrom(
+        configurations.testRuntimeClasspath.get(),
+        configurations.named(minecraft.runtimeClasspathConfigurationName)
+    )
 
 configurations[minecraftTest.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
