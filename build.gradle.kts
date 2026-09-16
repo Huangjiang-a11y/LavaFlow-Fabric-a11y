@@ -62,9 +62,11 @@ application {
 }
 
 // Signature-only stubs for the Sodium classes the compatibility mixins target.
+// 直接复用 main 源集的 compileClasspath，它已经包含 Loom 解析好的 Minecraft 类。
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
+    compileClasspath += sourceSets.main.get().compileClasspath
 }
 
 val minecraft by sourceSets.creating {
@@ -166,27 +168,4 @@ tasks.register<Test>("minecraftTest") {
 
 tasks.named("check") {
     dependsOn("minecraftTest")
-}
-
-// Loom 1.17 懒加载命名配置，必须在 afterEvaluate 中才能拿到
-afterEvaluate {
-    val mcCompile = configurations.findByName("minecraftNamedCompile")
-    val mcRuntime = configurations.findByName("minecraftNamedRuntime")
-
-    if (mcCompile != null) {
-        configurations[sodiumStub.compileClasspathConfigurationName].extendsFrom(mcCompile)
-        configurations[minecraft.compileClasspathConfigurationName].extendsFrom(mcCompile)
-    }
-    if (mcRuntime != null) {
-        configurations[sodiumStub.runtimeClasspathConfigurationName].extendsFrom(mcRuntime)
-        configurations[minecraft.runtimeClasspathConfigurationName].extendsFrom(mcRuntime)
-    }
-}
-tasks.register("printLoomConfigurations") {
-    doLast {
-        configurations
-            .filter { it.name.contains("minecraft", ignoreCase = true) }
-            .sortedBy { it.name }
-            .forEach { println("LOOM CONFIG: ${it.name}") }
-    }
 }
