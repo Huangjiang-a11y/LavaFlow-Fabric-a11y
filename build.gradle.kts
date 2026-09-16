@@ -40,7 +40,6 @@ dependencies {
     implementation("org.joml:joml:1.10.8")
 
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-    mappings(loom.officialMojangMappings())   // <-- 新增这一行
 
     implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
@@ -68,12 +67,9 @@ application {
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
-    // Loom wires the resolved Minecraft classes (net.minecraft:minecraft-merged-deobf) onto the
-    // main sourceSet's compileClasspath, so reusing it gives the stubs the MC types they need.
-    // (The `minecraft` configuration itself is a non-resolvable bucket, so it can't be used directly.)
-    compileClasspath += configurations.compileClasspath.get()
+    // 直接加入 minecraft 的 compileClasspath，确保能解析 MC 类
+    compileClasspath += configurations.compileClasspath.get() + sourceSets.main.get().compileClasspath
 }
-
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
