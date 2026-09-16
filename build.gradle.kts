@@ -195,3 +195,18 @@ tasks.register<Test>("minecraftTest") {
 tasks.named("check") {
     dependsOn("minecraftTest")
 }
+
+afterEvaluate {
+    // Loom 在配置阶段之后才创建这些配置，所以必须放在 afterEvaluate 里
+    val mcCompile = configurations.findByName("minecraftNamedCompile")
+    val mcRuntime = configurations.findByName("minecraftNamedRuntime")
+    
+    if (mcCompile != null) {
+        configurations[sodiumStub.compileClasspathConfigurationName].extendsFrom(mcCompile)
+        configurations[minecraft.compileClasspathConfigurationName].extendsFrom(mcCompile)
+    }
+    if (mcRuntime != null) {
+        configurations[sodiumStub.runtimeClasspathConfigurationName].extendsFrom(mcRuntime)
+        configurations[minecraft.runtimeClasspathConfigurationName].extendsFrom(mcRuntime)
+    }
+}
