@@ -61,37 +61,21 @@ application {
     mainClass = "dev.lavaflow.smoke.LavaFlowSmoke"
 }
 
-// Signature-only stubs for the Sodium classes the compatibility mixins target. Sodium supplies the
-// real classes at runtime, so this output is never packaged.
+// Signature-only stubs for the Sodium classes the compatibility mixins target.
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
 }
 
-// Inherit the main source set's compile classpath so Loom's Minecraft dependency (injected after
-// configuration) is visible to the stubs. A plain `compileClasspath += configurations.compileClasspath`
-// copies the configuration reference too early and misses the MC jar.
-configurations[sodiumStub.compileClasspathConfigurationName]
-    .extendsFrom(configurations.compileClasspath.get())
-
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
     resources.srcDir("build/generated/lavaflowVersion")
-    // Only project-internal source sets are added here; the Minecraft/Loader deps come from the
-    // main compile classpath via the extendsFrom calls below.
     compileClasspath += sourceSets.main.get().output + sodiumStub.output
     runtimeClasspath += output + compileClasspath
 }
 
-configurations[minecraft.compileClasspathConfigurationName]
-    .extendsFrom(configurations.compileClasspath.get())
-configurations[minecraft.runtimeClasspathConfigurationName]
-    .extendsFrom(configurations.runtimeClasspath.get())
-
-// Writes the project version to a classpath resource LavaFlowVersion reads at runtime. Needed
-// because FML's transforming classloader never populates java.lang.Package version info from the
-// jar manifest, so Package.getImplementationVersion() always returns null for a mod's own classes.
+// Writes the project version to a classpath resource LavaFlowVersion reads at runtime.
 val generateLavaFlowVersion by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/lavaflowVersion")
     val outputFile = outputDir.map { it.file("lavaflow-version.txt") }
@@ -148,7 +132,6 @@ tasks.test {
     useJUnitPlatform()
 }
 
-// 最终产物文件名：模组名-游戏版本名-模组版本名 (例如 lavaflow-26.2-0.1.0-alpha.jar)
 val mcVersion = property("minecraft_version").toString()
 tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
     archiveBaseName.set(rootProject.name)
@@ -163,17 +146,6 @@ val minecraftTest by sourceSets.creating {
     compileClasspath += minecraft.output
     runtimeClasspath += output + minecraft.output
 }
-
-configurations[minecraftTest.compileClasspathConfigurationName]
-    .extendsFrom(
-        configurations.testCompileClasspath.get(),
-        configurations.getByName(minecraft.compileClasspathConfigurationName)
-    )
-configurations[minecraftTest.runtimeClasspathConfigurationName]
-    .extendsFrom(
-        configurations.testRuntimeClasspath.get(),
-        configurations.getByName(minecraft.runtimeClasspathConfigurationName)
-    )
 
 configurations[minecraftTest.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
@@ -196,11 +168,11 @@ tasks.named("check") {
     dependsOn("minecraftTest")
 }
 
+// Loom 1.17 懒加载命名配置，必须在 afterEvaluate 中才能拿到
 afterEvaluate {
-    // Loom 在配置阶段之后才创建这些配置，所以必须放在 afterEvaluate 里
     val mcCompile = configurations.findByName("minecraftNamedCompile")
     val mcRuntime = configurations.findByName("minecraftNamedRuntime")
-    
+
     if (mcCompile != null) {
         configurations[sodiumStub.compileClasspathConfigurationName].extendsFrom(mcCompile)
         configurations[minecraft.compileClasspathConfigurationName].extendsFrom(mcCompile)
