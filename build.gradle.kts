@@ -177,3 +177,14 @@ afterEvaluate {
     minecraft.compileClasspath += mainCompile
     minecraft.runtimeClasspath += mainRuntime
 }
+tasks.register("printClasspaths") {
+    doLast {
+        fun dump(label: String, files: Set<File>) {
+            println("=== $label (${files.size} files) ===")
+            files.take(40).forEach { println("  $it") }
+        }
+        dump("main.compileClasspath", sourceSets.main.get().compileClasspath.files)
+        dump("sodiumStub.compileClasspath", sodiumStub.compileClasspath.files)
+        dump("minecraft.compileClasspath", minecraft.compileClasspath.files)
+    }
+}

@@ -1,4 +1,4 @@
-name: Build
+name: run: gradle --no-daemon clean printClasspaths compileSodiumStubJava
 
 on:
   push:
