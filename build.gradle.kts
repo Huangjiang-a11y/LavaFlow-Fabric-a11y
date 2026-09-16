@@ -71,8 +71,6 @@ val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
     resources.srcDir("build/generated/lavaflowVersion")
-    compileClasspath += sourceSets.main.get().output + sodiumStub.output
-    runtimeClasspath += output + compileClasspath
 }
 
 // Writes the project version to a classpath resource LavaFlowVersion reads at runtime.
@@ -109,11 +107,15 @@ tasks.withType<JavaCompile>().configureEach {
     options.release = 21
 }
 
-tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
+// 关键：Loom 把 Minecraft jar 直接注入 compileJava 任务，而不是 sourceSet.compileClasspath。
+// 所以 stub / minecraft 源集必须直接复用 compileJava 的 classpath。
+tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
+    classpath = tasks.named<JavaCompile>("compileJava").get().classpath
     options.release = 25
 }
 
-tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
+tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
+    classpath = tasks.named<JavaCompile>("compileJava").get().classpath + sodiumStub.output
     options.release = 25
 }
 
@@ -139,12 +141,9 @@ tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
     archiveVersion.set(project.version.toString())
 }
 
-// Tests that exercise classes in the minecraft sourceSet (Blaze3D API on the classpath).
 val minecraftTest by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft-test/java"))
     resources.setSrcDirs(emptyList<String>())
-    compileClasspath += minecraft.output
-    runtimeClasspath += output + minecraft.output
 }
 
 configurations[minecraftTest.implementationConfigurationName]
@@ -153,6 +152,7 @@ configurations[minecraftTest.runtimeOnlyConfigurationName]
     .extendsFrom(configurations.testRuntimeOnly.get())
 
 tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
+    classpath = tasks.named<JavaCompile>("compileJava").get().classpath + minecraft.output
     options.release = 25
 }
 
@@ -166,25 +166,4 @@ tasks.register<Test>("minecraftTest") {
 
 tasks.named("check") {
     dependsOn("minecraftTest")
-}
-
-// Loom 在配置阶段之后才把 Minecraft 依赖填进 sourceSets.main 的类路径，
-// 所以必须放到 afterEvaluate 里复制，否则拿到的还是空的。
-afterEvaluate {
-    val mainCompile = sourceSets.main.get().compileClasspath
-    val mainRuntime = sourceSets.main.get().runtimeClasspath
-    sodiumStub.compileClasspath += mainCompile
-    minecraft.compileClasspath += mainCompile
-    minecraft.runtimeClasspath += mainRuntime
-}
-tasks.register("printClasspaths") {
-    doLast {
-        fun dump(label: String, files: Set<File>) {
-            println("=== $label (${files.size} files) ===")
-            files.take(40).forEach { println("  $it") }
-        }
-        dump("main.compileClasspath", sourceSets.main.get().compileClasspath.files)
-        dump("sodiumStub.compileClasspath", sodiumStub.compileClasspath.files)
-        dump("minecraft.compileClasspath", minecraft.compileClasspath.files)
-    }
 }
