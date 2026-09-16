@@ -62,11 +62,9 @@ application {
 }
 
 // Signature-only stubs for the Sodium classes the compatibility mixins target.
-// 直接复用 main 源集的 compileClasspath，它已经包含 Loom 解析好的 Minecraft 类。
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
-    compileClasspath += sourceSets.main.get().compileClasspath
 }
 
 val minecraft by sourceSets.creating {
@@ -168,4 +166,14 @@ tasks.register<Test>("minecraftTest") {
 
 tasks.named("check") {
     dependsOn("minecraftTest")
+}
+
+// Loom 在配置阶段之后才把 Minecraft 依赖填进 sourceSets.main 的类路径，
+// 所以必须放到 afterEvaluate 里复制，否则拿到的还是空的。
+afterEvaluate {
+    val mainCompile = sourceSets.main.get().compileClasspath
+    val mainRuntime = sourceSets.main.get().runtimeClasspath
+    sodiumStub.compileClasspath += mainCompile
+    minecraft.compileClasspath += mainCompile
+    minecraft.runtimeClasspath += mainRuntime
 }
