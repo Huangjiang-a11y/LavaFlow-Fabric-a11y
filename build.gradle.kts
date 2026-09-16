@@ -107,18 +107,6 @@ tasks.withType<JavaCompile>().configureEach {
     options.release = 21
 }
 
-// 关键：Loom 把 Minecraft jar 直接注入 compileJava 任务，而不是 sourceSet.compileClasspath。
-// 所以 stub / minecraft 源集必须直接复用 compileJava 的 classpath。
-tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
-    classpath = tasks.named<JavaCompile>("compileJava").get().classpath
-    options.release = 25
-}
-
-tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
-    classpath = tasks.named<JavaCompile>("compileJava").get().classpath + sodiumStub.output
-    options.release = 25
-}
-
 tasks.jar {
     from(minecraft.output)
     from("LICENSE") {
@@ -151,11 +139,6 @@ configurations[minecraftTest.implementationConfigurationName]
 configurations[minecraftTest.runtimeOnlyConfigurationName]
     .extendsFrom(configurations.testRuntimeOnly.get())
 
-tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
-    classpath = tasks.named<JavaCompile>("compileJava").get().classpath + minecraft.output
-    options.release = 25
-}
-
 tasks.register<Test>("minecraftTest") {
     description = "Runs unit tests for classes that depend on the Minecraft sourceSet"
     group = "verification"
@@ -166,4 +149,20 @@ tasks.register<Test>("minecraftTest") {
 
 tasks.named("check") {
     dependsOn("minecraftTest")
+}
+
+// Loom 把 Minecraft jar 直接注入 compileJava 任务的 classpath，
+// 而不是 sourceSet.compileClasspath。所以必须在 afterEvaluate 里
+// 复制 compileJava 任务的 classpath，其他源集才能看到 MC 类。
+afterEvaluate {
+    val mainCompileJava = tasks.named<JavaCompile>("compileJava").get()
+    tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
+        classpath = mainCompileJava.classpath
+    }
+    tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
+        classpath = mainCompileJava.classpath + sodiumStub.output
+    }
+    tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
+        classpath = mainCompileJava.classpath + minecraft.output
+    }
 }
