@@ -40,6 +40,8 @@ dependencies {
     implementation("org.joml:joml:1.10.8")
 
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
+    mappings(loom.officialMojangMappings())   // <-- 新增这一行
+
     implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
