@@ -182,3 +182,11 @@ afterEvaluate {
         configurations[minecraft.runtimeClasspathConfigurationName].extendsFrom(mcRuntime)
     }
 }
+tasks.register("printLoomConfigurations") {
+    doLast {
+        configurations
+            .filter { it.name.contains("minecraft", ignoreCase = true) }
+            .sortedBy { it.name }
+            .forEach { println("LOOM CONFIG: ${it.name}") }
+    }
+}
