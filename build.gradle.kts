@@ -40,7 +40,6 @@ dependencies {
     implementation("org.joml:joml:1.10.8")
 
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-
     implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
@@ -67,17 +66,28 @@ application {
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
-    // 直接复用主源集的 compileClasspath，确保能解析 MC 类
-    compileClasspath += sourceSets.main.get().compileClasspath
 }
+
+// Inherit the main source set's compile classpath so Loom's Minecraft dependency (injected after
+// configuration) is visible to the stubs. A plain `compileClasspath += configurations.compileClasspath`
+// copies the configuration reference too early and misses the MC jar.
+configurations[sodiumStub.compileClasspathConfigurationName]
+    .extendsFrom(configurations.compileClasspath.get())
 
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
     resources.srcDir("build/generated/lavaflowVersion")
-    compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get() + sodiumStub.output
+    // Only project-internal source sets are added here; the Minecraft/Loader deps come from the
+    // main compile classpath via the extendsFrom calls below.
+    compileClasspath += sourceSets.main.get().output + sodiumStub.output
     runtimeClasspath += output + compileClasspath
 }
+
+configurations[minecraft.compileClasspathConfigurationName]
+    .extendsFrom(configurations.compileClasspath.get())
+configurations[minecraft.runtimeClasspathConfigurationName]
+    .extendsFrom(configurations.runtimeClasspath.get())
 
 // Writes the project version to a classpath resource LavaFlowVersion reads at runtime. Needed
 // because FML's transforming classloader never populates java.lang.Package version info from the
@@ -150,9 +160,14 @@ tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
 val minecraftTest by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft-test/java"))
     resources.setSrcDirs(emptyList<String>())
-    compileClasspath += minecraft.output + minecraft.runtimeClasspath
-    runtimeClasspath += output + minecraft.output + minecraft.runtimeClasspath
+    compileClasspath += minecraft.output
+    runtimeClasspath += output + minecraft.output
 }
+
+configurations[minecraftTest.compileClasspathConfigurationName]
+    .extendsFrom(configurations.testCompileClasspath.get(), minecraft.compileClasspathConfigurationName)
+configurations[minecraftTest.runtimeClasspathConfigurationName]
+    .extendsFrom(configurations.testRuntimeClasspath.get(), minecraft.runtimeClasspathConfigurationName)
 
 configurations[minecraftTest.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
