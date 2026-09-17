@@ -1,11 +1,11 @@
 package dev.lavaflow.minecraft;
 
 import com.mojang.blaze3d.GLFWErrorCapture;
-import com.mojang.blaze3d.shaders.GpuDebugOptions;
-import com.mojang.blaze3d.shaders.ShaderSource;
-import com.mojang.blaze3d.systems.BackendCreationException;
-import com.mojang.blaze3d.systems.GpuBackend;
-import com.mojang.blaze3d.systems.GpuDevice;
+import com.mojang.renderpearl.api.device.GpuDebugOptions;
+import com.mojang.renderpearl.api.pipeline.ShaderSource;
+import com.mojang.renderpearl.api.device.BackendCreationException;
+import com.mojang.renderpearl.api.device.GpuBackend;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import dev.lavaflow.minecraft.vulkan.LavaFlowShaderc;
 

@@ -1,8 +1,8 @@
 package dev.lavaflow.minecraft.sodium;
 
-import com.mojang.blaze3d.systems.GpuDevice;
-import com.mojang.blaze3d.systems.RenderPass;
-import com.mojang.blaze3d.systems.RenderPassBackend;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.lavaflow.minecraft.sodium.mixin.GpuDeviceBackendAccessor;
 import dev.lavaflow.minecraft.sodium.mixin.RenderPassBackendAccessor;

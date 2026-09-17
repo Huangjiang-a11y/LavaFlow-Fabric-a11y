@@ -1,6 +1,6 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.buffers.GpuFence;
+import com.mojang.renderpearl.api.commands.GpuFence;
 
 final class LavaFlowFence implements GpuFence {
     private final LavaFlowCommandEncoder encoder;

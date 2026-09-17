@@ -1,8 +1,8 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.systems.TransientMemory;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.buffers.TransientMemory;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;

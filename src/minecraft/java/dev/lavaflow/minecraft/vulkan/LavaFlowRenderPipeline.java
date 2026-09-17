@@ -2,14 +2,14 @@ package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.blaze3d.pipeline.*;
 import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
-import com.mojang.blaze3d.shaders.ShaderSource;
-import com.mojang.blaze3d.shaders.ShaderType;
-import com.mojang.blaze3d.shaders.UniformType;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.blaze3d.vertex.VertexFormatElement;
-import com.mojang.blaze3d.vulkan.VulkanBindGroupLayout;
+import com.mojang.renderpearl.api.pipeline.ShaderSource;
+import com.mojang.renderpearl.api.pipeline.ShaderType;
+import com.mojang.renderpearl.api.pipeline.UniformType;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import com.mojang.renderpearl.api.vertex.VertexFormatElement;
+import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
 import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
-import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
+import com.mojang.renderpearl.util.ShaderCompileException;
 import net.minecraft.client.renderer.ShaderDefines;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -29,7 +29,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** LavaFlow-owned shader modules, descriptor layout, pipeline layout, and compatible graphics pipelines. */
 final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoCloseable {
     enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, TEXEL_BUFFER }
-    record Entry(EntryType type, String name, com.mojang.blaze3d.GpuFormat texelFormat) {}
+    record Entry(EntryType type, String name, com.mojang.renderpearl.api.GpuFormat texelFormat) {}
 
     final LavaFlowDevice device;
     final RenderPipeline info;

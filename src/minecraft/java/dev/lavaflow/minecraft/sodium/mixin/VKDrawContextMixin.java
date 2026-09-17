@@ -1,7 +1,7 @@
 package dev.lavaflow.minecraft.sodium.mixin;
 
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.systems.RenderPass;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.commands.RenderPass;
 import dev.lavaflow.minecraft.sodium.LavaFlowSodium;
 import dev.lavaflow.minecraft.vulkan.LavaFlowVulkanPass;
 import net.caffeinemc.mods.sodium.client.gpu.device.context.VKDrawContext;

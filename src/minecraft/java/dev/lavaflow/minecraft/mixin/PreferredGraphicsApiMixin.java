@@ -1,6 +1,6 @@
 package dev.lavaflow.minecraft.mixin;
 
-import com.mojang.blaze3d.systems.GpuBackend;
+import com.mojang.renderpearl.api.device.GpuBackend;
 import dev.lavaflow.minecraft.LavaFlowBackend;
 import net.minecraft.client.PreferredGraphicsApi;
 import org.spongepowered.asm.mixin.Mixin;

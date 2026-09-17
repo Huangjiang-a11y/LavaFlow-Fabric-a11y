@@ -2,8 +2,8 @@ package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.blaze3d.buffers.*;
 import com.mojang.blaze3d.systems.*;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import org.joml.Vector4fc;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;

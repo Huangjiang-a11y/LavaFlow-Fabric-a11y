@@ -1,7 +1,7 @@
 package dev.lavaflow.minecraft.mixin;
 
-import com.mojang.blaze3d.systems.GpuDevice;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;

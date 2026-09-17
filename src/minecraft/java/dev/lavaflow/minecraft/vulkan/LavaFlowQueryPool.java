@@ -1,6 +1,6 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.systems.GpuQueryPool;
+import com.mojang.renderpearl.api.commands.GpuQueryPool;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 
