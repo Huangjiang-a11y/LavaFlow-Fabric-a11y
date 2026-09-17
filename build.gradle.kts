@@ -27,6 +27,9 @@ repositories {
 }
 
 dependencies {
+    minecraft("com.mojang:minecraft:${property("minecraft_version")}")
+    add("mappings", loom.officialMojangMappings())
+
     implementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
     implementation("org.lwjgl:lwjgl")
     implementation("org.lwjgl:lwjgl-glfw")
@@ -36,7 +39,6 @@ dependencies {
     implementation("org.lwjgl:lwjgl-vulkan")
     implementation("org.joml:joml:1.10.8")
 
-    minecraft("com.mojang:minecraft:${property("minecraft_version")}")
     implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
