@@ -7,7 +7,7 @@ plugins {
 group = "dev.lavaflow"
 version = "0.1.0-alpha"
 
-val lwjglVersion = "3.4.1"
+val lwjglVersion = "3.4.3"
 val lwjglArch = System.getProperty("os.arch").lowercase()
 val lwjglNatives = when {
     System.getProperty("os.name").startsWith("Windows") && lwjglArch in setOf("aarch64", "arm64") ->
@@ -32,6 +32,7 @@ repositories {
 dependencies {
     implementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
     implementation("org.lwjgl:lwjgl")
+    implementation("org.lwjgl:lwjgl-sdl")
     implementation("org.lwjgl:lwjgl-glfw")
     implementation("org.lwjgl:lwjgl-shaderc")
     implementation("org.lwjgl:lwjgl-spvc")
@@ -43,6 +44,7 @@ dependencies {
     implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
+    runtimeOnly("org.lwjgl:lwjgl-sdl::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-shaderc::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-spvc::$lwjglNatives")
