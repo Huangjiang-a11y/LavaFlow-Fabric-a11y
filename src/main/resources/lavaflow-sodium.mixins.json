@@ -1,0 +1,17 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_25",
+  "package": "dev.lavaflow.minecraft.sodium.mixin",
+  "plugin": "dev.lavaflow.minecraft.sodium.LavaFlowSodiumMixinPlugin",
+  "client": [
+    "GpuDeviceBackendAccessor",
+    "RenderPassBackendAccessor",
+    "DrawContextPassAccessor",
+    "DrawBackendMixin",
+    "VKDrawContextMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

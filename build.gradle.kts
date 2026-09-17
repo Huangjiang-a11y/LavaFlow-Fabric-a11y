@@ -1,6 +1,5 @@
 plugins {
     java
-    application
     id("net.fabricmc.fabric-loom") version "1.17.20"
 }
 
@@ -23,9 +22,7 @@ val lwjglNatives = when {
 repositories {
     mavenCentral()
     maven("https://maven.fabricmc.net/") {
-        content {
-            includeGroup("net.fabricmc")
-        }
+        content { includeGroup("net.fabricmc") }
     }
 }
 
@@ -57,61 +54,19 @@ java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
 
-application {
-    mainClass = "dev.lavaflow.smoke.LavaFlowSmoke"
-}
-
-// Signature-only stubs for the Sodium classes the compatibility mixins target.
-val sodiumStub by sourceSets.creating {
-    java.setSrcDirs(listOf("src/sodiumStub/java"))
-    resources.setSrcDirs(emptyList<String>())
-}
-
-val minecraft by sourceSets.creating {
-    java.setSrcDirs(listOf("src/minecraft/java"))
-    resources.setSrcDirs(listOf("src/minecraft/resources"))
-    resources.srcDir("build/generated/lavaflowVersion")
-}
-
-// Writes the project version to a classpath resource LavaFlowVersion reads at runtime.
-val generateLavaFlowVersion by tasks.registering {
-    val outputDir = layout.buildDirectory.dir("generated/lavaflowVersion")
-    val outputFile = outputDir.map { it.file("lavaflow-version.txt") }
-    inputs.property("version", project.version.toString())
-    outputs.dir(outputDir)
-    doLast {
-        outputFile.get().asFile.apply {
-            parentFile.mkdirs()
-            writeText(project.version.toString())
-        }
-    }
-}
-
-tasks.named(minecraft.processResourcesTaskName) {
-    dependsOn(generateLavaFlowVersion)
-}
-
-configurations[minecraft.implementationConfigurationName].extendsFrom(configurations.implementation.get())
-
 loom {
-    mods {
-        create("lavaflow") {
-            sourceSet(sourceSets["minecraft"])
-        }
-    }
-    fabricModJsonPath = file("src/minecraft/resources/fabric.mod.json")
+    fabricModJsonPath = file("src/main/resources/fabric.mod.json")
 }
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-    options.release = 21
+    options.release = 25
 }
 
 tasks.jar {
-    from(minecraft.output)
-    from("LICENSE") {
-        into("META-INF")
-    }
+    // Sodium 桩类只在编译时需要，运行时由 Sodium 提供，不打包进 jar
+    exclude("net/caffeinemc/**")
+    from("LICENSE") { into("META-INF") }
     manifest.attributes(
         "Implementation-Title" to "LavaFlow",
         "Implementation-Version" to project.version
@@ -127,42 +82,4 @@ tasks.withType<org.gradle.jvm.tasks.Jar>().configureEach {
     archiveBaseName.set(rootProject.name)
     archiveAppendix.set(mcVersion)
     archiveVersion.set(project.version.toString())
-}
-
-val minecraftTest by sourceSets.creating {
-    java.setSrcDirs(listOf("src/minecraft-test/java"))
-    resources.setSrcDirs(emptyList<String>())
-}
-
-configurations[minecraftTest.implementationConfigurationName]
-    .extendsFrom(configurations.testImplementation.get())
-configurations[minecraftTest.runtimeOnlyConfigurationName]
-    .extendsFrom(configurations.testRuntimeOnly.get())
-
-tasks.register<Test>("minecraftTest") {
-    description = "Runs unit tests for classes that depend on the Minecraft sourceSet"
-    group = "verification"
-    testClassesDirs = minecraftTest.output.classesDirs
-    classpath = minecraftTest.runtimeClasspath
-    useJUnitPlatform()
-}
-
-tasks.named("check") {
-    dependsOn("minecraftTest")
-}
-
-// Loom 把 Minecraft jar 直接注入 compileJava 任务的 classpath，
-// 而不是 sourceSet.compileClasspath。所以必须在 afterEvaluate 里
-// 复制 compileJava 任务的 classpath，其他源集才能看到 MC 类。
-afterEvaluate {
-    val mainCompileJava = tasks.named<JavaCompile>("compileJava").get()
-    tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
-        classpath = mainCompileJava.classpath
-    }
-    tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
-        classpath = mainCompileJava.classpath + sodiumStub.output
-    }
-    tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
-        classpath = mainCompileJava.classpath + minecraft.output
-    }
 }
