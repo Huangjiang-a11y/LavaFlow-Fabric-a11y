@@ -1,7 +1,7 @@
 plugins {
     java
     application
-    id("net.fabricmc.fabric-loom") version "1.17-SNAPSHOT"
+    id("net.fabricmc.fabric-loom") version "1.17.20"
 }
 
 group = "dev.lavaflow"
