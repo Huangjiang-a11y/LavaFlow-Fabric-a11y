@@ -1,6 +1,6 @@
 plugins {
     java
-    id("net.fabricmc.fabric-loom") version "1.17.20"
+    id("net.fabricmc.fabric-loom") version "1.18-SNAPSHOT"
 }
 
 group = "dev.lavaflow"
@@ -27,8 +27,8 @@ repositories {
 }
 
 dependencies {
-    minecraft("com.mojang:minecraft:${property("minecraft_version")}")
     // 26.3 是非混淆版本，不需要任何 mappings 声明
+    minecraft("com.mojang:minecraft:${property("minecraft_version")}")
 
     implementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
     implementation("org.lwjgl:lwjgl")
@@ -66,6 +66,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.jar {
+    // Sodium 桩类只在编译时需要，运行时由 Sodium 提供，不打包进 jar
     exclude("net/caffeinemc/**")
     from("LICENSE") { into("META-INF") }
     manifest.attributes(
