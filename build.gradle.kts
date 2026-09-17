@@ -28,7 +28,7 @@ repositories {
 
 dependencies {
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-    add("mappings", loom.officialMojangMappings())
+    // 26.3 是非混淆版本，不需要任何 mappings 声明
 
     implementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
     implementation("org.lwjgl:lwjgl")
@@ -66,7 +66,6 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.jar {
-    // Sodium 桩类只在编译时需要，运行时由 Sodium 提供，不打包进 jar
     exclude("net/caffeinemc/**")
     from("LICENSE") { into("META-INF") }
     manifest.attributes(
