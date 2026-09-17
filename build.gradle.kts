@@ -27,7 +27,6 @@ repositories {
 }
 
 dependencies {
-    // 26.3 是非混淆版本，不需要任何 mappings 声明
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
 
     implementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
@@ -39,8 +38,7 @@ dependencies {
     implementation("org.lwjgl:lwjgl-vulkan")
     implementation("org.joml:joml:1.10.8")
 
-    // 关键改动：Fabric Loader 使用 modImplementation
-    modImplementation("net.fabricmc:fabric-loader:${property("loader_version")}")
+    "modImplementation"("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
