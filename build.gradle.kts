@@ -39,7 +39,8 @@ dependencies {
     implementation("org.lwjgl:lwjgl-vulkan")
     implementation("org.joml:joml:1.10.8")
 
-    implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
+    // 关键改动：Fabric Loader 使用 modImplementation
+    modImplementation("net.fabricmc:fabric-loader:${property("loader_version")}")
 
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
@@ -66,7 +67,6 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.jar {
-    // Sodium 桩类只在编译时需要，运行时由 Sodium 提供，不打包进 jar
     exclude("net/caffeinemc/**")
     from("LICENSE") { into("META-INF") }
     manifest.attributes(
