@@ -1,7 +1,8 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.buffers.*;
-import com.mojang.blaze3d.systems.*;
+import com.mojang.renderpearl.api.buffers.*;
+import com.mojang.renderpearl.api.commands.*;
+import com.mojang.renderpearl.backend.api.*;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import org.joml.Vector4fc;
@@ -245,20 +246,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue) {
         clearColorTexture(color, value); clearDepthTexture(depth, depthValue);
     }
-    @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue, int x, int y, int width, int height) {
+    // 26.3 adds a mipLevel: the clear applies to one mip of both textures, so the attachment views,
+    // the render area and the bounds check are all expressed in that mip's dimensions (as vanilla does).
+    @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue, int x, int y, int width, int height, int mipLevel) {
         LavaFlowGpuTexture colorTexture = texture(color);
         LavaFlowGpuTexture depthTexture = texture(depth);
         if (width <= 0 || height <= 0) return;
-        if (x < 0 || y < 0 || x + width > color.getWidth(0) || y + height > color.getHeight(0)) {
+        if (x < 0 || y < 0 || x + width > color.getWidth(mipLevel) || y + height > color.getHeight(mipLevel)) {
             throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
         }
-        GpuTextureView colorView = device.createTextureView(color);
-        GpuTextureView depthView = device.createTextureView(depth);
+        GpuTextureView colorView = device.createTextureView(color, mipLevel, 1);
+        GpuTextureView depthView = device.createTextureView(depth, mipLevel, 1);
         try {
-            RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "LavaFlow partial color/depth clear")
+            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "LavaFlow partial color/depth clear")
                     .withColorAttachment(colorView)
                     .withDepthAttachment(depthView)
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(0), color.getHeight(0)));
+                    .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(mipLevel), color.getHeight(mipLevel)))
+                    .build();
             createRenderPass(descriptor);
             // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
             // to be begun explicitly.

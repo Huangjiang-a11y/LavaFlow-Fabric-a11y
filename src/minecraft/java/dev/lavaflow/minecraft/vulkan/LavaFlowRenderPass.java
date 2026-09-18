@@ -1,23 +1,26 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import com.mojang.renderpearl.api.commands.GpuQueryPool;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
+import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.api.pipeline.IndexType;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.blaze3d.systems.*;
-import com.mojang.renderpearl.api.textures.GpuSampler;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
+import com.mojang.renderpearl.util.TextureViewAndSampler;
 import org.joml.Vector4fc;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
-import java.util.Collection;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.function.Supplier;
@@ -58,8 +61,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private final LavaFlowGpuTextureView[] colorViews;
     private final LavaFlowGpuTextureView depthView;
     private final boolean hasClears;
-    private final Map<String, GpuBufferSlice> uniforms = new HashMap<>();
-    private final Map<String, TextureBinding> textures = new HashMap<>();
+    // One slot per uniform the bound pipeline was compiled with, in the same order as the frontend's
+    // uniform indices: 26.3 resolves a uniform name to its slot in the frontend and hands the backend
+    // (index, value) pairs. Sized in setPipeline, then filled by setUniform.
+    private final List<Object> uniforms = new ArrayList<>();
     private LavaFlowRenderPipeline pipeline;
     private boolean descriptorsDirty = true;
     private boolean begun;
@@ -75,16 +80,6 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private int pendingVertexMask;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
-
-    private static final class TextureBinding {
-        LavaFlowGpuTextureView view;
-        LavaFlowGpuSampler sampler;
-
-        TextureBinding(LavaFlowGpuTextureView view, LavaFlowGpuSampler sampler) {
-            this.view = view;
-            this.sampler = sampler;
-        }
-    }
 
     LavaFlowRenderPass(LavaFlowCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
@@ -135,7 +130,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
         }
 
-        RenderPass.RenderArea area = descriptor.renderArea;
+        RenderPass.RenderArea area = descriptor.renderArea();
         scissorX = area.x();
         scissorY = area.y();
         scissorWidth = area.width();
@@ -151,8 +146,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     void ensureBegun() {
         if (begun) return;
         begun = true;
-        for (TextureBinding binding : textures.values()) {
-            LavaFlowGpuTexture sampled = binding.view.texture();
+        for (LavaFlowGpuTexture sampled : sampledTextures()) {
             if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                 encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
             }
@@ -235,7 +229,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             if (clear) depthAttachment.clearValue().depthStencil()
                     .depth((float) depth.clearValue().getAsDouble()).stencil(0);
         }
-        RenderPass.RenderArea area = descriptor.renderArea;
+        RenderPass.RenderArea area = descriptor.renderArea();
         VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default()
                 .layerCount(1).viewMask(0).pColorAttachments(colorAttachments);
         rendering.renderArea().offset().set(area.x(), area.y());
@@ -271,7 +265,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
         long beginRenderPass = resume ? resumeRenderPass() : renderPass;
         long framebuffer = context.legacyFramebuffer(beginRenderPass, views, outputWidth, outputHeight);
-        RenderPass.RenderArea area = descriptor.renderArea;
+        RenderPass.RenderArea area = descriptor.renderArea();
         VkRenderPassBeginInfo begin = VkRenderPassBeginInfo.calloc(stack).sType$Default()
                 .renderPass(beginRenderPass).framebuffer(framebuffer).pClearValues(clearValues);
         begin.renderArea().offset().set(area.x(), area.y());
@@ -312,8 +306,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private void splitForSampledTransitions() {
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (TextureBinding binding : textures.values()) {
-            LavaFlowGpuTexture sampled = binding.view.texture();
+        for (LavaFlowGpuTexture sampled : sampledTextures()) {
             if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                 encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
             }
@@ -333,8 +326,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
      * other non-empty value it only warns.
      */
     private void debugValidateLayouts() {
-        for (TextureBinding binding : textures.values()) {
-            LavaFlowGpuTexture t = binding.view.texture();
+        for (LavaFlowGpuTexture t : sampledTextures()) {
             int l = t.layout();
             if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                 report("Sampled texture " + System.identityHashCode(t) + " has pre-begin layout " + l
@@ -391,27 +383,29 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
 
     @Override public void pushDebugGroup(Supplier<String> label) {}
     @Override public void popDebugGroup() {}
-    @Override public void setPipeline(RenderPipeline pipeline) {
-        this.pipeline = encoder.device().pipeline(pipeline);
-        if (!this.pipeline.isValid()) throw new IllegalStateException("Pipeline is invalid: " + pipeline.getLocation());
+    @Override public void setPipeline(BackendRenderPipeline pipeline) {
+        if (!(pipeline instanceof LavaFlowRenderPipeline lavaPipeline)) {
+            throw new IllegalArgumentException("Pipeline must be a LavaFlowRenderPipeline");
+        }
+        this.pipeline = lavaPipeline;
+        // One slot per compiled uniform; the frontend replays the uniforms it already holds right after
+        // this call, and 26.3 resolves names to slots there rather than here.
+        uniforms.clear();
+        uniforms.addAll(Collections.nCopies(lavaPipeline.entries().size(), null));
         if (begun) recordPipelineBind();
         descriptorsDirty = true;
     }
-    @Override public void bindTexture(String name, GpuTextureView texture, GpuSampler sampler) {
-        if ((texture == null) != (sampler == null)) throw new IllegalArgumentException("Texture and sampler must both be null or non-null");
-        if (texture == null) {
-            textures.remove(name);
-        } else {
-            textures.put(name, new TextureBinding(view(texture), (LavaFlowGpuSampler)sampler));
+    @Override public void setUniform(int index, Object value) {
+        if (index < 0 || index >= uniforms.size()) {
+            throw new IllegalStateException("Uniform index " + index + " is outside the bound pipeline's "
+                    + uniforms.size() + " uniforms");
         }
+        uniforms.set(index, value);
         descriptorsDirty = true;
     }
-    @Override public void setUniform(String name, GpuBuffer buffer) {
-        setUniform(name, buffer.slice());
-    }
-    @Override public void setUniform(String name, GpuBufferSlice buffer) {
-        uniforms.put(name, buffer);
-        descriptorsDirty = true;
+    @Override public void pushConstants(ByteBuffer value) {
+        if (pipeline == null) throw new IllegalStateException("Must bind a pipeline before pushing constants");
+        vkCmdPushConstants(encoder.commandBuffer(), pipeline.pipelineLayout(), Integer.MAX_VALUE, 0, value);
     }
     @Override public void enableScissor(int x, int y, int width, int height) {
         if (begun) {
@@ -424,7 +418,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void disableScissor() {
-        RenderPass.RenderArea area = descriptor.renderArea;
+        RenderPass.RenderArea area = descriptor.renderArea();
         enableScissor(area.x(), area.y(), area.width(), area.height());
     }
     @Override public void setVertexBuffer(int slot, GpuBufferSlice buffer) {
@@ -532,17 +526,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINSTANCE));
         }
     }
-    @Override public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, GpuBuffer buffer, IndexType type, Collection<String> uniformNames, T value) {
-        for (RenderPass.Draw<T> draw : draws) {
-            if (draw.uniformUploaderConsumer() != null) {
-                draw.uniformUploaderConsumer().accept(value, this::setUniform);
-            }
-            setIndexBuffer(draw.indexBuffer() == null ? buffer : draw.indexBuffer(),
-                    draw.indexType() == null ? type : draw.indexType());
-            setVertexBuffer(draw.slot(), draw.vertexBuffer().slice());
-            drawIndexed(draw.indexCount(), 1, draw.firstIndex(), draw.baseVertex(), 0);
-        }
-    }
+    // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
+    // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
@@ -575,11 +560,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             descriptorsDirty = false;
             return;
         }
-        for (int i = 0; i < entries.size(); i++) {
-            LavaFlowRenderPipeline.Entry entry = entries.get(i);
-            if (entry.type() != LavaFlowRenderPipeline.EntryType.SAMPLED_IMAGE) continue;
-            TextureBinding binding = textures.get(entry.name());
-            if (binding != null && binding.view.texture().layout() != VK_IMAGE_LAYOUT_GENERAL) {
+        for (LavaFlowGpuTexture sampled : sampledTextures()) {
+            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                 splitForSampledTransitions();
                 break;
             }
@@ -607,7 +589,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             int at = i * 3;
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
-                    GpuBufferSlice slice = requireUniform(entry.name());
+                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
                     keyValues[at] = ((LavaFlowGpuBuffer) slice.buffer()).handle();
                     keyValues[at + 1] = dynamic ? 0 : slice.offset();
                     keyValues[at + 2] = slice.length();
@@ -615,17 +597,16 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     if (dynamic) dynamicCount++;
                 }
                 case TEXEL_BUFFER -> {
-                    GpuBufferSlice slice = requireUniform(entry.name());
+                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
                     keyValues[at] = ((LavaFlowGpuBuffer) slice.buffer()).handle();
                     keyValues[at + 1] = slice.offset();
                     keyValues[at + 2] = slice.length();
                     resourceHandles[handleCount++] = keyValues[at];
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureBinding binding = textures.get(entry.name());
-                    if (binding == null) throw new IllegalStateException("Missing sampled image " + entry.name());
-                    keyValues[at] = binding.view.handle();
-                    keyValues[at + 1] = binding.sampler.handle();
+                    TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
+                    keyValues[at] = ((LavaFlowGpuTextureView) binding.view()).handle();
+                    keyValues[at + 1] = ((LavaFlowGpuSampler) binding.sampler()).handle();
                     resourceHandles[handleCount++] = keyValues[at];
                     resourceHandles[handleCount++] = keyValues[at + 1];
                 }
@@ -646,9 +627,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             if (dynamicCount > 0) {
                 dynamicOffsets = stack.mallocInt(dynamicCount);
                 for (int i = 0; i < entryCount; i++) {
-                    LavaFlowRenderPipeline.Entry entry = entries.get(i);
-                    if (entry.type() != LavaFlowRenderPipeline.EntryType.UNIFORM_BUFFER) continue;
-                    dynamicOffsets.put((int) requireUniform(entry.name()).offset());
+                    if (entries.get(i).type() != LavaFlowRenderPipeline.EntryType.UNIFORM_BUFFER) continue;
+                    dynamicOffsets.put((int) requireAt(i, GpuBufferSlice.class).offset());
                 }
                 dynamicOffsets.flip();
             }
@@ -675,26 +655,26 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             if (descriptorSet != 0) write.dstSet(descriptorSet);
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
-                    GpuBufferSlice slice = requireUniform(entry.name());
+                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
                     VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
                             .buffer(((LavaFlowGpuBuffer) slice.buffer()).handle())
                             .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length());
                     write.pBufferInfo(bufferInfo);
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureBinding binding = textures.get(entry.name());
-                    if (binding == null) throw new IllegalStateException("Missing sampled image " + entry.name());
-                    LavaFlowGpuTexture sampledTexture = binding.view.texture();
+                    TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
+                    LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) binding.view();
+                    LavaFlowGpuTexture sampledTexture = view.texture();
                     if (sampledTexture.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                         throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
                     }
                     VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
-                            .sampler(binding.sampler.handle()).imageView(binding.view.handle())
+                            .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
                             .imageLayout(VK_IMAGE_LAYOUT_GENERAL);
                     write.pImageInfo(imageInfo);
                 }
                 case TEXEL_BUFFER -> {
-                    GpuBufferSlice slice = requireUniform(entry.name());
+                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
                     long bufferView = cache.bufferView(((LavaFlowGpuBuffer) slice.buffer()).handle(),
                             LavaFlowVk.format(entry.texelFormat()), slice.offset(), slice.length());
                     write.pTexelBufferView(stack.longs(bufferView));
@@ -704,11 +684,37 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         return writes;
     }
 
-    private GpuBufferSlice requireUniform(String name) {
-        GpuBufferSlice slice = uniforms.get(name);
-        if (slice == null) throw new IllegalStateException("Missing uniform " + name);
-        if (slice.buffer().isClosed()) throw new IllegalStateException("Uniform buffer is closed: " + name);
-        return slice;
+    /**
+     * The value bound to one uniform slot. Fails loudly rather than asserting: a wrong type or a
+     * missing value here means the frontend and this backend disagree about the pipeline's uniform
+     * layout, which would otherwise show up as a wrong or unread descriptor.
+     */
+    private <T> T requireAt(int index, Class<T> type) {
+        LavaFlowRenderPipeline.Entry entry = pipeline.entries().get(index);
+        Object value = index < uniforms.size() ? uniforms.get(index) : null;
+        if (value == null) throw new IllegalStateException("Missing uniform " + entry.name() + " (slot " + index + ")");
+        if (!type.isInstance(value)) {
+            throw new IllegalStateException("Uniform " + entry.name() + " (slot " + index + ") is a "
+                    + value.getClass().getName() + ", expected " + type.getSimpleName());
+        }
+        if (value instanceof GpuBufferSlice slice && slice.buffer().isClosed()) {
+            throw new IllegalStateException("Uniform buffer is closed: " + entry.name());
+        }
+        return type.cast(value);
+    }
+
+    /** Textures behind the sampled-image uniforms currently bound, in slot order. */
+    private List<LavaFlowGpuTexture> sampledTextures() {
+        if (pipeline == null) return List.of();
+        List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
+        List<LavaFlowGpuTexture> result = new ArrayList<>();
+        for (int i = 0; i < entries.size() && i < uniforms.size(); i++) {
+            if (entries.get(i).type() != LavaFlowRenderPipeline.EntryType.SAMPLED_IMAGE) continue;
+            if (uniforms.get(i) instanceof TextureViewAndSampler binding) {
+                result.add(((LavaFlowGpuTextureView) binding.view()).texture());
+            }
+        }
+        return result;
     }
 
     private static void unsupported() { throw new UnsupportedOperationException("LavaFlow graphics pipeline binding is not initialized"); }
