@@ -1,14 +1,9 @@
 package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
-import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.pipeline.PolygonMode;
-import com.mojang.renderpearl.api.vertex.VertexFormat;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -19,12 +14,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * resets it in @AfterEach to prevent cross-test state pollution.
  */
 class LavaFlowPushConstantsTest {
-    // RenderPipeline.MAX_VERTEX_ELEMENTS is 16; the constructor arraycopy requires exactly that count.
-    private static final RenderPipeline DUMMY = new RenderPipeline(
-            null, null, null, null, List.of(),
-            new ColorTargetState[0], null, PolygonMode.FILL, false,
-            new VertexFormat[16], PrimitiveTopology.TRIANGLES, 0
-    ) {};
+    /**
+     * A minimal pipeline. Every provider in this class ignores its argument, so the tests only need a
+     * non-null instance, and the public builder produces one without spelling out the twelve positional
+     * constructor arguments.
+     *
+     * <p>The old positional call cannot be ported as-is: 26.3's constructor tolerates neither the nulls
+     * nor the array shapes it used. The shader map is wrapped in {@code new EnumMap(shaders)} (null throws,
+     * and an empty non-EnumMap throws "Specified map is empty"), the bind-group layouts go through
+     * {@code List.copyOf} (null throws) and the two arrays through fastutil's {@code ReferenceArrayList}
+     * (null throws). The builder starts from an empty {@code EnumMap}, so all of that is handled, and the
+     * fixed {@code MAX_VERTEX_ELEMENTS == 16} array is gone entirely -- 26.3 takes whatever length the
+     * vertex-format array has.
+     */
+    private static final RenderPipeline DUMMY = RenderPipeline.builder()
+            // These take a bare path and resolve it in the "minecraft" namespace, so they must not carry a
+            // "namespace:" prefix -- that colon would end up inside the path and fail validation.
+            .withLocation("lavaflow_push_constants_test")
+            .withVertexShader("lavaflow_push_constants_test_vertex")
+            .withFragmentShader("lavaflow_push_constants_test_fragment")
+            .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+            .build();
 
     @AfterEach
     void resetProvider() {
