@@ -6,13 +6,17 @@ import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.pipeline.ShaderSource;
 import com.mojang.renderpearl.api.pipeline.ShaderType;
-import com.mojang.blaze3d.systems.*;
-import com.mojang.blaze3d.textures.*;
+import com.mojang.renderpearl.api.device.*;
+import com.mojang.renderpearl.api.commands.*;
+import com.mojang.renderpearl.api.buffers.*;
+import com.mojang.renderpearl.backend.api.*;
+import com.mojang.renderpearl.api.textures.*;
 import net.minecraft.resources.Identifier;
 import org.lwjgl.vulkan.VkPhysicalDeviceLimits;
 
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.VK10.*;
@@ -46,9 +50,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         }
     }
 
-    public LavaFlowDevice(long window, ShaderSource shaderSource) {
-        this.context = new LavaFlowVulkanContext(window);
-        this.shaderSource = shaderSource;
+    public LavaFlowDevice() {
+        this.context = new LavaFlowVulkanContext();
+        // 26.3 passes the shader source per compilePipeline call instead of once at device
+        // creation, so there is nothing to hold here until that path is ported (see compilePipeline).
+        this.shaderSource = null;
         this.descriptorCache = new LavaFlowDescriptorCache(context, this);
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
@@ -63,9 +69,15 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // smaller (the Mali-G76 bug returns 0 here).
         int maxTex = physMaxTex >= 8192 ? physMaxTex : 8192;
         LOGGER.log(System.Logger.Level.INFO, "LavaFlow maxTextureSize=" + maxTex + "; device raw limits.maxImageDimension2D=" + physMaxTex);
+        // Native multi-draw indirect is bounded by the device limit. When the device lacks the
+        // feature the batch is split into single indirect draws (see LavaFlowRenderPass), so nothing
+        // bounds the count in that case -- the same reasoning as maxInterleavedDraws above.
+        int maxIndirectDraws = context.multiDrawIndirect()
+                ? Math.max(1, limits.maxDrawIndirectCount())
+                : Integer.MAX_VALUE;
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
                 maxTex, maxMemoryAllocationSize, maxInterleavedDraws,
-                limits.maxColorAttachments());
+                limits.maxColorAttachments(), maxIndirectDraws);
         // The multi-draw capabilities describe what LavaFlow's render pass accepts, not what the Vulkan
         // device exposes natively. Each is emulated with a loop of core Vulkan commands when the device
         // lacks the corresponding feature, so the Blaze3D-level capability holds on every supported
@@ -73,7 +85,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // draws into a plain CPU array instead of an indirect-parameter buffer, which on tile-based GPUs
         // is host-visible memory the GPU has to read back once per draw.
         boolean multiDrawDirectInterleaved = !Boolean.getBoolean("lavaflow.forceNoMultiDrawDirect");
-        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true, false, true);
+        // 26.3 prepended wireframeFillMode to DeviceFeatures; the remaining seven keep their 26.2
+        // meaning and values. wireframeFillMode reports the Vulkan fillModeNonSolid capability, which
+        // is what actually gates PolygonMode.LINE pipelines in LavaFlowRenderPipeline.
+        DeviceFeatures features = new DeviceFeatures(context.fillModeNonSolid(), false, multiDrawDirectInterleaved,
+                false, true, true, false, true);
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -99,7 +115,10 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
                 "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
-                new HintsAndWorkarounds(false, false), type);
+                // The two new 26.3 fields stay false: LavaFlow's legacy render-pass path accepts a
+                // pass with no depth attachment, and its indirect-draw emulation is exercised by the
+                // baselineDevice switch rather than being a known-bad path.
+                new HintsAndWorkarounds(false, false, false, false), type);
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
@@ -172,8 +191,9 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
     synchronized void completePending() { completeSubmit(detachSubmitBatch(null)); }
 
-    @Override public GpuSurfaceBackend createSurface(long window) {
+    @Override public GpuSurfaceBackend createSurface(long window, BooleanSupplier isIconified) {
         if (window == 0) throw new IllegalArgumentException("window must be valid");
+        // isIconified is unused: LavaFlow throttles through the swapchain present mode instead.
         return new LavaFlowGpuSurface(this, window);
     }
     @Override public CommandEncoderBackend createCommandEncoder() { ensureOpen(); return commandEncoder; }
@@ -201,17 +221,29 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
     @Override public List<String> getLastDebugMessages() { return List.of(); }
     @Override public boolean isDebuggingEnabled() { return false; }
-    @Override public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, ShaderSource source) {
-        ensureOpen();
-        return pipelines.computeIfAbsent(pipeline,
-                ignored -> new LavaFlowRenderPipeline(this, pipeline, source == null ? shaderSource : source));
+    /**
+     * Compiles a backend render pipeline.
+     *
+     * <p>Not yet ported to 26.3. The old path built render pipelines from a frontend
+     * {@code RenderPipeline} plus a {@code ShaderSource}, and rewrote the compiled SPIR-V interfaces
+     * through {@code IntermediaryShaderModule} / {@code GlslPreprocessor} so renamed bindings lined
+     * up. Minecraft 26.3 removed both classes and now hands the backend a fully resolved
+     * {@code BackendRenderPipeline.CreateInfo} instead, so {@link LavaFlowRenderPipeline} has to
+     * change its input path before this can be implemented.
+     *
+     * <p>Throwing here keeps the failure at the point where a pipeline is first needed, so the
+     * instance/device/queue/surface/window bootstrap can still be exercised in the meantime.
+     */
+    @Override public BackendRenderPipeline.Pending compilePipeline(BackendRenderPipeline.CreateInfo pipelineCreateInfo) {
+        throw new UnsupportedOperationException(
+                "LavaFlow: pipeline compilation is not yet ported to BackendRenderPipeline.CreateInfo");
     }
 
     synchronized String shaderText(Identifier id, ShaderType type, ShaderSource preferredSource) {
         ShaderKey key = new ShaderKey(id, type);
-        String text = preferredSource == null ? null : preferredSource.get(id, type);
+        String text = preferredSource == null ? null : preferredSource.getShader(id, type);
         if (text == null && preferredSource != shaderSource && shaderSource != null) {
-            text = shaderSource.get(id, type);
+            text = shaderSource.getShader(id, type);
         }
         if (text != null) {
             shaderSources.put(key, text);
@@ -241,7 +273,15 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         descriptorCache.invalidateAll();
     }
     @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }
-    @Override public long getTimestampNow() { return System.nanoTime(); }
+
+    /**
+     * Offset that converts a query-pool timestamp into {@link System#nanoTime()} space.
+     *
+     * <p>LavaFlow has no device-clock read and does not use {@code VK_EXT_calibrated_timestamps}, so
+     * there is no honest offset to report; 0 is what the frontend gets. Timestamp queries still
+     * produce usable <em>relative</em> durations, which is what LavaFlow's own frame stats use.
+     */
+    @Override public long getTimestampCalibrationOffset() { return 0L; }
     @Override public DeviceInfo getDeviceInfo() { return deviceInfo; }
 
     private void ensureOpen() { if (closed) throw new IllegalStateException("LavaFlow device is closed"); }

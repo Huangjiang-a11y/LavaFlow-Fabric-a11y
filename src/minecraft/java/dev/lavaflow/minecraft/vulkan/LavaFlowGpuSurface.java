@@ -1,6 +1,8 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.systems.*;
+import com.mojang.renderpearl.api.device.*;
+import com.mojang.renderpearl.api.commands.*;
+import com.mojang.renderpearl.backend.api.*;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
@@ -42,7 +44,10 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
 
     LavaFlowGpuSurface(LavaFlowDevice device, long window) {
         context = device.context();
-        surface = context.surface();
+        // The surface cannot be created during createDevice: Minecraft only produces the window
+        // handle afterwards, through GpuBackend.createWindow. The context keeps ownership so its
+        // close() is still what destroys it.
+        surface = context.createSurface(window);
         supportedPresentModes = Collections.unmodifiableSet(queryPresentModes());
         createAcquireSemaphores();
     }

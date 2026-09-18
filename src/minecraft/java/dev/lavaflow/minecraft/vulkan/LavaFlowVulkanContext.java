@@ -1,15 +1,19 @@
 package dev.lavaflow.minecraft.vulkan;
 
 import org.lwjgl.PointerBuffer;
-import org.lwjgl.glfw.GLFWVulkan;
+import org.lwjgl.sdl.SDLError;
+import org.lwjgl.sdl.SDLVulkan;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -28,7 +32,6 @@ import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceProperties2;
 
 /** LavaFlow-owned Vulkan 1.1 instance, device, queues, and allocation policy. */
 public final class LavaFlowVulkanContext implements AutoCloseable {
-    private final long window;
     private VkInstance instance;
     private VkDebugUtilsMessengerCallbackEXT debugCallback;
     private long debugMessenger;
@@ -109,12 +112,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
     }
 
-    public LavaFlowVulkanContext(long window) {
-        if (window == NULL) throw new IllegalArgumentException("window must be a GLFW window");
-        this.window = window;
+    /**
+     * Brings up the instance, device, and queues.
+     *
+     * <p>No window parameter: Minecraft calls {@code GpuBackend.createDevice} before it creates the
+     * window, so the device has to come up without one. The surface is created later, through
+     * {@link #createSurface(long)}, once {@code GpuBackend.createWindow} has produced a handle.
+     */
+    public LavaFlowVulkanContext() {
         try {
             createInstance();
-            createSurface();
             selectDevice();
             createDevice();
             createCommandPool();
@@ -128,20 +135,31 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
     }
 
+    /**
+     * Creates the Vulkan 1.1 instance.
+     *
+     * <p>The surface extensions come from SDL instead of from a window, because no window exists
+     * yet at this point. Asking SDL rather than hardcoding one extension per OS also keeps a single
+     * build working under both X11 and Wayland, which {@code VK_KHR_xlib_surface} alone would not.
+     */
     private void createInstance() {
-        if (!GLFWVulkan.glfwVulkanSupported()) throw new IllegalStateException("Vulkan is unavailable");
-        PointerBuffer extensions = GLFWVulkan.glfwGetRequiredInstanceExtensions();
-        if (extensions == null) throw new IllegalStateException("GLFW supplied no Vulkan surface extensions");
+        PointerBuffer sdlExtensions = SDLVulkan.SDL_Vulkan_GetInstanceExtensions();
+        if (sdlExtensions == null) {
+            throw new IllegalStateException("SDL supplied no Vulkan surface extensions");
+        }
+        List<String> extensions = new ArrayList<>();
+        while (sdlExtensions.remaining() > 0) {
+            String extension = MemoryUtil.memUTF8(sdlExtensions.get());
+            // Portability enumeration makes MoltenVK reject the instance unless the matching create
+            // flag is also set, and none of LavaFlow's targets need it.
+            if (!extension.equals("VK_KHR_portability_enumeration")) extensions.add(extension);
+        }
+        boolean validation = Boolean.getBoolean("lavaflow.validation");
+        if (validation) extensions.add(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         try (MemoryStack stack = stackPush()) {
-            boolean validation = Boolean.getBoolean("lavaflow.validation");
-            PointerBuffer enabledExtensions = extensions;
-            if (validation) {
-                enabledExtensions = stack.mallocPointer(extensions.remaining() + 1);
-                for (int i = extensions.position(); i < extensions.limit(); i++) {
-                    enabledExtensions.put(extensions.get(i));
-                }
-                enabledExtensions.put(stack.UTF8(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME)).flip();
-            }
+            PointerBuffer enabledExtensions = stack.mallocPointer(extensions.size());
+            for (String extension : extensions) enabledExtensions.put(stack.UTF8(extension));
+            enabledExtensions.flip();
             VkApplicationInfo app = VkApplicationInfo.calloc(stack).sType$Default()
                     .pApplicationName(stack.UTF8("LavaFlow")).applicationVersion(VK_MAKE_VERSION(0, 1, 0))
                     .pEngineName(stack.UTF8("LavaFlow")).engineVersion(VK_MAKE_VERSION(0, 1, 0))
@@ -174,12 +192,26 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         debugMessenger = out.get(0);
     }
 
-    private void createSurface() {
+    /**
+     * Creates the presentation surface for {@code window}, once.
+     *
+     * <p>Called by {@link LavaFlowGpuSurface}, which only comes into existence after Minecraft has
+     * created the window via {@code GpuBackend.createWindow}. The context keeps ownership because
+     * its {@link #close()} is what destroys the surface.
+     */
+    synchronized long createSurface(long window) {
+        if (surface != NULL) return surface;
+        if (window == NULL) throw new IllegalArgumentException("window must be a valid SDL window handle");
         try (MemoryStack stack = stackPush()) {
             LongBuffer out = stack.mallocLong(1);
-            check(GLFWVulkan.glfwCreateWindowSurface(instance, window, null, out), "glfwCreateWindowSurface");
+            if (!SDLVulkan.SDL_Vulkan_CreateSurface(window, instance, null, out)) {
+                String error = SDLError.SDL_GetError();
+                throw new IllegalStateException("SDL_Vulkan_CreateSurface failed: "
+                        + (error == null ? "<no error>" : error));
+            }
             surface = out.get(0);
         }
+        return surface;
     }
 
     private void selectDevice() {
@@ -192,9 +224,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             DeviceCapabilities selectedCapabilities = null;
             for (int i = 0; i < devices.capacity(); i++) {
                 VkPhysicalDevice candidate = new VkPhysicalDevice(devices.get(i), instance);
-                int[] families = findFamilies(candidate);
+                int family = findGraphicsFamily(candidate);
                 DeviceCapabilities candidateCapabilities = queryCapabilities(candidate);
-                if (families[0] < 0 || families[1] < 0 || !candidateCapabilities.swapchain()) continue;
+                if (family < 0 || !candidateCapabilities.swapchain()) continue;
                 VkPhysicalDeviceProperties candidateProperties = VkPhysicalDeviceProperties.calloc();
                 vkGetPhysicalDeviceProperties(candidate, candidateProperties);
                 int api = candidateProperties.apiVersion();
@@ -206,7 +238,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 if (candidateProperties.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1_000_000;
                 if (score > best) {
                     if (properties != null) properties.free();
-                    best = score; physicalDevice = candidate; graphicsFamily = families[0]; presentFamily = families[1];
+                    best = score; physicalDevice = candidate;
+                    // One family serves both roles; see findGraphicsFamily.
+                    graphicsFamily = presentFamily = family;
                     properties = candidateProperties; deviceName = properties.deviceNameString();
                     selectedCapabilities = candidateCapabilities;
                 } else candidateProperties.free();
@@ -220,7 +254,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 enabledExtensions = selectedCapabilities.extensions();
             }
         }
-        if (physicalDevice == null) throw new IllegalStateException("No Vulkan 1.1 presentation device found");
+        if (physicalDevice == null) {
+            throw new IllegalStateException(
+                    "No Vulkan 1.1 device with a combined graphics and presentation queue family found");
+        }
         // lavaflow.baselineDevice emulates a device that exposes nothing beyond VK_KHR_swapchain, which is
         // what the ARM64 Android targets report. It exists so the fallback paths can be exercised and
         // profiled on a desktop GPU that would otherwise take every extension path.
@@ -275,21 +312,25 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
     }
 
-    private int[] findFamilies(VkPhysicalDevice candidate) {
+    /**
+     * Finds the one queue family LavaFlow renders and presents from.
+     *
+     * <p>The surface does not exist yet, so presentation support is asked of SDL rather than of
+     * {@code vkGetPhysicalDeviceSurfaceSupportKHR}. Graphics and presentation therefore have to
+     * share a family: a queue family cannot be added to a device after {@code vkCreateDevice}, so a
+     * device whose present family differs cannot be used at all and is rejected by returning -1.
+     */
+    private int findGraphicsFamily(VkPhysicalDevice candidate) {
         try (MemoryStack stack = stackPush()) {
             IntBuffer count = stack.ints(0);
             vkGetPhysicalDeviceQueueFamilyProperties(candidate, count, null);
             VkQueueFamilyProperties.Buffer props = VkQueueFamilyProperties.malloc(count.get(0), stack);
             vkGetPhysicalDeviceQueueFamilyProperties(candidate, count, props);
-            IntBuffer supported = stack.ints(VK_FALSE);
-            int graphics = -1, present = -1;
             for (int i = 0; i < props.capacity(); i++) {
-                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) graphics = i;
-                check(vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, supported), "vkGetPhysicalDeviceSurfaceSupportKHR");
-                if (supported.get(0) == VK_TRUE) present = i;
-                if (graphics >= 0 && present >= 0) break;
+                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
+                if (SDLVulkan.SDL_Vulkan_GetPresentationSupport(instance, candidate, i)) return i;
             }
-            return new int[]{graphics, present};
+            return -1;
         }
     }
 
@@ -345,10 +386,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
     private void createDevice() {
         try (MemoryStack stack = stackPush()) {
-            int count = graphicsFamily == presentFamily ? 1 : 2;
-            VkDeviceQueueCreateInfo.Buffer queues = VkDeviceQueueCreateInfo.calloc(count, stack);
+            VkDeviceQueueCreateInfo.Buffer queues = VkDeviceQueueCreateInfo.calloc(1, stack);
             queues.get(0).sType$Default().queueFamilyIndex(graphicsFamily).pQueuePriorities(stack.floats(1));
-            if (count == 2) queues.get(1).sType$Default().queueFamilyIndex(presentFamily).pQueuePriorities(stack.floats(1));
             VkPhysicalDeviceFeatures supported = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(physicalDevice, supported);
             VkPhysicalDeviceFeatures enabled = VkPhysicalDeviceFeatures.calloc(stack)
@@ -383,7 +422,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             device = new VkDevice(out.get(0), physicalDevice, info);
             PointerBuffer q = stack.mallocPointer(1);
             vkGetDeviceQueue(device, graphicsFamily, 0, q); graphicsQueue = new VkQueue(q.get(0), device);
-            vkGetDeviceQueue(device, presentFamily, 0, q); presentQueue = new VkQueue(q.get(0), device);
+            // Presentation rides the same queue: findGraphicsFamily only accepts a family that
+            // supports both, so there is no second family to fetch a queue from.
+            presentQueue = graphicsQueue;
         }
     }
 
