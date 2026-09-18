@@ -478,6 +478,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     public String deviceName() { return deviceName; }
     public VkPhysicalDeviceProperties properties() { return properties; }
     public long maxMemoryAllocationSize() { return maxMemoryAllocationSize; }
+    /**
+     * Highest SPIR-V version the selected device accepts.
+     *
+     * <p>Tied to the device's Vulkan version, not the instance's: SPIR-V 1.4 needs
+     * {@code VK_KHR_spirv_1_4} on a 1.1 device, 1.5 needs Vulkan 1.2 and 1.6 needs Vulkan 1.3. LavaFlow
+     * never enables the 1.4 extension, so a 1.1 device — the floor LavaFlow accepts — gets 1.3, which is
+     * exactly what the frontend's 1.2-targeted modules have to be lowered to. See {@link LavaFlowSpirv}.
+     */
+    int maxSpirvVersion() {
+        int api = properties.apiVersion();
+        int major = VK_VERSION_MAJOR(api), minor = VK_VERSION_MINOR(api);
+        if (major > 1 || (major == 1 && minor >= 3)) return LavaFlowSpirv.VERSION_1_6;
+        if (major == 1 && minor == 2) return LavaFlowSpirv.VERSION_1_5;
+        // Not in enabledExtensions today; checked so this stays correct if 1.4 support is ever added.
+        if (enabledExtensions.contains("VK_KHR_spirv_1_4")) return LavaFlowSpirv.VERSION_1_4;
+        return LavaFlowSpirv.VERSION_1_3;
+    }
     boolean pushDescriptors() { return pushDescriptors; }
     boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }

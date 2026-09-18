@@ -218,7 +218,12 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
      * cache lives here -- a backend pipeline exists exactly as long as the frontend keeps it.
      */
     @Override public BackendRenderPipeline.Pending compilePipeline(BackendRenderPipeline.CreateInfo pipelineCreateInfo) {
-        return () -> LavaFlowRenderPipeline.compile(this, pipelineCreateInfo);
+        // Compiled here rather than inside the returned lambda, matching the vanilla Vulkan backend: the
+        // frontend calls this from its shader-compilation executor, and its "complete compile" step is then
+        // only bookkeeping. Deferring the work to finishCompile() would instead do it on whichever thread
+        // asks for the pipeline, which for the frontend means the render thread mid-frame.
+        LavaFlowRenderPipeline pipeline = LavaFlowRenderPipeline.compile(this, pipelineCreateInfo);
+        return () -> pipeline;
     }
 
     @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }

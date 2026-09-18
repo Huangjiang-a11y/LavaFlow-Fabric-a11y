@@ -134,8 +134,11 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
 
     private long createShaderModule(ByteBuffer spirv) {
         try (MemoryStack stack = stackPush()) {
-            VkShaderModuleCreateInfo create = VkShaderModuleCreateInfo.calloc(stack).sType$Default()
-                    .pCode(spirv.duplicate());
+            // The frontend compiles for Vulkan 1.2 regardless of the device in use, so a 1.1 device is
+            // handed SPIR-V modules it cannot consume. See LavaFlowSpirv for why the header is the only
+            // place this can be corrected; the buffer is returned unchanged when the device accepts it.
+            ByteBuffer code = LavaFlowSpirv.downlevel(stack, spirv, device.context().maxSpirvVersion());
+            VkShaderModuleCreateInfo create = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateShaderModule(device.context().device(), create, null, out), "vkCreateShaderModule");
             return out.get(0);
@@ -338,7 +341,10 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 create.renderPass(renderPass).subpass(0);
             }
             LongBuffer out = stack.mallocLong(1);
-            check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out), "vkCreateGraphicsPipelines");
+            check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),
+                    "vkCreateGraphicsPipelines for " + info.name()
+                            + " (renderPass=" + renderPass + ", depthVkFormat=" + depthVkFormat
+                            + ", colorTargets=" + targets.size() + ", shaders=" + shaderModules.length + ")");
             return out.get(0);
         }
     }
