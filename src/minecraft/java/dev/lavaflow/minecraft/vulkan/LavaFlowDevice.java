@@ -2,16 +2,11 @@ package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
-import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.pipeline.ShaderSource;
-import com.mojang.renderpearl.api.pipeline.ShaderType;
 import com.mojang.renderpearl.api.device.*;
 import com.mojang.renderpearl.api.commands.*;
 import com.mojang.renderpearl.api.buffers.*;
 import com.mojang.renderpearl.backend.api.*;
 import com.mojang.renderpearl.api.textures.*;
-import net.minecraft.resources.Identifier;
 import org.lwjgl.vulkan.VkPhysicalDeviceLimits;
 
 import java.nio.ByteBuffer;
@@ -26,20 +21,14 @@ import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
 public final class LavaFlowDevice implements GpuDeviceBackend {
     private static final System.Logger LOGGER = System.getLogger(LavaFlowDevice.class.getName());
     private final LavaFlowVulkanContext context;
-    private final ShaderSource shaderSource;
     private final DeviceInfo deviceInfo;
     private final LavaFlowCommandEncoder commandEncoder;
     private List<AutoCloseable> deferred = new ArrayList<>();
     private List<Runnable> callbacks = new ArrayList<>();
     private SubmitBatch completingBatch;
-    private final Map<RenderPipeline, LavaFlowRenderPipeline> pipelines = new IdentityHashMap<>();
-    private final Map<ShaderKey, String> shaderSources = new HashMap<>();
-    private RenderPipeline lastPipelineInfo;
-    private LavaFlowRenderPipeline lastPipeline;
     private LavaFlowDescriptorCache descriptorCache;
     private boolean closed;
 
-    private record ShaderKey(Identifier id, ShaderType type) {}
     static final class SubmitBatch {
         final List<AutoCloseable> resources;
         final List<Runnable> callbacks;
@@ -52,9 +41,6 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
 
     public LavaFlowDevice() {
         this.context = new LavaFlowVulkanContext();
-        // 26.3 passes the shader source per compilePipeline call instead of once at device
-        // creation, so there is nothing to hold here until that path is ported (see compilePipeline).
-        this.shaderSource = null;
         this.descriptorCache = new LavaFlowDescriptorCache(context, this);
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
@@ -226,57 +212,15 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     /**
      * Compiles a backend render pipeline.
      *
-     * <p>Not yet ported to 26.3. The old path built render pipelines from a frontend
-     * {@code RenderPipeline} plus a {@code ShaderSource}, and rewrote the compiled SPIR-V interfaces
-     * through {@code IntermediaryShaderModule} / {@code GlslPreprocessor} so renamed bindings lined
-     * up. Minecraft 26.3 removed both classes and now hands the backend a fully resolved
-     * {@code BackendRenderPipeline.CreateInfo} instead, so {@link LavaFlowRenderPipeline} has to
-     * change its input path before this can be implemented.
-     *
-     * <p>Throwing here keeps the failure at the point where a pipeline is first needed, so the
-     * instance/device/queue/surface/window bootstrap can still be exercised in the meantime.
+     * <p>The work is deferred into the returned {@code Pending}: the frontend holds the compiled SPIR-V
+     * until it calls {@code finishCompile()}, and releases the modules once that returns. The frontend
+     * also owns pipeline caching (its {@code PipelineCache}, keyed by {@code RenderPipeline}), so no
+     * cache lives here -- a backend pipeline exists exactly as long as the frontend keeps it.
      */
     @Override public BackendRenderPipeline.Pending compilePipeline(BackendRenderPipeline.CreateInfo pipelineCreateInfo) {
-        throw new UnsupportedOperationException(
-                "LavaFlow: pipeline compilation is not yet ported to BackendRenderPipeline.CreateInfo");
+        return () -> LavaFlowRenderPipeline.compile(this, pipelineCreateInfo);
     }
 
-    synchronized String shaderText(Identifier id, ShaderType type, ShaderSource preferredSource) {
-        ShaderKey key = new ShaderKey(id, type);
-        String text = preferredSource == null ? null : preferredSource.getShader(id, type);
-        if (text == null && preferredSource != shaderSource && shaderSource != null) {
-            text = shaderSource.getShader(id, type);
-        }
-        if (text != null) {
-            shaderSources.put(key, text);
-            return text;
-        }
-        return shaderSources.get(key);
-    }
-    LavaFlowRenderPipeline pipeline(RenderPipeline pipeline) {
-        if (pipeline == lastPipelineInfo) return lastPipeline;
-        return findPipeline(pipeline);
-    }
-    private synchronized LavaFlowRenderPipeline findPipeline(RenderPipeline pipeline) {
-        ensureOpen();
-        LavaFlowRenderPipeline result = pipelines.computeIfAbsent(pipeline,
-                ignored -> new LavaFlowRenderPipeline(this, pipeline, shaderSource));
-        lastPipelineInfo = pipeline;
-        lastPipeline = result;
-        return result;
-    }
-    // 26.3 removed clearPipelineCache from the backend interface -- the whole jar has no equivalent,
-    // so it is not yet known how 26.3 asks a backend to drop compiled pipelines. The body is still
-    // needed by close(), which is the only remaining caller.
-    public synchronized void clearPipelineCache() {
-        lastPipelineInfo = null;
-        lastPipeline = null;
-        for (LavaFlowRenderPipeline pipeline : pipelines.values()) pipeline.close();
-        pipelines.clear();
-        // Set layout handles may be reused by the replacement pipelines, so cached sets keyed on the
-        // old handles must not survive.
-        descriptorCache.invalidateAll();
-    }
     @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }
 
     /**
@@ -293,7 +237,6 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     @Override public synchronized void close() {
         if (closed) return; closed = true;
         commandEncoder.destroy();
-        clearPipelineCache();
         completePending();
         descriptorCache.destroy();
         context.close();

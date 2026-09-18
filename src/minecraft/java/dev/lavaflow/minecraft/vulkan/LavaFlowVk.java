@@ -7,6 +7,7 @@ import com.mojang.renderpearl.api.pipeline.BlendFactor;
 import com.mojang.renderpearl.api.pipeline.BlendOp;
 import com.mojang.renderpearl.api.pipeline.CompareOp;
 import com.mojang.renderpearl.api.pipeline.PolygonMode;
+import com.mojang.renderpearl.api.pipeline.ShaderType;
 import com.mojang.renderpearl.api.textures.AddressMode;
 import com.mojang.renderpearl.api.textures.FilterMode;
 
@@ -122,6 +123,14 @@ final class LavaFlowVk {
             case POINTS -> VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
             case TRIANGLE_STRIP -> VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
             case TRIANGLE_FAN -> VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+        };
+    }
+
+    /** Shader stage bit for {@code type}; the same mapping vanilla's VulkanConst.toVk(ShaderType) uses. */
+    static int stage(ShaderType type) {
+        return switch (type) {
+            case VERTEX -> VK_SHADER_STAGE_VERTEX_BIT;
+            case FRAGMENT -> VK_SHADER_STAGE_FRAGMENT_BIT;
         };
     }
 

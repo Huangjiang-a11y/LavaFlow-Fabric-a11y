@@ -11,6 +11,12 @@ import java.util.function.ToIntFunction;
  * description. A compatibility layer registers a provider that reports the byte size a given
  * pipeline needs; LavaFlow reserves that range in the pipeline layout. Pipelines with no provider
  * entry get no range, which keeps vanilla layouts unchanged.
+ *
+ * <p>Candidate for removal as of 26.3: the frontend now resolves the push-constant size into
+ * {@code BackendRenderPipeline.CreateInfo.pushConstantsSize()} (from {@code RenderPipeline.pushConstantSize()})
+ * and validates it against the shader's own reflection, so the backend no longer needs a provider of its
+ * own. LavaFlowRenderPipeline reads the CreateInfo value. Left in place for now because the Sodium
+ * compatibility layer still calls {@link #setProvider}, which is harmless but no longer consulted.
  */
 public final class LavaFlowPushConstants {
     private static volatile ToIntFunction<RenderPipeline> provider;

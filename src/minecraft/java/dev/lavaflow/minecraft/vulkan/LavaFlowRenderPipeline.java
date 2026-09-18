@@ -1,43 +1,54 @@
 package dev.lavaflow.minecraft.vulkan;
 
-import com.mojang.blaze3d.pipeline.*;
-import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
-import com.mojang.renderpearl.api.pipeline.ShaderSource;
-import com.mojang.renderpearl.api.pipeline.ShaderType;
-import com.mojang.renderpearl.api.pipeline.UniformType;
-import com.mojang.renderpearl.api.vertex.VertexFormat;
-import com.mojang.renderpearl.api.vertex.VertexFormatElement;
-import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
-import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
-import com.mojang.renderpearl.util.ShaderCompileException;
-import net.minecraft.client.renderer.ShaderDefines;
+import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.pipeline.BindGroupLayout.UniformDescription;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.DepthStencilState;
+import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
-import static org.lwjgl.util.shaderc.Shaderc.*;
 import static org.lwjgl.vulkan.KHRPushDescriptor.VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** LavaFlow-owned shader modules, descriptor layout, pipeline layout, and compatible graphics pipelines. */
-final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoCloseable {
+/**
+ * LavaFlow-owned shader modules, descriptor layout, pipeline layout, and compatible graphics pipelines.
+ *
+ * <p>26.3 hands the backend a fully resolved {@link BackendRenderPipeline.CreateInfo}. The frontend has
+ * already compiled and reflected the SPIR-V, rewritten the shader interfaces and assigned the descriptor
+ * slots, so this class only turns that description into Vulkan objects. In particular nothing here may
+ * reorder the uniforms: slot {@code i} in the descriptor set layout — and therefore the index handed to
+ * {@code RenderPassBackend.setUniform(int, Object)} — is exactly {@code CreateInfo.uniforms()} order.
+ * 26.2 could reorder because it rewrote the SPIR-V itself through IntermediaryShaderModule; that mechanism
+ * no longer exists and must not be reintroduced.
+ */
+final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, TEXEL_BUFFER }
-    record Entry(EntryType type, String name, com.mojang.renderpearl.api.GpuFormat texelFormat) {}
+    record Entry(EntryType type, String name, GpuFormat texelFormat) {}
 
     final LavaFlowDevice device;
-    final RenderPipeline info;
-    final ShaderSource source;
+    /**
+     * Retained for the graphics pipelines that are created lazily, on the first draw that needs them.
+     * Only the geometry and fixed-function accessors are read after construction: {@code shaders()} is
+     * consumed while building the shader modules below, and the frontend closes those modules as soon as
+     * compilation finishes, so it must never be touched again.
+     */
+    private final BackendRenderPipeline.CreateInfo info;
     private final List<Entry> entries;
-    private final Map<String, Integer> entryIndices;
-    private final long vertexModule;
-    private final long fragmentModule;
+    private final long[] shaderModules;
+    private final int[] shaderStages;
+    private final String[] shaderEntryPoints;
     private final long descriptorSetLayout;
     private final long pipelineLayout;
     // Dynamic-rendering pipelines keyed by the VkFormat of the depth attachment (VK_FORMAT_UNDEFINED = no depth).
@@ -50,12 +61,13 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     private final boolean dynamicUniforms;
     private boolean closed;
 
-    LavaFlowRenderPipeline(LavaFlowDevice device, RenderPipeline info, ShaderSource source) {
+    private LavaFlowRenderPipeline(LavaFlowDevice device, BackendRenderPipeline.CreateInfo createInfo) {
         this.device = device;
-        this.info = info;
-        this.source = source;
-        this.entries = buildEntries(info);
-        this.entryIndices = buildEntryIndices(entries);
+        this.info = createInfo;
+        this.entries = buildEntries(createInfo);
+        this.shaderModules = new long[createInfo.shaders().size()];
+        this.shaderStages = new int[createInfo.shaders().size()];
+        this.shaderEntryPoints = new String[createInfo.shaders().size()];
         int uniformCount = 0;
         for (Entry entry : entries) {
             if (entry.type() == EntryType.UNIFORM_BUFFER) uniformCount++;
@@ -65,19 +77,15 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         this.dynamicUniforms = !device.context().pushDescriptors()
                 && uniformCount <= device.context().properties().limits().maxDescriptorSetUniformBuffersDynamic();
 
-        long createdVertex = 0, createdFragment = 0, createdSetLayout = 0, createdPipelineLayout = 0;
+        long createdSetLayout = 0, createdPipelineLayout = 0;
+        int createdModules = 0;
         try {
-            String vertexText = shaderText(device, source, info, ShaderType.VERTEX);
-            String fragmentText = shaderText(device, source, info, ShaderType.FRAGMENT);
-            try (IntermediaryShaderModule vertex = compileIntermediary(
-                    info.getVertexShader().toDebugFileName(), vertexText, ShaderType.VERTEX);
-                 IntermediaryShaderModule fragment = compileIntermediary(
-                         info.getFragmentShader().toDebugFileName(), fragmentText, ShaderType.FRAGMENT)) {
-                List<VulkanBindGroupLayout.Entry> rebindEntries = rebindEntries(entries);
-                vertex.rebind(vertexNames(info), rebindEntries);
-                fragment.rebind(recordNames(vertex.outputs()), rebindEntries);
-                createdVertex = createShaderModule(vertex.spirv());
-                createdFragment = createShaderModule(fragment.spirv());
+            for (int i = 0; i < shaderModules.length; i++) {
+                BackendRenderPipeline.CreateInfo.Shader shader = createInfo.shaders().get(i);
+                shaderModules[i] = createShaderModule(shader.module().spv());
+                createdModules = i + 1;
+                shaderStages[i] = LavaFlowVk.stage(shader.module().type());
+                shaderEntryPoints[i] = shader.entryPoint();
             }
             createdSetLayout = createDescriptorSetLayout(entries);
             createdPipelineLayout = createPipelineLayout(createdSetLayout);
@@ -85,106 +93,51 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
             VkDevice vkDevice = device.context().device();
             if (createdPipelineLayout != 0) vkDestroyPipelineLayout(vkDevice, createdPipelineLayout, null);
             if (createdSetLayout != 0) vkDestroyDescriptorSetLayout(vkDevice, createdSetLayout, null);
-            if (createdFragment != 0) vkDestroyShaderModule(vkDevice, createdFragment, null);
-            if (createdVertex != 0) vkDestroyShaderModule(vkDevice, createdVertex, null);
-            throw new IllegalStateException("Failed to compile LavaFlow pipeline " + info.getLocation(), failure);
+            for (int i = 0; i < createdModules; i++) vkDestroyShaderModule(vkDevice, shaderModules[i], null);
+            throw new IllegalStateException("Failed to compile LavaFlow pipeline " + createInfo.name(), failure);
         }
-        vertexModule = createdVertex;
-        fragmentModule = createdFragment;
         descriptorSetLayout = createdSetLayout;
         pipelineLayout = createdPipelineLayout;
     }
 
-    private static IntermediaryShaderModule compileIntermediary(String name, String source, ShaderType type)
-            throws ShaderCompileException {
-        ShaderDefines globals = ShaderDefines.builder()
-                .define("gl_VertexID", "gl_VertexIndex")
-                .define("gl_InstanceID", "gl_InstanceIndex")
-                .build();
-        String shaderSource = GlslPreprocessor.injectDefines(source, globals);
-        ByteBuffer copy;
-        try {
-            copy = LavaFlowShaderc.compile(shaderSource,
-                    type == ShaderType.FRAGMENT ? shaderc_fragment_shader : shaderc_vertex_shader,
-                    name);
-        } catch (IllegalStateException failure) {
-            throw new ShaderCompileException(failure.getMessage());
-        }
-        try {
-            return IntermediaryShaderModule.createFromSpirv(name, copy);
-        } catch (Throwable failure) {
-            MemoryUtil.memFree(copy);
-            throw failure;
-        }
+    /**
+     * Turns a frontend-resolved pipeline description into a LavaFlow pipeline.
+     *
+     * <p>Called from {@link LavaFlowDevice#compilePipeline}, which is where the frontend's
+     * {@code Pending} contract expects the work: the SPIR-V in {@code createInfo.shaders()} is still valid
+     * at this point and is released by the frontend once compilation returns.
+     */
+    static LavaFlowRenderPipeline compile(LavaFlowDevice device, BackendRenderPipeline.CreateInfo createInfo) {
+        return new LavaFlowRenderPipeline(device, createInfo);
     }
 
-    private static String shaderText(LavaFlowDevice device, ShaderSource source, RenderPipeline info, ShaderType type) {
-        var id = type == ShaderType.VERTEX ? info.getVertexShader() : info.getFragmentShader();
-        String text = device.shaderText(id, type, source);
-        if (text == null) throw new IllegalStateException("Missing " + type.getName() + " shader " + id);
-        return GlslPreprocessor.injectDefines(text, info.getShaderDefines());
-    }
-
-    private static List<Entry> buildEntries(RenderPipeline info) {
-        LinkedHashMap<String, Entry> result = new LinkedHashMap<>();
-        for (BindGroupLayout.UniformDescription uniform : BindGroupLayout.flattenUniforms(info.getBindGroupLayouts())) {
-            EntryType type = uniform.type() == UniformType.TEXEL_BUFFER ? EntryType.TEXEL_BUFFER : EntryType.UNIFORM_BUFFER;
-            result.putIfAbsent(uniform.name(), new Entry(type, uniform.name(), uniform.gpuFormat()));
-        }
-        for (String sampler : BindGroupLayout.flattenSamplers(info.getBindGroupLayouts())) {
-            result.putIfAbsent(sampler, new Entry(EntryType.SAMPLED_IMAGE, sampler, null));
-        }
-        return List.copyOf(result.values());
-    }
-
-    private static Map<String, Integer> buildEntryIndices(List<Entry> entries) {
-        Map<String, Integer> result = new HashMap<>(Math.max(4, entries.size() * 2));
-        for (int i = 0; i < entries.size(); i++) result.put(entries.get(i).name(), i);
-        return result;
-    }
-
-    private static List<VulkanBindGroupLayout.Entry> rebindEntries(List<Entry> entries) {
-        List<VulkanBindGroupLayout.Entry> result = new ArrayList<>(entries.size());
-        for (Entry entry : entries) {
-            VulkanBindGroupLayout.VulkanBindGroupEntryType type = switch (entry.type) {
-                case UNIFORM_BUFFER -> VulkanBindGroupLayout.VulkanBindGroupEntryType.UNIFORM_BUFFER;
-                case SAMPLED_IMAGE -> VulkanBindGroupLayout.VulkanBindGroupEntryType.SAMPLED_IMAGE;
-                case TEXEL_BUFFER -> VulkanBindGroupLayout.VulkanBindGroupEntryType.TEXEL_BUFFER;
+    /**
+     * One entry per {@code createInfo.uniforms()}, in that exact order.
+     *
+     * <p>No grouping, no deduplication and no reordering: the frontend derived this order from the SPIR-V
+     * reflection and uses the same indices to address uniforms, so a different order here would bind
+     * descriptors to the wrong slots.
+     */
+    private static List<Entry> buildEntries(BackendRenderPipeline.CreateInfo createInfo) {
+        List<UniformDescription> uniforms = createInfo.uniforms();
+        List<Entry> result = new ArrayList<>(uniforms.size());
+        for (UniformDescription uniform : uniforms) {
+            EntryType type = switch (uniform.type()) {
+                case UNIFORM_BUFFER -> EntryType.UNIFORM_BUFFER;
+                case COMBINED_IMAGE_SAMPLER -> EntryType.SAMPLED_IMAGE;
+                case TEXEL_BUFFER -> EntryType.TEXEL_BUFFER;
             };
-            result.add(new VulkanBindGroupLayout.Entry(type, entry.name, entry.texelFormat));
+            result.add(new Entry(type, uniform.name(), uniform.gpuFormat()));
         }
-        return result;
-    }
-
-    private static List<String> vertexNames(RenderPipeline info) {
-        List<String> names = new ArrayList<>();
-        for (VertexFormat format : info.getVertexFormatBindings()) {
-            if (format == null) continue;
-            for (VertexFormatElement element : format.getElements()) names.add(element.name());
-        }
-        return names;
-    }
-
-    private static List<String> recordNames(List<?> records) {
-        List<String> result = new ArrayList<>(records.size());
-        for (Object record : records) {
-            try {
-                Method name = record.getClass().getMethod("name");
-                name.setAccessible(true);
-                result.add((String) name.invoke(record));
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException("Unable to read SPIR-V interface variable", failure);
-            }
-        }
-        return result;
+        return List.copyOf(result);
     }
 
     private long createShaderModule(ByteBuffer spirv) {
         try (MemoryStack stack = stackPush()) {
-            VkShaderModuleCreateInfo info = VkShaderModuleCreateInfo.calloc(stack).sType$Default()
+            VkShaderModuleCreateInfo create = VkShaderModuleCreateInfo.calloc(stack).sType$Default()
                     .pCode(spirv.duplicate());
             LongBuffer out = stack.mallocLong(1);
-            check(vkCreateShaderModule(device.context().device(), info, null, out), "vkCreateShaderModule");
+            check(vkCreateShaderModule(device.context().device(), create, null, out), "vkCreateShaderModule");
             return out.get(0);
         }
     }
@@ -210,11 +163,14 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         try (MemoryStack stack = stackPush()) {
             VkPipelineLayoutCreateInfo info = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
                     .pSetLayouts(stack.longs(setLayout));
-            int pushConstantSize = LavaFlowPushConstants.sizeFor(this.info);
+            // 26.3 resolves this on the frontend from the pipeline's declared size and validates it
+            // against the shader's own push_constant reflection. See LavaFlowPushConstants for why the
+            // backend-side provider is no longer consulted.
+            int pushConstantSize = this.info.pushConstantsSize();
             if (pushConstantSize > 0) {
                 int maxPushConstantSize = device.context().properties().limits().maxPushConstantsSize();
                 if (pushConstantSize > maxPushConstantSize) {
-                    throw new IllegalStateException("Pipeline " + this.info.getLocation() + " needs "
+                    throw new IllegalStateException("Pipeline " + this.info.name() + " needs "
                             + pushConstantSize + " push-constant bytes but the device allows only "
                             + maxPushConstantSize);
                 }
@@ -284,46 +240,41 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
      */
     private long createGraphicsPipeline(int depthVkFormat, long renderPass) {
         try (MemoryStack stack = stackPush()) {
-            ByteBuffer main = stack.UTF8("main");
-            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
-            stages.get(0).sType$Default().stage(VK_SHADER_STAGE_VERTEX_BIT).module(vertexModule).pName(main);
-            stages.get(1).sType$Default().stage(VK_SHADER_STAGE_FRAGMENT_BIT).module(fragmentModule).pName(main);
-
-            VertexFormat[] formats = info.getVertexFormatBindings();
-            int attributeCount = 0, bindingCount = 0;
-            for (VertexFormat format : formats) if (format != null) {
-                bindingCount++;
-                attributeCount += format.getElements().size();
+            List<BackendRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
+            List<BackendRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
+            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(shaderModules.length, stack);
+            for (int i = 0; i < shaderModules.length; i++) {
+                stages.get(i).sType$Default().stage(shaderStages[i]).module(shaderModules[i])
+                        .pName(stack.UTF8(shaderEntryPoints[i]));
             }
-            VkVertexInputBindingDescription.Buffer bindings = VkVertexInputBindingDescription.calloc(bindingCount, stack);
-            VkVertexInputAttributeDescription.Buffer attributes = VkVertexInputAttributeDescription.calloc(attributeCount, stack);
+            VkVertexInputBindingDescription.Buffer bindings = VkVertexInputBindingDescription.calloc(vertexBufferDescs.size(), stack);
             int divisorCount = 0;
             if (device.context().vertexAttributeDivisor()) {
-                for (VertexFormat format : formats) {
-                    if (format != null && format.getStepRate() > 1) divisorCount++;
+                for (BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer : vertexBufferDescs) {
+                    if (vertexBuffer.stepRate() > 1) divisorCount++;
                 }
             }
             VkVertexInputBindingDivisorDescriptionEXT.Buffer divisors =
                     VkVertexInputBindingDivisorDescriptionEXT.calloc(divisorCount, stack);
-            int bindingPosition = 0, location = 0;
             int divisorPosition = 0;
-            for (int slot = 0; slot < formats.length; slot++) {
-                VertexFormat format = formats[slot];
-                if (format == null) continue;
-                bindings.get(bindingPosition++).binding(slot).stride(format.getVertexSize())
-                        .inputRate(format.getStepRate() > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX);
-                if (format.getStepRate() > 1 && device.context().vertexAttributeDivisor()) {
-                    divisors.get(divisorPosition++).binding(slot).divisor(format.getStepRate());
-                }
-                for (VertexFormatElement element : format.getElements()) {
-                    attributes.get(location).location(location).binding(slot).format(LavaFlowVk.format(element.format()))
-                            .offset(element.offset());
-                    location++;
+            for (int i = 0; i < vertexBufferDescs.size(); i++) {
+                BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer = vertexBufferDescs.get(i);
+                bindings.get(i).binding(vertexBuffer.bufferSlot()).stride(vertexBuffer.stride())
+                        .inputRate(vertexBuffer.stepRate() > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX);
+                // A step rate of 1 is the instancing default, so only a larger rate needs a divisor.
+                if (vertexBuffer.stepRate() > 1 && device.context().vertexAttributeDivisor()) {
+                    divisors.get(divisorPosition++).binding(vertexBuffer.bufferSlot()).divisor(vertexBuffer.stepRate());
                 }
             }
+            VkVertexInputAttributeDescription.Buffer attributes = VkVertexInputAttributeDescription.calloc(attribDescs.size(), stack);
+            for (int i = 0; i < attribDescs.size(); i++) {
+                BackendRenderPipeline.CreateInfo.AttribBinding attrib = attribDescs.get(i);
+                attributes.get(i).location(attrib.location()).binding(attrib.bufferSlot())
+                        .format(LavaFlowVk.format(attrib.format())).offset(attrib.offset());
+            }
             VkPipelineVertexInputStateCreateInfo vertexInput = VkPipelineVertexInputStateCreateInfo.calloc(stack).sType$Default();
-            if (bindingCount != 0) vertexInput.pVertexBindingDescriptions(bindings);
-            if (attributeCount != 0) vertexInput.pVertexAttributeDescriptions(attributes);
+            if (!vertexBufferDescs.isEmpty()) vertexInput.pVertexBindingDescriptions(bindings);
+            if (!attribDescs.isEmpty()) vertexInput.pVertexAttributeDescriptions(attributes);
             if (divisorCount != 0) {
                 VkPipelineVertexInputDivisorStateCreateInfoEXT divisorState =
                         VkPipelineVertexInputDivisorStateCreateInfoEXT.calloc(stack).sType$Default()
@@ -331,18 +282,18 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
                 vertexInput.pNext(divisorState.address());
             }
             VkPipelineInputAssemblyStateCreateInfo assembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType$Default()
-                    .topology(LavaFlowVk.topology(info.getPrimitiveTopology())).primitiveRestartEnable(false);
-            int polygonMode = LavaFlowVk.polygonMode(info.getPolygonMode());
+                    .topology(LavaFlowVk.topology(info.primitiveTopology())).primitiveRestartEnable(false);
+            int polygonMode = LavaFlowVk.polygonMode(info.polygonMode());
             if (polygonMode != VK_POLYGON_MODE_FILL && !device.context().fillModeNonSolid()) {
                 polygonMode = VK_POLYGON_MODE_FILL;
             }
             VkPipelineRasterizationStateCreateInfo raster = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default()
                     .polygonMode(polygonMode)
-                    .cullMode(info.isCull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
+                    .cullMode(info.cull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
                     .frontFace(VK_FRONT_FACE_CLOCKWISE).lineWidth(1.0f);
 
             VkPipelineDepthStencilStateCreateInfo depth = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default();
-            DepthStencilState depthState = info.getDepthStencilState();
+            DepthStencilState depthState = info.depthStencilState();
             if (depthVkFormat != 0 && depthState != null) {
                 depth.depthTestEnable(true).depthWriteEnable(depthState.writeDepth())
                         .depthCompareOp(LavaFlowVk.compareOp(depthState.depthTest()));
@@ -351,27 +302,27 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
                         .depthBiasSlopeFactor(depthState.depthBiasScaleFactor());
             }
 
-            ColorTargetState[] targets = info.getColorTargetStates();
-            VkPipelineColorBlendAttachmentState.Buffer blendAttachments = VkPipelineColorBlendAttachmentState.calloc(targets.length, stack);
-            for (int i = 0; i < targets.length; i++) {
-                ColorTargetState target = targets[i];
+            List<ColorTargetState> targets = info.colorTargetStates();
+            VkPipelineColorBlendAttachmentState.Buffer blendAttachments = VkPipelineColorBlendAttachmentState.calloc(targets.size(), stack);
+            for (int i = 0; i < targets.size(); i++) {
+                ColorTargetState target = targets.get(i);
                 if (target == null) continue;
                 VkPipelineColorBlendAttachmentState attachment = blendAttachments.get(i)
                         .colorWriteMask(LavaFlowVk.colorWriteMask(target));
                 target.blendFunction().ifPresent(blend -> applyBlend(attachment, blend));
             }
             VkPipelineColorBlendStateCreateInfo blend = VkPipelineColorBlendStateCreateInfo.calloc(stack).sType$Default();
-            if (targets.length != 0) blend.pAttachments(blendAttachments);
+            if (!targets.isEmpty()) blend.pAttachments(blendAttachments);
             VkPipelineViewportStateCreateInfo viewport = VkPipelineViewportStateCreateInfo.calloc(stack).sType$Default()
                     .viewportCount(1).scissorCount(1);
             VkPipelineMultisampleStateCreateInfo multisample = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType$Default()
                     .rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
             VkPipelineDynamicStateCreateInfo dynamic = VkPipelineDynamicStateCreateInfo.calloc(stack).sType$Default()
                     .pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR));
-            IntBuffer colorFormats = stack.mallocInt(targets.length);
-            for (int i = 0; i < targets.length; i++) {
-                colorFormats.put(i, targets[i] == null ? VK_FORMAT_UNDEFINED
-                        : LavaFlowVk.format(targets[i].format()));
+            IntBuffer colorFormats = stack.mallocInt(targets.size());
+            for (int i = 0; i < targets.size(); i++) {
+                colorFormats.put(i, targets.get(i) == null ? VK_FORMAT_UNDEFINED
+                        : LavaFlowVk.format(targets.get(i).format()));
             }
             VkGraphicsPipelineCreateInfo.Buffer create = VkGraphicsPipelineCreateInfo.calloc(1, stack).sType$Default()
                     .pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(assembly)
@@ -425,13 +376,9 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     }
 
     List<Entry> entries() { return entries; }
-    int bindingIndex(String name) {
-        Integer index = entryIndices.get(name);
-        return index == null ? -1 : index;
-    }
     long descriptorSetLayout() { return descriptorSetLayout; }
     long pipelineLayout() { return pipelineLayout; }
-    @Override public boolean isValid() { return !closed && vertexModule != 0 && fragmentModule != 0; }
+    @Override public boolean isClosed() { return closed; }
 
     @Override public synchronized void close() {
         if (closed) return;
@@ -446,8 +393,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
             for (long pipeline : nativeLegacyPipelines) vkDestroyPipeline(vkDevice, pipeline, null);
             vkDestroyPipelineLayout(vkDevice, pipelineLayout, null);
             vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, null);
-            vkDestroyShaderModule(vkDevice, fragmentModule, null);
-            vkDestroyShaderModule(vkDevice, vertexModule, null);
+            for (long module : shaderModules) vkDestroyShaderModule(vkDevice, module, null);
         });
     }
 }
