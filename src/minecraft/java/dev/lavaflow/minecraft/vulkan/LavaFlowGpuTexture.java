@@ -15,9 +15,18 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** LavaFlow-owned 2D, array, or cube-compatible Vulkan image. */
-final class LavaFlowGpuTexture extends GpuTexture {
+final class LavaFlowGpuTexture implements GpuTexture {
     private final LavaFlowDevice device;
     private final LavaFlowVulkanContext context;
+    // 26.3 turned GpuTexture into an interface, so the fields its abstract base class used to hold
+    // for us have to live here. The constructor parameter list is exactly that former super(...) call.
+    private final int usage;
+    private final String label;
+    private final GpuFormat format;
+    private final int width;
+    private final int height;
+    private final int depthOrLayers;
+    private final int mipLevels;
     private final long image;
     private final long memory;
     private int views;
@@ -27,9 +36,15 @@ final class LavaFlowGpuTexture extends GpuTexture {
 
     LavaFlowGpuTexture(LavaFlowDevice device, int usage, String label, GpuFormat format,
                        int width, int height, int depthOrLayers, int mipLevels) {
-        super(usage, label, format, width, height, depthOrLayers, mipLevels);
         if (width <= 0 || height <= 0 || depthOrLayers <= 0 || mipLevels <= 0)
             throw new IllegalArgumentException("Texture dimensions and mip count must be positive");
+        this.usage = usage;
+        this.label = label;
+        this.format = format;
+        this.width = width;
+        this.height = height;
+        this.depthOrLayers = depthOrLayers;
+        this.mipLevels = mipLevels;
         this.device = device;
         this.context = device.context();
         long createdImage = NULL;
@@ -37,7 +52,7 @@ final class LavaFlowGpuTexture extends GpuTexture {
         try (MemoryStack stack = stackPush()) {
             VkExtent3D extent = VkExtent3D.calloc(stack).set(width, height, 1);
             VkImageCreateInfo info = VkImageCreateInfo.calloc(stack).sType$Default()
-                    .flags((usage & USAGE_CUBEMAP_COMPATIBLE) != 0 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0)
+                    .flags((usage & GpuTexture.USAGE_CUBEMAP_COMPATIBLE) != 0 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0)
                     .imageType(VK_IMAGE_TYPE_2D).format(LavaFlowVk.format(format)).extent(extent)
                     .mipLevels(mipLevels).arrayLayers(depthOrLayers).samples(VK_SAMPLE_COUNT_1_BIT)
                     .tiling(VK_IMAGE_TILING_OPTIMAL).usage(LavaFlowVk.textureUsage(usage, format))
@@ -65,6 +80,16 @@ final class LavaFlowGpuTexture extends GpuTexture {
     private static void check(int result, String operation) {
         if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
     }
+
+    // The getters below mirror Minecraft's own GpuTexture implementation, which LavaFlow used to
+    // inherit: getWidth/getHeight shift the base dimension down by the mip level.
+    @Override public int getWidth(int mipLevel) { return width >> mipLevel; }
+    @Override public int getHeight(int mipLevel) { return height >> mipLevel; }
+    @Override public int getDepthOrLayers() { return depthOrLayers; }
+    @Override public int getMipLevels() { return mipLevels; }
+    @Override public GpuFormat getFormat() { return format; }
+    @Override public int usage() { return usage; }
+    @Override public String getLabel() { return label; }
 
     long handle() { return image; }
     int layout() { return layout; }

@@ -19,9 +19,12 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
-final class LavaFlowGpuBuffer extends GpuBuffer {
+final class LavaFlowGpuBuffer implements GpuBuffer {
     private final LavaFlowDevice device;
     private final LavaFlowVulkanContext context;
+    // 26.3 turned GpuBuffer into an interface; these two were the former abstract base class fields.
+    private final int usage;
+    private final long size;
     private final long buffer;
     private final long memory;
     private int mappingCount;
@@ -32,8 +35,9 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     private boolean closed;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
-        super(usage, size);
         if (size <= 0) throw new IllegalArgumentException("Buffer size must be positive");
+        this.usage = usage;
+        this.size = size;
         this.device = device;
         this.context = device.context();
         long createdBuffer = NULL;
@@ -46,14 +50,14 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             createdBuffer = out.get(0);
             VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
             vkGetBufferMemoryRequirements(context.device(), createdBuffer, requirements);
-            boolean mapped = (usage & (USAGE_MAP_READ | USAGE_MAP_WRITE)) != 0;
+            boolean mapped = (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
             int requiredMemory = mapped
                     ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
                     : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             // Indirect parameters may be read back by the backend when the device cannot batch indirect
             // draws, and mapped buffers requesting reads obviously are. Uncached host memory makes those
             // reads cost orders of magnitude more than cached memory, so ask for cached in both cases.
-            int preferredMemory = mapped && (usage & (USAGE_MAP_READ | USAGE_INDIRECT_PARAMETERS)) != 0
+            int preferredMemory = mapped && (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_INDIRECT_PARAMETERS)) != 0
                     ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0;
             VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
                     .allocationSize(requirements.size())
@@ -75,12 +79,15 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
     }
 
+    @Override public long size() { return size; }
+    @Override public int usage() { return usage; }
+
     long handle() { return buffer; }
     long memory() { return memory; }
 
     synchronized void write(long offset, ByteBuffer source) {
         if (closed) throw new IllegalStateException("Buffer is closed");
-        if ((usage() & USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not host writable");
+        if ((usage() & GpuBuffer.USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not host writable");
         if (offset < 0 || offset + source.remaining() > size()) throw new IllegalArgumentException("Write exceeds buffer");
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pointer = stack.mallocPointer(1);
@@ -96,8 +103,8 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     @Override public synchronized GpuBufferSlice.MappedView map(long offset, long length, boolean read, boolean write) {
         if (closed) throw new IllegalStateException("Buffer is closed");
         if (!read && !write) throw new IllegalArgumentException("At least read or write must be requested");
-        if (read && (usage() & USAGE_MAP_READ) == 0) throw new IllegalStateException("Buffer is not readable");
-        if (write && (usage() & USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not writable");
+        if (read && (usage() & GpuBuffer.USAGE_MAP_READ) == 0) throw new IllegalStateException("Buffer is not readable");
+        if (write && (usage() & GpuBuffer.USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not writable");
         if (offset < 0 || length < 0 || offset + length > size()) throw new IllegalArgumentException("Invalid mapped range");
         if (length > Integer.MAX_VALUE) throw new IllegalArgumentException("Mappings larger than 2 GiB are unsupported");
         if (mappingCount != 0) throw new IllegalStateException("Concurrent mappings of one buffer are unsupported");

@@ -200,13 +200,15 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     @Override public GpuSampler createSampler(AddressMode u, AddressMode v, FilterMode min, FilterMode mag, int anisotropy, OptionalDouble maxLod) {
         ensureOpen(); return new LavaFlowGpuSampler(this, u, v, min, mag, anisotropy, maxLod);
     }
-    @Override public GpuTexture createTexture(Supplier<String> label, int usage, GpuFormat format, int width, int height, int layers, int mips) {
-        return createTexture(label == null ? "" : label.get(), usage, format, width, height, layers, mips);
-    }
+    // 26.3 dropped createTexture(Supplier) from GpuDeviceBackend; the frontend now unwraps the
+    // label and calls createTexture(String, ...) below. Removed rather than kept as a local
+    // convenience because nothing inside LavaFlow calls it either.
     @Override public GpuTexture createTexture(String label, int usage, GpuFormat format, int width, int height, int layers, int mips) {
         ensureOpen(); return new LavaFlowGpuTexture(this, usage, label, format, width, height, layers, mips);
     }
-    @Override public GpuTextureView createTextureView(GpuTexture texture) { return createTextureView(texture, 0, texture.getMipLevels()); }
+    // No longer part of GpuDeviceBackend (the frontend owns the single-argument overload in 26.3),
+    // but LavaFlowCommandEncoder still calls it, so it stays as an ordinary method.
+    public GpuTextureView createTextureView(GpuTexture texture) { return createTextureView(texture, 0, texture.getMipLevels()); }
     @Override public GpuTextureView createTextureView(GpuTexture texture, int baseMip, int mips) {
         ensureOpen(); return new LavaFlowGpuTextureView(this, (LavaFlowGpuTexture)texture, baseMip, mips);
     }
@@ -263,7 +265,10 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         lastPipeline = result;
         return result;
     }
-    @Override public synchronized void clearPipelineCache() {
+    // 26.3 removed clearPipelineCache from the backend interface -- the whole jar has no equivalent,
+    // so it is not yet known how 26.3 asks a backend to drop compiled pipelines. The body is still
+    // needed by close(), which is the only remaining caller.
+    public synchronized void clearPipelineCache() {
         lastPipelineInfo = null;
         lastPipeline = null;
         for (LavaFlowRenderPipeline pipeline : pipelines.values()) pipeline.close();

@@ -12,7 +12,7 @@ import java.util.OptionalDouble;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-final class LavaFlowGpuSampler extends GpuSampler {
+final class LavaFlowGpuSampler implements GpuSampler {
     private final LavaFlowDevice device;
     private final LavaFlowVulkanContext context;
     private final AddressMode addressModeU;
@@ -51,6 +51,9 @@ final class LavaFlowGpuSampler extends GpuSampler {
     @Override public FilterMode getMagFilter() { return magFilter; }
     @Override public int getMaxAnisotropy() { return maxAnisotropy; }
     @Override public OptionalDouble getMaxLod() { return maxLod; }
+    // isClosed() is new in 26.3: the 26.2 GpuSampler base class had no such method and LavaFlow
+    // tracked the closed flag without exposing it.
+    @Override public synchronized boolean isClosed() { return closed; }
 
     @Override public synchronized void close() {
         if (closed) return;
