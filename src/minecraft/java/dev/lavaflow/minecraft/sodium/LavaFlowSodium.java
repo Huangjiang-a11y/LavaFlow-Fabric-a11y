@@ -1,65 +1,56 @@
 package dev.lavaflow.minecraft.sodium;
 
-import com.mojang.renderpearl.api.device.GpuDevice;
-import com.mojang.renderpearl.api.commands.RenderPass;
-import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.device.GpuDevice;
 import dev.lavaflow.minecraft.sodium.mixin.GpuDeviceBackendAccessor;
-import dev.lavaflow.minecraft.sodium.mixin.RenderPassBackendAccessor;
 import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
-import dev.lavaflow.minecraft.vulkan.LavaFlowPushConstants;
-import dev.lavaflow.minecraft.vulkan.LavaFlowVulkanPass;
 import net.caffeinemc.mods.sodium.client.gpu.device.backend.DrawBackend;
-import net.caffeinemc.mods.sodium.client.gpu.device.context.DrawContext;
 
 /**
  * Sodium compatibility support.
  *
- * <p>Sodium already has a Vulkan terrain path, but selects it by testing the Blaze3D device backend
- * against Minecraft's own {@code VulkanDevice}. LavaFlow is a different backend, so Sodium would
- * otherwise fall back to its OpenGL path. This class supplies the two facts Sodium's Vulkan path
- * needs from a foreign backend: whether the current device is LavaFlow, and the Vulkan handles of a
- * LavaFlow render pass.
+ * <p>Sodium selects its terrain backend by testing the current Blaze3D device's backend for Minecraft's
+ * own {@code VulkanDevice}. LavaFlow is a different backend, so Sodium would otherwise fall back to its
+ * OpenGL path. This class supplies the one fact Sodium cannot determine for itself: whether the device
+ * it is running on is LavaFlow's.
+ *
+ * <p>Nothing else is required. Sodium 0.9.2 issues its terrain draws through the Blaze3D render-pass API
+ * ({@code multiDrawIndexed} / {@code drawIndexedIndirect}) and declares its own push-constant size on the
+ * pipeline it builds, so it never needs a Vulkan command buffer, pipeline layout or descriptor set from
+ * the backend. Earlier Sodium releases did, which is why the compatibility layer used to hand those over
+ * and reserve a push-constant range; both mechanisms are gone in 26.3 and have been removed here.
  */
 public final class LavaFlowSodium {
     private static final System.Logger LOGGER = System.getLogger(LavaFlowSodium.class.getName());
-    private static volatile boolean installed;
 
     private LavaFlowSodium() {}
 
-    /** Returns whether Blaze3D is currently driving the LavaFlow backend. */
+    /**
+     * Returns whether Blaze3D is currently driving the LavaFlow backend.
+     *
+     * <p>Resolved by reading the backend out of the frontend device rather than by identity against the
+     * device LavaFlow created, because the object Sodium sees is the frontend facade, not LavaFlow's own.
+     */
     public static boolean isLavaFlowDevice() {
         GpuDevice device = RenderSystem.getDevice();
         if (device == null) return false;
-        return ((GpuDeviceBackendAccessor) device).lavaflow$backend() instanceof LavaFlowDevice;
-    }
-
-    /**
-     * Reserves the push-constant range Sodium's terrain shaders declare.
-     *
-     * <p>Sodium's chunk shaders take the region offset, section time, and region id through a
-     * {@code push_constant} block when compiled for Vulkan. Minecraft's own backend reserves that
-     * range with a mixin on its pipeline compiler; LavaFlow reserves it through its push-constant
-     * provider instead. Called during Sodium's backend selection, which happens when the chunk
-     * renderer is constructed and therefore before any Sodium pipeline is compiled.
-     */
-    public static synchronized void install() {
-        if (installed) return;
-        installed = true;
-        int range = DrawContext.PUSH_CONSTANT_RANGE;
-        LavaFlowPushConstants.setProvider(pipeline ->
-                pipeline.getLocation().getNamespace().contains("sodium") ? range : 0);
-        LOGGER.log(System.Logger.Level.INFO,
-                "Sodium compatibility active: reserving {0} push-constant bytes for Sodium pipelines", range);
+        if (!(device instanceof GpuDeviceBackendAccessor accessor)) {
+            // The accessor mixin did not apply, so LavaFlow cannot be recognised. Reporting false hands
+            // Sodium its OpenGL path, which cannot work on a Vulkan-only device -- so say why, loudly,
+            // instead of letting it fail somewhere unrelated.
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "GpuDeviceBackendAccessor did not apply; Sodium cannot recognise the LavaFlow device");
+            return false;
+        }
+        return accessor.lavaflow$backend() instanceof LavaFlowDevice;
     }
 
     /**
      * Picks the Sodium draw path for LavaFlow.
      *
-     * <p>Prefers the interleaved multi-draw path, which packs draws into a plain CPU array. The
-     * indirect path would instead route them through a mapped indirect-parameter buffer, costing a
-     * per-region copy into host-visible memory and a GPU parameter fetch per draw. Falls back to the
-     * indirect path if LavaFlow reports the interleaved capability as unavailable.
+     * <p>Prefers the interleaved multi-draw path, which packs draws into a plain CPU array. The indirect
+     * path would instead route them through a mapped indirect-parameter buffer, costing a per-region copy
+     * into host-visible memory and a GPU parameter fetch per draw.
      */
     public static DrawBackend drawBackend() {
         GpuDevice device = RenderSystem.getDevice();
@@ -68,14 +59,5 @@ public final class LavaFlowSodium {
         DrawBackend backend = interleaved ? DrawBackend.VK_MULTIDRAW : DrawBackend.VK_INDIRECT;
         LOGGER.log(System.Logger.Level.INFO, "Sodium draw path: {0}", backend);
         return backend;
-    }
-
-    /**
-     * Returns the Vulkan handles of {@code pass}, or {@code null} when it is not a LavaFlow pass.
-     */
-    public static LavaFlowVulkanPass asLavaFlowPass(RenderPass pass) {
-        if (pass == null) return null;
-        RenderPassBackend backend = ((RenderPassBackendAccessor) pass).lavaflow$backend();
-        return backend instanceof LavaFlowVulkanPass vulkanPass ? vulkanPass : null;
     }
 }

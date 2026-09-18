@@ -6,10 +6,7 @@
   "plugin": "dev.lavaflow.minecraft.sodium.LavaFlowSodiumMixinPlugin",
   "client": [
     "GpuDeviceBackendAccessor",
-    "RenderPassBackendAccessor",
-    "DrawContextPassAccessor",
-    "DrawBackendMixin",
-    "VKDrawContextMixin"
+    "DrawBackendMixin"
   ],
   "injectors": {
     "defaultRequire": 1

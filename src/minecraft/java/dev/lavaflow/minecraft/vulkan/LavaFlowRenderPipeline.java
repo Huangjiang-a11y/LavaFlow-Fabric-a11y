@@ -167,8 +167,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             VkPipelineLayoutCreateInfo info = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
                     .pSetLayouts(stack.longs(setLayout));
             // 26.3 resolves this on the frontend from the pipeline's declared size and validates it
-            // against the shader's own push_constant reflection. See LavaFlowPushConstants for why the
-            // backend-side provider is no longer consulted.
+            // against the shader's own push_constant reflection, so the backend never has to work it out
+            // from the shader source (which is how the pre-26.3 backend did it, via a Sodium-installed
+            // provider that no longer exists).
             int pushConstantSize = this.info.pushConstantsSize();
             if (pushConstantSize > 0) {
                 int maxPushConstantSize = device.context().properties().limits().maxPushConstantsSize();

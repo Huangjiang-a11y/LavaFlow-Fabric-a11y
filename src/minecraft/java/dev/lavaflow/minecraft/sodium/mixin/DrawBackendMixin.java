@@ -20,7 +20,6 @@ abstract class DrawBackendMixin {
     @Inject(method = "chooseBackend", at = @At("HEAD"), cancellable = true)
     private static void lavaflow$chooseVulkanBackend(CallbackInfoReturnable<DrawBackend> callback) {
         if (!LavaFlowSodium.isLavaFlowDevice()) return;
-        LavaFlowSodium.install();
         callback.setReturnValue(LavaFlowSodium.drawBackend());
     }
 }

@@ -43,7 +43,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * attachment writes and shader reads. State set before the first draw is buffered and replayed when
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
-final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
+final class LavaFlowRenderPass implements RenderPassBackend {
 
     private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
     // Layout of the VkMultiDrawIndexedInfoEXT records that multiDrawIndexed receives, as int indices.
@@ -378,8 +378,6 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
 
-    @Override public VkCommandBuffer lavaflowCommandBuffer() { return encoder.commandBuffer(); }
-    @Override public long lavaflowPipelineLayout() { return pipeline == null ? 0L : pipeline.pipelineLayout(); }
 
     @Override public void pushDebugGroup(Supplier<String> label) {}
     @Override public void popDebugGroup() {}
