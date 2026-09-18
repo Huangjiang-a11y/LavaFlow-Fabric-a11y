@@ -1,3 +1,9 @@
+> [!WARNING]
+> **这是死路分支 `archive/26.3-dead-end`(原名 `port/26.3`),不要基于它继续开发。**
+> 它试图用 Loom 1.18 + `modImplementation` + 压平 source set 解决 26.3 编译,但 26.3 的真正阻塞点是
+> `com.mojang.blaze3d.*` → `com.mojang.renderpearl.*` 的包名整体搬迁。
+> **活的 26.3 移植在 `port/26.3-fresh`。**原因见 [DEAD-END.md](./DEAD-END.md)。
+
 # LavaFlow
 
 > [!CAUTION]
