@@ -24,6 +24,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * returns an AsyncParticles {@code VkCommands.Unsupported}. AsyncParticles then reports no Vulkan GPU
  * acceleration and takes its CPU particle path, never reaching the cast.
  *
+ * <p>The reflection it depends on has been verified against AsyncParticles 26.3.2.0-alpha.3; see
+ * {@link AsyncParticlesCompat}. The guard now logs when it fires, because a guard that succeeds silently
+ * cannot be told apart from one that was never reached.
+ *
  * <p>An earlier version of this guard read the backend with
  * {@code GpuDevice.class.getDeclaredField("backend")}. {@code GpuDevice} is a pure interface with no
  * fields, so that threw {@code NoSuchFieldException} on every call and the catch block's {@code return}
@@ -51,6 +55,7 @@ public abstract class AsyncParticlesVulkanBackendMixin {
             // is better than cancelling with a value its code cannot handle.
             return;
         }
+        AsyncParticlesCompat.reportGuardFired(device);
         cir.setReturnValue(unsupported);
     }
 }

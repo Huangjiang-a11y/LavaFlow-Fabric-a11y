@@ -231,7 +231,8 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 ## 已知限制
 
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
-- **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并让其走 CPU 粒子路径，因此 AsyncParticles 在 LavaFlow 上**不会启用 GPU 粒子加速**。
+- **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并返回其 `VkCommands.Unsupported`，AsyncParticles 随之走 CPU 粒子路径，永远走不到那句强转。
+- **该设备上 GPU 粒子加速本就不可能启用**，本 mixin 并未额外关掉可用能力：AsyncParticles 的 `supportsGpuAcceleration()` 在 Vulkan 路径下要求 `pushDescriptor` 与 `synchronization2` 同时为真；而 Mali-G76 为 Vulkan 1.1 且无 `VK_KHR_push_descriptor` / `VK_KHR_synchronization2`，`getVkCaps` 会得出 `(false, false)`。两者结论一致。此结论按 AsyncParticles 26.3.2.0-alpha.3 的字节码核对。
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
 

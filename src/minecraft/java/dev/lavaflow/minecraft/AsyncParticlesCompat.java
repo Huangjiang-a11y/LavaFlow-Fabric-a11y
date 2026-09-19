@@ -14,6 +14,16 @@ import java.lang.reflect.Constructor;
  *
  * <p>AsyncParticles is an optional dependency that is not on the compile classpath, so the one
  * AsyncParticles type needed at runtime ({@code VkCommands.Unsupported}) is located by name.
+ *
+ * <p>Those names were once guesses. They have since been checked against AsyncParticles
+ * 26.3.2.0-alpha.3: {@code VkCommands} is a public abstract class, {@code Unsupported} is a public nested
+ * class of it with a public no-arg constructor, and the instance it produces reports
+ * {@code isSupported() == false} with both capability flags false. The lookup below matches that shape
+ * exactly.
+ *
+ * <p>They remain a third-party mod's internals and can change without notice. When they do, the ERROR
+ * logs in this class name what broke and {@link #unsupportedVkCaps} returns {@code null} rather than
+ * pretending to have worked.
  */
 public final class AsyncParticlesCompat {
     private static final System.Logger LOGGER = System.getLogger("LavaFlow/AsyncParticles");
@@ -44,6 +54,24 @@ public final class AsyncParticlesCompat {
      * {@code null} here leaves AsyncParticles to perform the cast that crashes the game, which the caller
      * must not do quietly.
      */
+    /**
+     * Records that the guard is about to take effect.
+     *
+     * <p>Without this the guard is invisible when it works: every other message in this class reports a
+     * failure, so a run where the guard fired and a run where AsyncParticles never asked look identical
+     * in a device log. The two call for different investigations, and this line is what separates them.
+     *
+     * <p>It also states the consequence where someone reading a log will find it: particles run on the
+     * CPU. That is a deliberate trade, not a fault, and it should not have to be re-derived from the
+     * source by whoever reads this next.
+     */
+    public static void reportGuardFired(GpuDevice device) {
+        LOGGER.log(System.Logger.Level.INFO,
+                "AsyncParticles asked for Vulkan caps on a backend that is not Mojang's Vulkan device"
+                        + " ({0}); answering unsupported, so particles stay on the CPU path",
+                device == null ? "null device" : device.getClass().getSimpleName());
+    }
+
     public static Object unsupportedVkCaps(GpuDevice device) {
         Class<?> vkCommands;
         try {
