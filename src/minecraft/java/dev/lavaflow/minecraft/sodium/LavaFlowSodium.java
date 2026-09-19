@@ -2,8 +2,7 @@ package dev.lavaflow.minecraft.sodium;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.device.GpuDevice;
-import dev.lavaflow.minecraft.sodium.mixin.GpuDeviceBackendAccessor;
-import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
+import dev.lavaflow.minecraft.LavaFlowDevices;
 import net.caffeinemc.mods.sodium.client.gpu.device.backend.DrawBackend;
 
 /**
@@ -28,21 +27,13 @@ public final class LavaFlowSodium {
     /**
      * Returns whether Blaze3D is currently driving the LavaFlow backend.
      *
-     * <p>Resolved by reading the backend out of the frontend device rather than by identity against the
-     * device LavaFlow created, because the object Sodium sees is the frontend facade, not LavaFlow's own.
+     * <p>Delegated to {@link LavaFlowDevices}, which reads the backend out of the concrete
+     * {@code FrontendGpuDevice} through a mixin accessor. Reporting the wrong answer here hands Sodium its
+     * OpenGL path, which cannot work on a Vulkan-only device, so the failure is logged where it happens
+     * rather than left to surface somewhere unrelated.
      */
     public static boolean isLavaFlowDevice() {
-        GpuDevice device = RenderSystem.getDevice();
-        if (device == null) return false;
-        if (!(device instanceof GpuDeviceBackendAccessor accessor)) {
-            // The accessor mixin did not apply, so LavaFlow cannot be recognised. Reporting false hands
-            // Sodium its OpenGL path, which cannot work on a Vulkan-only device -- so say why, loudly,
-            // instead of letting it fail somewhere unrelated.
-            LOGGER.log(System.Logger.Level.WARNING,
-                    "GpuDeviceBackendAccessor did not apply; Sodium cannot recognise the LavaFlow device");
-            return false;
-        }
-        return accessor.lavaflow$backend() instanceof LavaFlowDevice;
+        return LavaFlowDevices.isCurrentDeviceLavaFlow();
     }
 
     /**

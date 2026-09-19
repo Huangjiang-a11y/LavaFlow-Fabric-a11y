@@ -1,4 +1,4 @@
-package dev.lavaflow.minecraft.sodium.mixin;
+package dev.lavaflow.minecraft.mixin;
 
 import com.mojang.renderpearl.backend.api.GpuDeviceBackend;
 import com.mojang.renderpearl.frontend.FrontendGpuDevice;
@@ -12,6 +12,10 @@ import org.spongepowered.asm.mixin.gen.Accessor;
  * callers see, and an accessor cannot resolve a field through it. Targeting the interface found nothing
  * to read and left the accessor method unimplemented, which surfaced only at runtime as an
  * {@code AbstractMethodError} the first time Sodium asked which device it was running on.
+ *
+ * <p>Declared in the core mixin config rather than the Sodium one because it is not Sodium-specific:
+ * the AsyncParticles guard needs the same answer, and the Sodium config is skipped entirely when Sodium
+ * is not installed.
  */
 @Mixin(FrontendGpuDevice.class)
 public interface GpuDeviceBackendAccessor {

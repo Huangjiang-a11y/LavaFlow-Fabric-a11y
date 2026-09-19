@@ -29,8 +29,11 @@ jobs:
         with:
           gradle-version: "9.5.1"
 
+      # `check` rather than `test`: the Vulkan-facing tests live in the minecraft-test source set,
+      # which is wired to `check` only. Running just `test` silently executes one pure-logic test
+      # class and skips everything that covers the backend.
       - name: Build and test
-        run: gradle --no-daemon clean test jar
+        run: gradle --no-daemon clean check jar
 
       - name: Upload Fabric mod
         uses: actions/upload-artifact@v4

@@ -5,7 +5,6 @@
   "package": "dev.lavaflow.minecraft.sodium.mixin",
   "plugin": "dev.lavaflow.minecraft.sodium.LavaFlowSodiumMixinPlugin",
   "client": [
-    "GpuDeviceBackendAccessor",
     "DrawBackendMixin"
   ],
   "injectors": {

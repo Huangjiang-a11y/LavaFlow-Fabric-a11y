@@ -98,6 +98,8 @@ src/
 │
 ├── minecraft/java/dev/lavaflow/minecraft/
 │   ├── LavaFlowBackend.java              # 实现 Blaze3D GpuBackend
+│   ├── LavaFlowDevices.java              # 判定当前设备是否为 LavaFlow 后端
+│   ├── AsyncParticlesCompat.java         # AsyncParticles 兼容（可选模组的反射桥接）
 │   ├── MixinPluginUtil.java
 │   ├── vulkan/                           # Blaze3D Vulkan 实现
 │   │   ├── LavaFlowVulkanContext.java         # 实例/设备/队列/交换链与扩展协商
@@ -113,18 +115,18 @@ src/
 │   │   ├── LavaFlowQueryPool.java / LavaFlowFence.java / LavaFlowFrameStats.java
 │   │   ├── LavaFlowVk.java                    # GpuFormat / 枚举到 Vk 常量的映射
 │   │   └── LavaFlowVersion.java
-│   ├── mixin/                            # 核心 mixin
+│   ├── mixin/                            # 核心 mixin（始终应用）
 │   │   ├── PreferredGraphicsApiMixin.java     # 选中 LavaFlow 为后端
+│   │   ├── GpuDeviceBackendAccessor.java      # 读取具体类 FrontendGpuDevice 上的 backend 字段
 │   │   ├── FramerateLimitMixin.java           # 帧率限制插桩（系统属性门控）
 │   │   ├── FrameStatsMixin.java               # 帧统计插桩（系统属性门控）
 │   │   ├── TextureAtlasMaxSizeDebugMixin.java # 图集尺寸上报诊断（见"已知限制"）
 │   │   └── AsyncParticlesVulkanBackendMixin.java # AsyncParticles 兼容（可选模组）
 │   └── sodium/                           # Sodium 兼容
-│       ├── LavaFlowSodium.java                # 设备识别 + 绘制路径选择
+│       ├── LavaFlowSodium.java                # 绘制路径选择
 │       ├── LavaFlowSodiumMixinPlugin.java     # 未安装 Sodium 时跳过
 │       └── mixin/
-│           ├── DrawBackendMixin.java          # 路由 Sodium 至其 Vulkan 路径
-│           └── GpuDeviceBackendAccessor.java  # 读取具体类上的 backend 字段
+│           └── DrawBackendMixin.java          # 路由 Sodium 至其 Vulkan 路径
 │
 ├── minecraft/resources/                  # 模组资源
 │   ├── fabric.mod.json
@@ -150,7 +152,9 @@ Sodium 通过检测 Minecraft 自有的 `VulkanDevice` 来选择绘制路径，�
 
 Sodium 0.9.2 通过 Blaze3D 渲染通道 API 发起地形绘制（`RenderPass.multiDrawIndexed` / `RenderPass.drawIndexedIndirect`），并自行在管线上声明 push-constant 大小（`RenderPipeline.Builder.withPushConstantSize`）。**LavaFlow 只需让 Sodium 认出自己是 Vulkan 设备**，无需向它交出命令缓冲、管线布局或描述符集——更早的 Sodium 版本需要这些，0.9.2 已不再需要，相关桥接代码随之移除。
 
-设备识别由 `GpuDeviceBackendAccessor` 读取 `backend` 字段完成。该字段位于**具体类** `FrontendGpuDevice` 上（26.3 的 `GpuDevice` 是纯接口，没有字段），因此 mixin 必须指向具体类：指向接口会导致访问器方法根本不被生成，直到 Sodium 询问设备类型时才以 `AbstractMethodError` 崩溃。
+设备识别由 `GpuDeviceBackendAccessor` 读取 `backend` 字段完成，该 mixin 声明在**核心**配置中而非 Sodium 配置中，因为需要这个答案的不止 Sodium（见下文 AsyncParticles）。字段位于**具体类** `FrontendGpuDevice` 上（26.3 的 `GpuDevice` 是纯接口，没有字段），因此 mixin 必须指向具体类：指向接口会导致访问器方法根本不被生成，直到有人询问设备类型时才以 `AbstractMethodError` 崩溃。
+
+判定逻辑集中在 `LavaFlowDevices` 里，其中 **`null` 表示"读不到"，不是"不是 LavaFlow"** —— 这两者需要不同的回退，混淆它们正是 AsyncParticles 守卫曾经失效的原因。
 
 绘制路径优先选择 `VK_MULTIDRAW`（`ext_multidraw`，把绘制打包进普通 CPU 数组）；设备不支持 `multiDrawDirectInterleaved` 时退回 `VK_INDIRECT`。
 
@@ -225,6 +229,7 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
 - **描述符缓存失效路径缺失**：`LavaFlowDescriptorCache.invalidateAll()` 目前没有调用者。26.2 由管线缓存清理触发，26.3 改由前端 `PipelineCache` 驱动管线关闭，而管线的 `close()` 不会失效描述符缓存。资源重载后理论上可能命中陈旧条目，尚未观察到实际触发。
+- **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并让其走 CPU 粒子路径，因此 AsyncParticles 在 LavaFlow 上**不会启用 GPU 粒子加速**。
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeDebugMixin` 用于观测图集尺寸上报，其针对 26.2 的反射探测在 26.3 下已不再命中（`FrontendGpuDevice` 不再暴露 `getMaxTextureSize()` 等方法），当前实际只保留日志输出。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
 
