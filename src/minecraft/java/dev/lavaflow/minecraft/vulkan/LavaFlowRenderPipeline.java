@@ -391,6 +391,10 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         if (closed) return;
         closed = true;
         VkDevice vkDevice = device.context().device();
+        // Cached descriptor sets are keyed on this layout's handle, so they must be retired along with
+        // it. A pipeline compiled later can be handed the same handle, and an entry left behind would
+        // answer a lookup for a layout it was never built for instead of missing the cache.
+        device.invalidateDescriptorCache(descriptorSetLayout);
         long[] nativeDynamicPipelines = dynamicPipelines.values().stream().mapToLong(Long::longValue).toArray();
         dynamicPipelines.clear();
         long[] nativeLegacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount);

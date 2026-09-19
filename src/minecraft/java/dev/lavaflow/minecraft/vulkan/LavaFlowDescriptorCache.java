@@ -30,6 +30,12 @@ import static org.lwjgl.vulkan.VK11.VK_ERROR_OUT_OF_POOL_MEMORY;
  * from resource handle to cache keys. Sets are never rewritten once cached, which is what makes
  * them safe to leave bound in command buffers that are still executing; retirement goes through the
  * device's deferred-release path so nothing is freed before the submission that used it completes.
+ *
+ * <p>The layout a set was built for counts as one of those resources, even though it is part of the key
+ * rather than a resource the set points at. Handles are recyclable: reloading shaders closes every
+ * pipeline, and a pipeline compiled afterwards can be handed a layout handle that was just released.
+ * Without the layout registering itself here, such a reload would not miss the cache — it would hit an
+ * entry built for a layout that no longer exists, and bind a set with a mismatched layout.
  */
 final class LavaFlowDescriptorCache {
     private static final int SETS_PER_POOL = 256;
@@ -94,6 +100,8 @@ final class LavaFlowDescriptorCache {
                     long set = out.get(0);
                     sets.put(key, new CachedSet(set, pools.get(poolIndex)));
                     for (long handle : resourceHandles) registerResource(handle, key);
+                    // The layout is half the key, so the entry must not outlive it either.
+                    registerResource(layout, key);
                     return set;
                 }
                 if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
@@ -152,27 +160,6 @@ final class LavaFlowDescriptorCache {
                             "vkFreeDescriptorSets");
                 }
             }
-        });
-    }
-
-    /**
-     * Drops the whole cache. Needed when the pipeline cache is cleared: descriptor-set layout
-     * handles can be reused by new pipelines, which would let a stale entry alias a fresh layout.
-     */
-    void invalidateAll() {
-        if (sets.isEmpty() && bufferViews.isEmpty()) return;
-        LavaFlowFrameStats.descriptorCacheInvalidated();
-        long[] staleViews = bufferViews.values().stream().mapToLong(Long::longValue).toArray();
-        long[] stalePools = pools.stream().mapToLong(Long::longValue).toArray();
-        sets.clear();
-        bufferViews.clear();
-        byResource.clear();
-        pools.clear();
-        poolIndex = 0;
-        device.defer(() -> {
-            for (long view : staleViews) vkDestroyBufferView(context.device(), view, null);
-            // Destroying the pools releases every set allocated from them.
-            for (long pool : stalePools) vkDestroyDescriptorPool(context.device(), pool, null);
         });
     }
 
