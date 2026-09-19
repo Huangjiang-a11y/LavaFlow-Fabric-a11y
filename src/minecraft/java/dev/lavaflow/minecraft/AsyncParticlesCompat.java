@@ -66,10 +66,23 @@ public final class AsyncParticlesCompat {
      * source by whoever reads this next.
      */
     public static void reportGuardFired(GpuDevice device) {
-        LOGGER.log(System.Logger.Level.INFO,
-                "AsyncParticles asked for Vulkan caps on a backend that is not Mojang's Vulkan device"
-                        + " ({0}); answering unsupported, so particles stay on the CPU path",
-                device == null ? "null device" : device.getClass().getSimpleName());
+        LOGGER.log(System.Logger.Level.INFO, guardFiredMessage(device));
+    }
+
+    /**
+     * The line {@link #reportGuardFired} logs. Built by concatenation instead of a {@code {0}} parameter,
+     * and that is not a style preference.
+     *
+     * <p>{@code java.text.MessageFormat} treats an apostrophe as the start of a quoted section. A message
+     * containing "Mojang's" plus a placeholder therefore leaves the quote open, and the placeholder is
+     * logged verbatim: the device name silently never appears, while the line itself still prints and
+     * looks plausible. That is exactly how this message first shipped. Keeping it parameterless selects
+     * the overload that performs no formatting at all, so the apostrophe is just a character.
+     */
+    static String guardFiredMessage(GpuDevice device) {
+        return "AsyncParticles asked for Vulkan caps on a backend that is not Mojang's Vulkan device ("
+                + (device == null ? "null device" : device.getClass().getSimpleName())
+                + "); answering unsupported, so particles stay on the CPU path";
     }
 
     public static Object unsupportedVkCaps(GpuDevice device) {
