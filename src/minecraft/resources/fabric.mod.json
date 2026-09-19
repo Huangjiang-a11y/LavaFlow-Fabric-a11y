@@ -15,5 +15,5 @@
   "entrypoints": {},
   "mixins": ["lavaflow.mixins.json", "lavaflow-sodium.mixins.json"],
   "depends": { "fabricloader": ">=0.19.5", "minecraft": ">=26.3", "java": ">=25" },
-  "recommends": { "sodium": ">=0.9.1" }
+  "recommends": { "sodium": ">=0.9.2" }
 }
