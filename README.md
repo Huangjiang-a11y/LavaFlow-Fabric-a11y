@@ -64,6 +64,7 @@ shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
 - 最终呈现 blit 时反转目标 Y 坐标
 - **SPIR-V 版本降级**，使 Vulkan 1.1 设备可执行前端编译出的 SPIR-V 1.5 模块
 - Sodium 0.9.2 兼容：Sodium 的 Vulkan 地形路径在 LavaFlow 上运行（`ext_multidraw` / indirect），而非回退到 OpenGL
+- 描述符集与所属布局绑定生命周期：重载着色器后不会命中为已释放布局建成的条目
 
 LavaFlow 使用顺时针前面，且不启用 shaderc 的 invert-Y 选项。这些约定是为了匹配 Minecraft 官方 Vulkan 后端的行为。
 
@@ -114,13 +115,13 @@ src/
 │   │   ├── LavaFlowDescriptorCache.java / LavaFlowTransientMemory.java
 │   │   ├── LavaFlowQueryPool.java / LavaFlowFence.java / LavaFlowFrameStats.java
 │   │   ├── LavaFlowVk.java                    # GpuFormat / 枚举到 Vk 常量的映射
-│   │   └── LavaFlowVersion.java
+│   │   └── LavaFlowVersion.java               # 构建标识（版本 + 提交）
 │   ├── mixin/                            # 核心 mixin（始终应用）
-│   │   ├── PreferredGraphicsApiMixin.java     # 选中 LavaFlow 为后端
-│   │   ├── GpuDeviceBackendAccessor.java      # 读取具体类 FrontendGpuDevice 上的 backend 字段
-│   │   ├── FramerateLimitMixin.java           # 帧率限制插桩（系统属性门控）
-│   │   ├── FrameStatsMixin.java               # 帧统计插桩（系统属性门控）
-│   │   ├── TextureAtlasMaxSizeDebugMixin.java # 图集尺寸上报诊断（见"已知限制"）
+│   │   ├── PreferredGraphicsApiMixin.java        # 选中 LavaFlow 为后端
+│   │   ├── GpuDeviceBackendAccessor.java         # 读取具体类 FrontendGpuDevice 上的 backend 字段
+│   │   ├── FramerateLimitMixin.java              # 帧率限制插桩（系统属性门控）
+│   │   ├── FrameStatsMixin.java                  # 帧统计插桩（系统属性门控）
+│   │   ├── TextureAtlasMaxSizeFallbackMixin.java # 图集尺寸异常时的兜底（见"已知限制"）
 │   │   └── AsyncParticlesVulkanBackendMixin.java # AsyncParticles 兼容（可选模组）
 │   └── sodium/                           # Sodium 兼容
 │       ├── LavaFlowSodium.java                # 绘制路径选择
@@ -191,6 +192,8 @@ Fabric 模组产物输出至：
 build/libs/lavaflow-26.3-0.1.0-alpha.jar
 ```
 
+生成到 `lavaflow-version.txt` 的版本与提交会打进 JAR：设备启动时以一行 INFO 输出（`LavaFlow build <版本> (<提交>)`），并进入 `DeviceInfo` 的 `driverInfo`，因此崩溃报告的 “Graphics Drivers” 一行同样带提交。工作区有未提交改动时提交带 `-dirty` 后缀；环境无 `git` 时退化为 `unknown`。
+
 GitHub Actions 会对推送、拉取请求与手动触发运行构建，然后将 JAR 作为工作流产物发布。
 
 ## smoke 渲染器
@@ -228,9 +231,8 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 ## 已知限制
 
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
-- **描述符缓存失效路径缺失**：`LavaFlowDescriptorCache.invalidateAll()` 目前没有调用者。26.2 由管线缓存清理触发，26.3 改由前端 `PipelineCache` 驱动管线关闭，而管线的 `close()` 不会失效描述符缓存。资源重载后理论上可能命中陈旧条目，尚未观察到实际触发。
 - **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并让其走 CPU 粒子路径，因此 AsyncParticles 在 LavaFlow 上**不会启用 GPU 粒子加速**。
-- **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeDebugMixin` 用于观测图集尺寸上报，其针对 26.2 的反射探测在 26.3 下已不再命中（`FrontendGpuDevice` 不再暴露 `getMaxTextureSize()` 等方法），当前实际只保留日志输出。
+- **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
 
 ## 状态
@@ -250,7 +252,7 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 | 环境 | FCL 1.3.3.2，Java 25，Android 10（SDK 29） |
 | 模组 | Fabric Loader 0.19.5，Sodium 0.9.2+mc26.3 |
 
-该设备会走 LavaFlow 的**全部回退路径**（旧版渲染通道、descriptor-set 而非 push descriptor、逐条 `vkCmdDrawIndexed` 而非 multi-draw），因此这些路径已有真机覆盖。尚未覆盖的是桌面驱动，以及具备上述可选能力的设备。
+该设备会走 LavaFlow 的**全部回退路径**（旧版渲染通道、descriptor-set 而非 push descriptor、逐条 `vkCmdDrawIndexed` 而非 multi-draw），因此这些路径已有真机覆盖。尚未覆盖的是桌面驱动，以及具备上述可选能力的设备。 资源重载（连续三轮）在该设备上跑通，管线关闭→描述符集失效的路径每轮都会走到。
 
 ## 致谢
 

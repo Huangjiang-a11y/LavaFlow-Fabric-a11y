@@ -132,7 +132,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         return VK_VERSION_MAJOR(VK_API_VERSION_1_1) + "." + VK_VERSION_MINOR(VK_API_VERSION_1_1)
                 + " (device " + VK_VERSION_MAJOR(deviceApi) + "." + VK_VERSION_MINOR(deviceApi) + "."
                 + VK_VERSION_PATCH(deviceApi) + ") driver " + driverVersion
-                + " LavaFlow " + LavaFlowVersion.get();
+                + " LavaFlow " + LavaFlowVersion.version() + " (" + LavaFlowVersion.commit() + ")";
     }
 
     LavaFlowVulkanContext context() { return context; }

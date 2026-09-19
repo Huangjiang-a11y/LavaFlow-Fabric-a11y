@@ -8,6 +8,7 @@ import com.mojang.renderpearl.api.device.GpuDevice;
 import com.mojang.renderpearl.frontend.FrontendGpuDevice;
 import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import dev.lavaflow.minecraft.vulkan.LavaFlowShaderc;
+import dev.lavaflow.minecraft.vulkan.LavaFlowVersion;
 import org.lwjgl.sdl.SDLError;
 import org.lwjgl.sdl.SDLVideo;
 import org.lwjgl.sdl.SDLVulkan;
@@ -96,6 +97,10 @@ public final class LavaFlowBackend implements GpuBackend {
 
     @Override
     public GpuDevice createDevice(GpuDebugOptions debugOptions) throws BackendCreationException {
+        // Logged before anything can fail: the point of a build identity is to be in the log that
+        // reports the failure, and the first line of device setup is the earliest LavaFlow can be.
+        LOGGER.log(System.Logger.Level.INFO, "LavaFlow build {0} ({1})",
+                LavaFlowVersion.version(), LavaFlowVersion.commit());
         LOGGER.log(System.Logger.Level.INFO, "Creating LavaFlow-owned Vulkan 1.1 graphics device");
         try {
             LOGGER.log(System.Logger.Level.INFO, "Using LavaFlow shaderc at {0}", LavaFlowShaderc.load());
