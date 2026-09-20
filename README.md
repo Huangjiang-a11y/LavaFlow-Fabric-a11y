@@ -156,6 +156,46 @@ gradle run --args='--frames=120'
 
 具体实例目录可能因启动器配置而异。
 
+## AsyncParticles 兼容性
+
+AsyncParticles 在 `Backends` 的静态初始化器里按后端名分支：名字含 "vulkan" 时调用 `getVkCaps(device)`，而该方法的第一个语句是 `((VulkanDevice) device.backend).vkDevice()`。LavaFlow 把后端名报为 "Vulkan"（好让按名字分支的模组继续工作），但注册进去的后端对象是自己的 `GpuDeviceBackend` 实现，不是 Mojang 的 `VulkanDevice`。这句强转必然抛 `ClassCastException`；又因为它发生在类初始化器里，挂掉的是整个游戏而不只是一个功能。
+
+`AsyncParticlesVulkanBackendMixin` 拦下 `getVkCaps`：当后端不是 Mojang 的 `VulkanDevice` 时，直接返回 AsyncParticles 自己的 `VkCommands.Unsupported`（用反射在它自己的类加载器里构造，以保证类型完全一致）。AsyncParticles 随后报告无 Vulkan GPU 加速并走 CPU 粒子路径，永远走不到那句强转。
+
+**本分支与 26.3 在此处的实现必须不同，不要互相搬运。** 差异源自 Mojang 在 26.3 把 `GpuDevice` 从类改成了接口：
+
+| | 本分支（26.2） | 26.3 |
+| --- | --- | --- |
+| `GpuDevice` | `com.mojang.blaze3d.systems.GpuDevice`，**类**，含 `private final GpuDeviceBackend backend` | `com.mojang.renderpearl.api.device.GpuDevice`，**接口**，无任何字段 |
+| 取后端 | 直接 `getDeclaredField("backend")` 可行 | 同样的反射必抛 `NoSuchFieldException`（该分支的守卫曾因此成为空操作） |
+| `VulkanDevice` | `com.mojang.blaze3d.vulkan.VulkanDevice` | `com.mojang.renderpearl.backend.vulkan.VulkanDevice` |
+
+## 后续可做
+
+### 让 AsyncParticles 在 LavaFlow 上启用 GPU 粒子
+
+**结论：可行，但不是 mixin 能解决的，需要自己实现一个渲染器。**
+
+**为什么 patch AsyncParticles 自身的 Vulkan 路径走不通**（三处都是结构性的，不是命名或版本问题）：
+
+1. **`checkcast` 不可能通过。** `com.mojang.blaze3d.vulkan.VulkanDevice` 是 `public class`（且 `implements GpuDeviceBackend`），不是接口；而 `LavaFlowDevice` 的父类已是 `Object`。mixin 能追加接口，不能改父类，所以 `((VulkanDevice) device.backend)` 永远会抛。
+2. **即便通过，需要的也不只是 `VkDevice`。** AsyncParticles 绑定的是 Mojang 后端对象上的一整套：`vulkanDevice.createCommandEncoder()` 返回 Mojang 的 `VulkanCommandEncoder`，它还要读其内部状态；其内部类还直接继承 Mojang 的 `VulkanGpuBuffer`（该类在 26.2 侧同样存在）。
+3. **造一个 `VulkanDevice` 需要 Mojang 整套后端初始化。** 本分支的构造器要 `ShaderSource`、`VulkanInstance`、`VulkanPhysicalDevice`、`Set<String>`、`VkDevice`、`long`、`CheckpointExtension`——正是 LavaFlow 立项时绕开的那部分。在 LavaFlow 上重建它，等于放弃 LavaFlow 的前提。
+
+**真口子**：`GpuParticleBehavior.createRenderer()` 是 public，返回公开接口 `IParticleRenderer`（13 个方法）。拦它返回一个 LavaFlow 原生实现，比碰 AsyncParticles 的 Vulkan 内部可靠得多——不依赖任何反射。这个口子在 26.2 与 26.3 上一致，可照搬。
+
+| 需要的东西 | 现状 |
+| --- | --- |
+| `VkDevice` / 队列 | LavaFlow 已有 |
+| 内存分配 | 已有（`findMemoryType` + `vkAllocateMemory`） |
+| 命令缓冲录制 | 已有（`LavaFlowCommandEncoder`） |
+| compute 管线、描述符集、SPIR-V 加载 | 需新写；AsyncParticles 的 `VkCompParticleRenderer` 可直接作蓝本 |
+| 与 LavaFlow 帧的同步 | 需新设计 |
+
+最难的是最后一行：`awaitCompute()` 交出的是 device-local 缓冲区，要能被 LavaFlow 的渲染管线**直接消费**——即 LavaFlow 需要接受外部创建的顶点缓冲。AsyncParticles 原实现是把结果交给 MC 自己的渲染器去画，换到 LavaFlow 上等于新设计一条路。工作量数天到一周量级。
+
+**注意**：无论是否实现上述渲染器，`AsyncParticlesVulkanBackendMixin` 的守卫都必须保留——它拦的 `getVkCaps` 在静态初始化器里，与用哪个粒子渲染器无关。
+
 ## 状态
 
 LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 ARM64 设备上测试，但 Vulkan 驱动差异可能暴露设备特定问题。测试新构建时请保留一个已知可用的 JAR。
