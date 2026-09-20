@@ -232,9 +232,41 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
 - **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并返回其 `VkCommands.Unsupported`，AsyncParticles 随之走 CPU 粒子路径，永远走不到那句强转。
-- **该设备上 GPU 粒子加速本就不可能启用**，本 mixin 并未额外关掉可用能力：AsyncParticles 的 `supportsGpuAcceleration()` 在 Vulkan 路径下要求 `pushDescriptor` 与 `synchronization2` 同时为真；而 Mali-G76 为 Vulkan 1.1 且无 `VK_KHR_push_descriptor` / `VK_KHR_synchronization2`，`getVkCaps` 会得出 `(false, false)`。两者结论一致。此结论按 AsyncParticles 26.3.2.0-alpha.3 的字节码核对。
+- **GPU 粒子加速不可用的原因是结构性的，与版本或扩展能力无关**：AsyncParticles 的 Vulkan 渲染器要的不是裸 `VkDevice`，而是一个 Mojang `VulkanDevice` 包装对象（`vkDevice()`、`createCommandEncoder()`，其内部类还继承 `VulkanGpuBuffer`）。LavaFlow 的后端是另一套实现，只实现 `GpuDeviceBackend`，拿不出这个对象。因此即使设备支持 Vulkan 1.4 与全部可选扩展，该路径同样走不通。（曾按 Mali-G76 的 Vulkan 1.1 归因于能力不足，那是不对的：在 `device 1.4.x` 的设备上 AsyncParticles 会按 `apiVersion >= 1.3` 直接置 `pushDescriptor`/`synchronization2` 为真，反而会尝试启用。）
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
+
+## 后续可做
+
+### 让 AsyncParticles 在 LavaFlow 上启用 GPU 粒子
+
+**结论：可行，但不是 mixin 能解决的，需要自己实现一个渲染器。**
+
+**为什么 patch AsyncParticles 自身的 Vulkan 路径走不通**（三处都是结构性的，不是命名或版本问题）：
+
+1. **`checkcast` 不可能通过。** `com.mojang.renderpearl.backend.vulkan.VulkanDevice` 是 `public class`（且 `implements GpuDeviceBackend`），不是接口；而 `LavaFlowDevice` 的父类已是 `Object`。mixin 能追加接口，不能改父类，所以 `((VulkanDevice) device.backend)` 永远会抛。
+2. **即便通过，需要的也不只是 `VkDevice`。** AsyncParticles 绑定的是 Mojang 后端对象上的一整套：`vulkanDevice.createCommandEncoder()` 返回 Mojang 的 `VulkanCommandEncoder`，还要读它的 `currentSubmitIndex` 字段；其 `SubmitSlot$1` 更是直接 `extends VulkanGpuBuffer`。
+3. **造一个 `VulkanDevice` 需要 Mojang 整套后端初始化。** 构造器要 `VulkanInstance`、`VulkanPhysicalDevice`、`FeatureSet`、`CheckpointExtension`——正是 LavaFlow 立项时绕开的那部分。在 LavaFlow 上重建它，等于放弃 LavaFlow 的前提。
+
+（另有一处不匹配：Mojang 后端用 VMA 分配器，LavaFlow 用 `vkAllocateMemory` 自行管理，而 AsyncParticles 是按 Mojang 侧约定写的。）
+
+**真口子**：`GpuParticleBehavior.createRenderer()` 是 public，返回公开接口 `IParticleRenderer`（13 个方法）。拦它返回一个 LavaFlow 原生实现，比碰 AsyncParticles 的 Vulkan 内部可靠得多——不依赖任何反射，也不受其内部改名影响。
+
+| 需要的东西 | 现状 |
+| --- | --- |
+| `VkDevice` / 队列 | LavaFlow 已有 |
+| 内存分配 | 已有（`findMemoryType` + `vkAllocateMemory`） |
+| 命令缓冲录制 | 已有（`LavaFlowCommandEncoder`） |
+| compute 管线、描述符集、SPIR-V 加载 | 需新写；AsyncParticles 的 `VkCompParticleRenderer` 可直接作蓝本（一个主类 + 两个 slot 嵌套类） |
+| 与 LavaFlow 帧的同步 | 需新设计 |
+
+最难的是最后一行：`awaitCompute()` 交出的是 device-local 缓冲区，要能被 LavaFlow 的渲染管线**直接消费**——即 LavaFlow 需要接受外部创建的顶点缓冲。AsyncParticles 原实现是把结果交给 MC 自己的渲染器去画，换到 LavaFlow 上等于新设计一条路。
+
+**工作量**：数天到一周量级。
+
+**注意**：无论是否实现上述渲染器，`AsyncParticlesVulkanBackendMixin` 的守卫都必须保留——它拦的 `Backends.getVkCaps` 在静态初始化器里，与用哪个粒子渲染器无关。
+
+*以上依据 AsyncParticles 26.3.2.0-alpha.3+26.3 与 26.3 的 `VulkanDevice` 字节码核对。*
 
 ## 状态
 
