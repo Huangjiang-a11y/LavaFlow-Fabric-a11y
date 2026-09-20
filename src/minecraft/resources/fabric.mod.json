@@ -13,7 +13,17 @@
   "icon": "lavaflow.png",
   "environment": "client",
   "entrypoints": {},
-  "mixins": ["lavaflow.mixins.json", "lavaflow-sodium.mixins.json"],
-  "depends": { "fabricloader": ">=0.19.3", "minecraft": ">=26.2 <26.3", "java": ">=25" },
-  "recommends": { "sodium": ">=0.9.1" }
+  "mixins": [
+    "lavaflow.mixins.json",
+    "lavaflow-sodium.mixins.json",
+    "lavaflow-dh.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": ">=26.2 <26.3",
+    "java": ">=25"
+  },
+  "recommends": {
+    "sodium": ">=0.9.1"
+  }
 }
