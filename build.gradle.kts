@@ -80,6 +80,25 @@ val minecraft by sourceSets.creating {
     runtimeClasspath += output + compileClasspath
 }
 
+/** Runs git and returns its trimmed output, or null when git is missing or the command fails. */
+fun gitOutput(vararg args: String): String? = try {
+    val process = ProcessBuilder(listOf("git") + args)
+        .directory(rootDir).redirectErrorStream(true).start()
+    // Read before waiting: a full pipe buffer would deadlock the child.
+    val output = process.inputStream.bufferedReader().readText().trim()
+    if (process.waitFor() == 0) output.ifEmpty { null } else null
+} catch (ignored: Exception) {
+    null
+}
+
+// Build identity, embedded in the jar and reported by LavaFlowVersion at runtime. The commit is
+// recorded because the version alone cannot identify a build: it changes only when someone bumps it,
+// so two jars built from different commits are otherwise indistinguishable in a device log, leaving
+// file timestamps as the only way to tell them apart.
+val buildCommit: String = gitOutput("rev-parse", "--short", "HEAD")?.let { commit ->
+    if (gitOutput("status", "--porcelain") == null) commit else "$commit-dirty"
+} ?: "unknown"
+
 // Writes the project version to a classpath resource LavaFlowVersion reads at runtime. Needed
 // because FML's transforming classloader never populates java.lang.Package version info from the
 // jar manifest, so Package.getImplementationVersion() always returns null for a mod's own classes.
@@ -87,11 +106,12 @@ val generateLavaFlowVersion by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/lavaflowVersion")
     val outputFile = outputDir.map { it.file("lavaflow-version.txt") }
     inputs.property("version", project.version.toString())
+    inputs.property("commit", buildCommit)
     outputs.dir(outputDir)
     doLast {
         outputFile.get().asFile.apply {
             parentFile.mkdirs()
-            writeText(project.version.toString())
+            writeText(project.version.toString() + "\n" + buildCommit + "\n")
         }
     }
 }
