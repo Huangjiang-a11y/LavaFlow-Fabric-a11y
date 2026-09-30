@@ -32,6 +32,14 @@ import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceProperties2;
 
 /** LavaFlow-owned Vulkan 1.1 instance, device, queues, and allocation policy. */
 public final class LavaFlowVulkanContext implements AutoCloseable {
+    /**
+     * The Khronos validation layer's name. The bindings export no constant for it: the layer is not
+     * part of the Vulkan API, only an identifier the SDK and the loader agree on.
+     */
+    private static final String VK_LAYER_KHRONOS_VALIDATION = "VK_LAYER_KHRONOS_validation";
+
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowVulkanContext.class.getName());
+
     private VkInstance instance;
     private VkDebugUtilsMessengerCallbackEXT debugCallback;
     private long debugMessenger;
@@ -141,6 +149,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * <p>The surface extensions come from SDL instead of from a window, because no window exists
      * yet at this point. Asking SDL rather than hardcoding one extension per OS also keeps a single
      * build working under both X11 and Wayland, which {@code VK_KHR_xlib_surface} alone would not.
+     *
+     * <p>Validation is a diagnostic, so it must never be the reason a launch dies: the layer and the
+     * reporting extension are requested only when the loader actually offers them, and a request that
+     * cannot be honoured is reported rather than dropped. The switch exists to answer "is validation
+     * running?", and one that silently does nothing answers it wrongly.
      */
     private void createInstance() {
         PointerBuffer sdlExtensions = SDLVulkan.SDL_Vulkan_GetInstanceExtensions();
@@ -154,8 +167,24 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             // flag is also set, and none of LavaFlow's targets need it.
             if (!extension.equals("VK_KHR_portability_enumeration")) extensions.add(extension);
         }
-        boolean validation = Boolean.getBoolean("lavaflow.validation");
-        if (validation) extensions.add(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        boolean requested = Boolean.getBoolean("lavaflow.validation");
+        boolean validation = requested && instanceLayerAvailable(VK_LAYER_KHRONOS_VALIDATION);
+        boolean debugUtils = requested
+                && instanceExtensionAvailable(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        // No apostrophes in these messages: System.Logger formats through MessageFormat, which eats
+        // them (see 503df81).
+        if (requested && !validation) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "lavaflow.validation is set, but the {0} layer is not available, so this run will not "
+                            + "be validated. Install vulkan-validationlayers (or the Vulkan SDK) to enable it.",
+                    VK_LAYER_KHRONOS_VALIDATION);
+        }
+        if (requested && !debugUtils) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "{0} is unavailable, so validation messages have no way of reaching the log",
+                    EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+        if (debugUtils) extensions.add(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         try (MemoryStack stack = stackPush()) {
             PointerBuffer enabledExtensions = stack.mallocPointer(extensions.size());
             for (String extension : extensions) enabledExtensions.put(stack.UTF8(extension));
@@ -166,11 +195,61 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .apiVersion(VK_API_VERSION_1_1);
             VkInstanceCreateInfo info = VkInstanceCreateInfo.calloc(stack).sType$Default()
                     .pApplicationInfo(app).ppEnabledExtensionNames(enabledExtensions);
+            if (validation) {
+                info.ppEnabledLayerNames(stack.pointers(stack.UTF8(VK_LAYER_KHRONOS_VALIDATION)));
+                LOGGER.log(System.Logger.Level.INFO, "Vulkan validation enabled through the {0} layer",
+                        VK_LAYER_KHRONOS_VALIDATION);
+            }
             PointerBuffer out = stack.mallocPointer(1);
             check(vkCreateInstance(info, null, out), "vkCreateInstance");
             instance = new VkInstance(out.get(0), info);
-            if (validation) createDebugMessenger(stack);
+            if (debugUtils) createDebugMessenger(stack);
         }
+    }
+
+    /**
+     * Whether the loader offers {@code name} as an instance layer. Failure to enumerate counts as
+     * absent: a diagnostic probe must not be what kills a launch.
+     */
+    private static boolean instanceLayerAvailable(String name) {
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer count = stack.ints(0);
+            check(vkEnumerateInstanceLayerProperties(count, null), "vkEnumerateInstanceLayerProperties(count)");
+            VkLayerProperties.Buffer layers = VkLayerProperties.malloc(count.get(0));
+            try {
+                check(vkEnumerateInstanceLayerProperties(count, layers), "vkEnumerateInstanceLayerProperties");
+                for (int i = 0; i < layers.capacity(); i++) {
+                    if (name.equals(layers.get(i).layerNameString())) return true;
+                }
+            } finally {
+                layers.free();
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        return false;
+    }
+
+    /** Whether the loader offers {@code name} as an instance extension. */
+    private static boolean instanceExtensionAvailable(String name) {
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer count = stack.ints(0);
+            check(vkEnumerateInstanceExtensionProperties((String)null, count, null),
+                    "vkEnumerateInstanceExtensionProperties(count)");
+            VkExtensionProperties.Buffer properties = VkExtensionProperties.malloc(count.get(0));
+            try {
+                check(vkEnumerateInstanceExtensionProperties((String)null, count, properties),
+                        "vkEnumerateInstanceExtensionProperties");
+                for (int i = 0; i < properties.capacity(); i++) {
+                    if (name.equals(properties.get(i).extensionNameString())) return true;
+                }
+            } finally {
+                properties.free();
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        return false;
     }
 
     private void createDebugMessenger(MemoryStack stack) {
