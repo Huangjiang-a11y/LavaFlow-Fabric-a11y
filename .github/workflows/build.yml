@@ -29,22 +29,41 @@ jobs:
         with:
           gradle-version: "9.5.1"
 
-      # `check` rather than `test`: the Vulkan-facing tests live in the minecraft-test source set,
-      # which is wired to `check` only. Running just `test` silently executes one pure-logic test
-      # class and skips everything that covers the backend.
-      - name: Build and test
-        run: gradle --no-daemon clean check jar installDist
-
-      # The runner has no GPU and no display, so the smoke run needs a software Vulkan driver and a
-      # virtual X server. lavapipe is deterministic, which is what makes an exact assertion here
-      # reasonable rather than flaky. The validation layer has to be installed as well: without it
-      # the renderer still exits 0, it just reports that the switch could not be honoured, and the
-      # assertion below fails on purpose rather than passing a run that validated nothing.
+      # The runner has no GPU and no display. Parts of the build do not need either, but the context
+      # test in the minecraft-test source set really creates a window and a Vulkan device, and the
+      # smoke run below really starts the renderer. Both therefore need a software Vulkan driver and
+      # a virtual X server, and this has to happen before the build rather than after it.
+      # lavapipe is deterministic, which is what makes an exact assertion reasonable rather than
+      # flaky. The validation layer has to be installed as well: without it the renderer still exits
+      # 0, it just reports that the switch could not be honoured, and the smoke step fails on purpose
+      # rather than passing a run that validated nothing.
       - name: Install a software Vulkan driver, the validation layer and a virtual display
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-validationlayers xvfb
+
+      # `check` rather than `test`: the Vulkan-facing tests live in the minecraft-test source set,
+      # which is wired to `check` only. Running just `test` silently executes one pure-logic test
+      # class and skips everything that covers the backend.
+      - name: Build and test
+        run: |
+          export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            gradle --no-daemon clean check jar installDist
+
+      # The context test skips itself when DISPLAY is unset (Assumptions.assumeTrue), and a skipped
+      # test leaves the build green all the same. Without this step a reordered workflow would
+      # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
+      # failure this test exists to catch.
+      - name: Assert the context test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowVulkanContextTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'tests="1"' "$report"
+          grep -q 'skipped="0"' "$report"
+          grep -q 'failures="0"' "$report"
+          echo "context test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts

@@ -69,6 +69,10 @@ DestroySurface 五个），平台无法回答时的默认是**返回 true**；�
 
 **26.2 走 GLFW，没有这个前提，不要搬运过来。**
 
+`LavaFlowVulkanContextTest` 覆盖了这个前提：把上面那次 `SDL_Vulkan_LoadLibrary` 去掉，它就会以
+`No Vulkan 1.1 device with a combined graphics and presentation queue family found` 失败。该用例因此把
+**窗口刻意排在上下文之后**创建——带 `SDL_WINDOW_VULKAN` 的窗口会隐式加载 Vulkan 库，顺序颠倒就会把这个前提盖掉。
+
 ## 当前功能
 
 - LavaFlow 自有的 Vulkan 实例、呈现设备、队列与交换链
@@ -202,6 +206,11 @@ gradle --no-daemon clean check jar
 | `src/minecraft-test` | `minecraftTest` | 需要 Blaze3D / Minecraft 类的测试 |
 
 注意 `gradle test` **不会**运行 `minecraftTest`——后者挂在 `check` 上。只跑 `test` 会静默跳过覆盖 Vulkan 相关逻辑的那部分测试。
+
+其中 `LavaFlowVulkanContextTest` 不是纯逻辑用例：它会真的构造一次 Minecraft 侧上下文，把
+`createInstance → selectDevice → createDevice → createSurface` 整条路走一遍，并以 `lavaflow.baselineDevice`
+起（五项可选能力俱不可用，即移动端画像）。它需要显示服务器与可用 Vulkan 设备，无 `DISPLAY` 时**自行跳过**，
+本地可用 `xvfb-run -a gradle check` 跑。CI 会断言它确实执行了、而非被跳过——因为跳过同样让构建变绿。
 
 Fabric 模组产物输出至：
 
