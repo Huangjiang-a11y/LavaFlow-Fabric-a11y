@@ -236,9 +236,8 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         lastPipeline = null;
         for (LavaFlowRenderPipeline pipeline : pipelines.values()) pipeline.close();
         pipelines.clear();
-        // Set layout handles may be reused by the replacement pipelines, so cached sets keyed on the
-        // old handles must not survive.
-        descriptorCache.invalidateAll();
+        // Closing each pipeline above retired the cache entries keyed on its descriptor-set layout,
+        // which is what a cache-wide invalidation used to do here.
     }
     @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }
     @Override public long getTimestampNow() { return System.nanoTime(); }
