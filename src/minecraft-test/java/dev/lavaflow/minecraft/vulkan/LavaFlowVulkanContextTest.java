@@ -4,7 +4,12 @@ import org.junit.jupiter.api.Test;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,7 +37,7 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 class LavaFlowVulkanContextTest {
 
     @Test
-    void startsOnADeviceWithNothingButSwapchain() {
+    void startsOnADeviceWithNothingButSwapchain() throws IOException {
         assumeTrue(displayAvailable(), "需要显示服务器才能创建窗口（本地可用 xvfb-run）");
 
         GLFWErrorCallback errors = GLFWErrorCallback.createPrint(System.err).set();
@@ -43,6 +48,7 @@ class LavaFlowVulkanContextTest {
                 "java.awt.headless", "false"));
         try {
             assumeTrue(glfwInit(), "GLFW 初始化失败");
+            exposeVulkanLoaderToLwjgl();
             glfwDefaultWindowHints();
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
             glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -73,6 +79,41 @@ class LavaFlowVulkanContextTest {
             restore(saved);
         }
     }
+
+    /**
+     * 桌面发行版把 Vulkan loader（libvulkan.so.1）放在多架构目录（如 /usr/lib/x86_64-linux-gnu），
+     * 那个目录不在 JVM 默认的 java.library.path 里；而 LWJGL 解压原生库时会把
+     * org.lwjgl.librarypath 设成自己的解压目录，此后只在那里按文件名找库，于是 VK 初始化会以
+     * {@code Failed to locate library: libvulkan.so.1} 失败——报错点完全看不出与原生库有关。
+     *
+     * <p>这里把系统 loader 拷进 LWJGL 正在查找的那个目录。找不到系统 loader 时什么都不做，
+     * 让失败保持原样，而不是把它掩盖过去。
+     */
+    private static void exposeVulkanLoaderToLwjgl() throws IOException {
+        Path loader = LOADER_DIRS.stream()
+                .map(dir -> dir.resolve("libvulkan.so.1"))
+                .filter(Files::exists)
+                .findFirst()
+                .orElse(null);
+        String searchPath = System.getProperty("org.lwjgl.librarypath");
+        if (loader == null || searchPath == null || searchPath.isBlank()) {
+            return;
+        }
+        for (String dir : searchPath.split(File.pathSeparator)) {
+            Path target = Path.of(dir).resolve("libvulkan.so.1");
+            if (!Files.exists(target)) {
+                Files.copy(loader, target);
+            }
+        }
+    }
+
+    private static final List<Path> LOADER_DIRS = List.of(
+            Path.of("/usr/lib/x86_64-linux-gnu"),
+            Path.of("/usr/lib/aarch64-linux-gnu"),
+            Path.of("/usr/lib64"),
+            Path.of("/usr/lib"),
+            Path.of("/lib"),
+            Path.of("/usr/local/lib"));
 
     private static boolean displayAvailable() {
         String display = System.getenv("DISPLAY");

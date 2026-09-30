@@ -47,6 +47,10 @@ dependencies {
     runtimeOnly("org.lwjgl:lwjgl-shaderc::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-spvc::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-vma::$lwjglNatives")
+    // jemalloc 是通过依赖图带进来的独立模块（LWJGL 的 VKAllocationCallbacks 会用它），
+    // 它的原生 jar 因此不在上面的 runtimeOnly 列表里；缺了它，测试起设备时会报
+    // "Failed to locate library: libjemalloc.so"。
+    runtimeOnly("org.lwjgl:lwjgl-jemalloc::$lwjglNatives")
 
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
@@ -180,8 +184,13 @@ val minecraftTest by sourceSets.creating {
 
 configurations[minecraftTest.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
+// 测试要真的起设备、开窗口，就必须能加载 LWJGL 的原生库——而 main 把原生库声明为 runtimeOnly，
+// minecraft 源集只从 main 继承了 implementation，于是这些 jar 根本不在测试的 classpath 上。
+// 少了它们，LavaFlowVulkanContextTest 会在创建上下文时抛 UnsatisfiedLinkError；而这个失败还
+// 很容易被掩盖：只要 java.io.tmpdir 里留着别处解压过的同版本原生库，LWJGL 就会复用，
+// 测试于是"通过"而实际缺东西——本仓库就在本地为此多绿了一轮。
 configurations[minecraftTest.runtimeOnlyConfigurationName]
-    .extendsFrom(configurations.testRuntimeOnly.get())
+    .extendsFrom(configurations.testRuntimeOnly.get(), configurations.runtimeOnly.get())
 
 tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
     options.release = 25
