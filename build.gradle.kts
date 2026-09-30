@@ -99,18 +99,21 @@ val buildCommit: String = gitOutput("rev-parse", "--short", "HEAD")?.let { commi
     if (gitOutput("status", "--porcelain") == null) commit else "$commit-dirty"
 } ?: "unknown"
 
-// Writes the project version to a classpath resource LavaFlowVersion reads at runtime. Needed
+// Writes the build identity to a classpath resource LavaFlowVersion reads at runtime. Needed
 // because FML's transforming classloader never populates java.lang.Package version info from the
 // jar manifest, so Package.getImplementationVersion() always returns null for a mod's own classes.
 val generateLavaFlowVersion by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/lavaflowVersion")
     val outputFile = outputDir.map { it.file("lavaflow-version.txt") }
     inputs.property("version", project.version.toString())
+    // Without the commit as an input the task stays up-to-date across commits and keeps embedding
+    // whichever revision it happened to run against first.
     inputs.property("commit", buildCommit)
     outputs.dir(outputDir)
     doLast {
         outputFile.get().asFile.apply {
             parentFile.mkdirs()
+            // Version on the first line, commit on the second; see LavaFlowVersion.
             writeText(project.version.toString() + "\n" + buildCommit + "\n")
         }
     }
