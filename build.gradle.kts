@@ -182,8 +182,14 @@ val minecraftTest by sourceSets.creating {
 
 configurations[minecraftTest.implementationConfigurationName]
     .extendsFrom(configurations.testImplementation.get())
+// 测试要真的起设备、开窗口，就必须能加载 LWJGL 的原生库——而 main 把原生库声明为 runtimeOnly，
+// minecraft 源集只从 main 继承了 implementation，于是这些 jar 根本不在测试的 classpath 上。
+// 少了它们，LavaFlowVulkanContextTest 会在 new LavaFlowVulkanContext() 处抛 UnsatisfiedLinkError
+// （Failed to locate library: libvulkan.so.1）。这个失败还很容易被掩盖：只要 java.io.tmpdir 里
+// 留着别处解压过的同版本原生库，LWJGL 就会复用，测试于是"通过"而实际什么都不缺——
+// 本仓库就在本地为此多绿了一轮。所以这里显式继承 main 的 runtimeOnly。
 configurations[minecraftTest.runtimeOnlyConfigurationName]
-    .extendsFrom(configurations.testRuntimeOnly.get())
+    .extendsFrom(configurations.testRuntimeOnly.get(), configurations.runtimeOnly.get())
 
 tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
     options.release = 25
