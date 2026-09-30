@@ -37,11 +37,14 @@ jobs:
 
       # The runner has no GPU and no display, so the smoke run needs a software Vulkan driver and a
       # virtual X server. lavapipe is deterministic, which is what makes an exact assertion here
-      # reasonable rather than flaky.
-      - name: Install a software Vulkan driver and a virtual display
+      # reasonable rather than flaky. The validation layer has to be installed as well: without it
+      # the renderer still exits 0, it just reports that the switch could not be honoured, and the
+      # assertion below fails on purpose rather than passing a run that validated nothing.
+      - name: Install a software Vulkan driver, the validation layer and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers xvfb
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-validationlayers xvfb
 
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
