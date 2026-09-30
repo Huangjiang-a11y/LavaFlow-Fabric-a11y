@@ -59,15 +59,20 @@ jobs:
           if [ "$status" -ne 0 ]; then
             # 失败原因必须能从注解里读到：完整日志需要鉴权，注解不需要。
             echo "::error::gradle exited with code $status"
-            grep -aE 'FAILURE:|What went wrong|> Task .* FAILED|error:|Caused by:|Could not|UnsatisfiedLink|NoClassDefFound|No space left|Exception' "$LOG" \
-              | head -15 | sed 's/::/:/g' | while IFS= read -r line; do echo "::error::$line"; done || true
+            # 注解有条数上限，因此最有用的信息排在最前：**有失败**的测试类的失败消息。
+            # 早前把这一节放在日志摘录之后，结果失败消息正好被上限截掉，等于白报一轮。
             for f in build/test-results/*/TEST-*.xml; do
               [ -f "$f" ] || continue
-              grep -oaE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$f" | head -1 \
-                | while IFS= read -r counts; do echo "::error::$(basename "$f"): $counts"; done || true
-              grep -oaE 'message="[^"]{0,180}"' "$f" | head -2 | sed 's/message=//;s/::/:/g' \
+              counts="$(grep -oaE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$f" | head -1)"
+              case "$counts" in
+                *'failures="0"'*'errors="0"'*) continue ;;
+              esac
+              echo "::error::$(basename "$f"): $counts"
+              grep -oaE 'message="[^"]{0,220}"' "$f" | head -3 | sed 's/message=//;s/::/:/g' \
                 | while IFS= read -r m; do echo "::error::$(basename "$f") $m"; done || true
             done
+            grep -aE 'FAILURE:|What went wrong|> Task .* FAILED|error:|Caused by:|Could not|UnsatisfiedLink|No space left' "$LOG" \
+              | head -6 | sed 's/::/:/g' | while IFS= read -r line; do echo "::error::$line"; done || true
             exit "$status"
           fi
           grep -aE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' build/test-results/*/TEST-*.xml | sed 's/^/  /' || true
