@@ -127,6 +127,11 @@ gradle --no-daemon clean check jar installDist
 
 注意 `gradle test` **不会**运行 `minecraftTest`——后者挂在 `check` 上。只跑 `test` 会静默跳过覆盖 Vulkan 相关逻辑的那部分测试。
 
+其中 `LavaFlowVulkanContextTest` 不是纯逻辑用例：它会真的建一个窗口并构造一次 Minecraft 侧上下文，把
+`createInstance → createSurface → selectDevice → createDevice` 整条路走一遍，并以 `lavaflow.baselineDevice`
+起（五项可选能力俱不可用，即移动端画像）。它需要显示服务器与可用 Vulkan 设备，无 `DISPLAY` 时**自行跳过**，
+本地可用 `xvfb-run -a gradle check` 跑。CI 会断言它确实执行了、而非被跳过——因为跳过同样让构建变绿。
+
 Fabric 模组产物输出至：
 
 ```text
