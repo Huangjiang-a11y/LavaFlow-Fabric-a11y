@@ -49,6 +49,10 @@ dependencies {
     runtimeOnly("org.lwjgl:lwjgl-shaderc::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-spvc::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-vma::$lwjglNatives")
+    // jemalloc 是通过依赖图带进来的独立模块（LWJGL 的 VKAllocationCallbacks 会用它），
+    // 它的原生 jar 因此不在上面的 runtimeOnly 列表里；缺了它，测试起设备时会报
+    // "Failed to locate library: libjemalloc.so"。见 minecraftTest 源集处的说明。
+    runtimeOnly("org.lwjgl:lwjgl-jemalloc::$lwjglNatives")
 
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
