@@ -150,12 +150,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * yet at this point. Asking SDL rather than hardcoding one extension per OS also keeps a single
      * build working under both X11 and Wayland, which {@code VK_KHR_xlib_surface} alone would not.
      *
+     * <p>SDL's Vulkan library is loaded first, because every SDL Vulkan call below depends on it and
+     * at this point no Vulkan window exists to have loaded it implicitly.
+     *
      * <p>Validation is a diagnostic, so it must never be the reason a launch dies: the layer and the
      * reporting extension are requested only when the loader actually offers them, and a request that
      * cannot be honoured is reported rather than dropped. The switch exists to answer "is validation
      * running?", and one that silently does nothing answers it wrongly.
      */
     private void createInstance() {
+        // SDL's Vulkan entry points are only usable once SDL has loaded the Vulkan loader library.
+        // Without it SDL_Vulkan_GetPresentationSupport answers false for every queue family, and
+        // findGraphicsFamily rejects every device before the window that would have loaded it
+        // implicitly exists. Idempotent, so the second caller costs nothing.
+        if (!SDLVulkan.SDL_Vulkan_LoadLibrary((CharSequence)null)) {
+            LOGGER.log(System.Logger.Level.WARNING, "SDL_Vulkan_LoadLibrary failed: {0}",
+                    SDLError.SDL_GetError());
+        }
         PointerBuffer sdlExtensions = SDLVulkan.SDL_Vulkan_GetInstanceExtensions();
         if (sdlExtensions == null) {
             throw new IllegalStateException("SDL supplied no Vulkan surface extensions");
