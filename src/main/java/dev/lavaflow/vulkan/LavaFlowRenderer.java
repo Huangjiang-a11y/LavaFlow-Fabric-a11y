@@ -21,8 +21,18 @@ public final class LavaFlowRenderer implements AutoCloseable {
     private static final int MAX_FRAMES_IN_FLIGHT = 2;
     private static final long FENCE_TIMEOUT_NS = 1_000_000_000L;
 
+    /**
+     * The Khronos validation layer's name. The bindings export no constant for it: the layer is not
+     * part of the Vulkan API, only an identifier the SDK and the loader agree on.
+     */
+    private static final String VK_LAYER_KHRONOS_VALIDATION = "VK_LAYER_KHRONOS_validation";
+
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowRenderer.class.getName());
+
     private final long window;
     private VkInstance instance;
+    private VkDebugUtilsMessengerCallbackEXT debugCallback;
+    private long debugMessenger;
     private long surface;
     private VkPhysicalDevice physicalDevice;
     private VkDevice device;
@@ -110,7 +120,34 @@ public final class LavaFlowRenderer implements AutoCloseable {
         if (extensions == null) {
             throw new IllegalStateException("GLFW did not provide Vulkan surface extensions");
         }
+        // Validation is a diagnostic, so it must never be the reason a run dies: the layer and the
+        // reporting extension are requested only when the loader actually offers them, and a request
+        // that cannot be honoured is reported rather than dropped. The switch exists to answer "is
+        // validation running?", and one that silently does nothing answers it wrongly.
+        boolean requested = Boolean.getBoolean("lavaflow.validation");
+        boolean validation = requested && instanceLayerAvailable(VK_LAYER_KHRONOS_VALIDATION);
+        boolean debugUtils = requested
+                && instanceExtensionAvailable(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        if (requested && !validation) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "lavaflow.validation is set, but the {0} layer is not available, so this run will not "
+                            + "be validated. Install vulkan-validationlayers (or the Vulkan SDK) to enable it.",
+                    VK_LAYER_KHRONOS_VALIDATION);
+        }
+        if (requested && !debugUtils) {
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "{0} is unavailable, so validation messages have no way of reaching the log",
+                    EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
         try (MemoryStack stack = stackPush()) {
+            PointerBuffer enabledExtensions = extensions;
+            if (debugUtils) {
+                enabledExtensions = stack.mallocPointer(extensions.remaining() + 1);
+                for (int i = extensions.position(); i < extensions.limit(); i++) {
+                    enabledExtensions.put(extensions.get(i));
+                }
+                enabledExtensions.put(stack.UTF8(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME)).flip();
+            }
             VkApplicationInfo applicationInfo = VkApplicationInfo.calloc(stack)
                     .sType$Default()
                     .pApplicationName(stack.UTF8("LavaFlow"))
@@ -121,11 +158,96 @@ public final class LavaFlowRenderer implements AutoCloseable {
             VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack)
                     .sType$Default()
                     .pApplicationInfo(applicationInfo)
-                    .ppEnabledExtensionNames(extensions);
+                    .ppEnabledExtensionNames(enabledExtensions);
+            if (validation) {
+                createInfo.ppEnabledLayerNames(stack.pointers(stack.UTF8(VK_LAYER_KHRONOS_VALIDATION)));
+                LOGGER.log(System.Logger.Level.INFO, "Vulkan validation enabled through the {0} layer",
+                        VK_LAYER_KHRONOS_VALIDATION);
+            }
             PointerBuffer handle = stack.mallocPointer(1);
             VulkanException.check(vkCreateInstance(createInfo, null, handle), "vkCreateInstance");
             instance = new VkInstance(handle.get(0), createInfo);
+            if (debugUtils) {
+                createDebugMessenger(stack);
+            }
         }
+    }
+
+    /**
+     * Routes validation messages to stderr under the same prefix the Minecraft adapter uses, so a
+     * validated smoke run is greppable the same way.
+     */
+    private void createDebugMessenger(MemoryStack stack) {
+        debugCallback = VkDebugUtilsMessengerCallbackEXT.create((severity, types, callbackData, userData) -> {
+            String message = VkDebugUtilsMessengerCallbackDataEXT.create(callbackData).pMessageString();
+            System.err.println("[LavaFlow Vulkan validation] " + message);
+            return VK_FALSE;
+        });
+        VkDebugUtilsMessengerCreateInfoEXT createInfo = VkDebugUtilsMessengerCreateInfoEXT.calloc(stack)
+                .sType$Default()
+                .messageSeverity(EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+                        | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                .messageType(EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                        | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                        | EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
+                .pfnUserCallback(debugCallback);
+        LongBuffer handle = stack.mallocLong(1);
+        VulkanException.check(
+                EXTDebugUtils.vkCreateDebugUtilsMessengerEXT(instance, createInfo, null, handle),
+                "vkCreateDebugUtilsMessengerEXT"
+        );
+        debugMessenger = handle.get(0);
+    }
+
+    /**
+     * Whether the loader offers {@code name} as an instance layer. Failure to enumerate counts as
+     * absent: a diagnostic probe must not be what kills a run.
+     */
+    private static boolean instanceLayerAvailable(String name) {
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer count = stack.ints(0);
+            VulkanException.check(vkEnumerateInstanceLayerProperties(count, null),
+                    "vkEnumerateInstanceLayerProperties(count)");
+            VkLayerProperties.Buffer layers = VkLayerProperties.malloc(count.get(0));
+            try {
+                VulkanException.check(vkEnumerateInstanceLayerProperties(count, layers),
+                        "vkEnumerateInstanceLayerProperties");
+                for (int i = 0; i < layers.capacity(); i++) {
+                    if (name.equals(layers.get(i).layerNameString())) {
+                        return true;
+                    }
+                }
+            } finally {
+                layers.free();
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        return false;
+    }
+
+    /** Whether the loader offers {@code name} as an instance extension. */
+    private static boolean instanceExtensionAvailable(String name) {
+        try (MemoryStack stack = stackPush()) {
+            IntBuffer count = stack.ints(0);
+            VulkanException.check(vkEnumerateInstanceExtensionProperties((String) null, count, null),
+                    "vkEnumerateInstanceExtensionProperties(count)");
+            VkExtensionProperties.Buffer properties = VkExtensionProperties.malloc(count.get(0));
+            try {
+                VulkanException.check(vkEnumerateInstanceExtensionProperties((String) null, count, properties),
+                        "vkEnumerateInstanceExtensionProperties");
+                for (int i = 0; i < properties.capacity(); i++) {
+                    if (name.equals(properties.get(i).extensionNameString())) {
+                        return true;
+                    }
+                }
+            } finally {
+                properties.free();
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        return false;
     }
 
     private void createSurface() {
@@ -643,6 +765,12 @@ public final class LavaFlowRenderer implements AutoCloseable {
         }
         if (surface != NULL && instance != null) {
             vkDestroySurfaceKHR(instance, surface, null);
+        }
+        if (debugMessenger != NULL && instance != null) {
+            EXTDebugUtils.vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, null);
+        }
+        if (debugCallback != null) {
+            debugCallback.free();
         }
         if (instance != null) {
             vkDestroyInstance(instance, null);
