@@ -52,6 +52,23 @@ shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
 
 前提是着色器没有使用高于目标版本的指令——版本字反映的是编译目标环境，而非着色器实际需要的指令；对前端产出的这批 GLSL 成立。若怀疑降级本身有问题，可用 `-Dlavaflow.noSpirvDowngrade=true` 关闭降级做 A/B 对照。
 
+### SDL 与 Vulkan 库的加载前提（26.3 特有）
+
+SDL 的 Vulkan 入口只有在 SDL 自己加载过 Vulkan 库之后才有意义，`SDL_Vulkan_GetPresentationSupport` 亦然。
+26.3 的 `createDevice` 按设计跑在窗口之前，此时没有任何东西能隐式加载它，因此 `createInstance()` 开头显式调用
+`SDL_Vulkan_LoadLibrary`（该调用幂等：重复调用、以及窗口已存在后再调，实测均返回 true 且不报错）。
+
+桌面端漏掉它会得到一个**指向错误方向的报错**：库未加载时呈现查询对每个队列族都返回 false，于是每个设备都被拒，
+最终抛 `No Vulkan 1.1 device with a combined graphics and presentation queue family found`——而真因与呈现队列族
+无关。
+
+**Android 上这一步不起作用**（既不会因此修好，也不会因此变坏）：SDL 的 Android 后端没有实现呈现查询钩子
+（`SDL_androidvideo.c` 只挂了 LoadLibrary / UnloadLibrary / GetInstanceExtensions / CreateSurface /
+DestroySurface 五个），平台无法回答时的默认是**返回 true**；且带 `SDL_WINDOW_VULKAN` 的窗口创建会隐式加载库。
+所以这条修复只对桌面端有意义。
+
+**26.2 走 GLFW，没有这个前提，不要搬运过来。**
+
 ## 当前功能
 
 - LavaFlow 自有的 Vulkan 实例、呈现设备、队列与交换链
@@ -194,7 +211,12 @@ build/libs/lavaflow-26.3-0.1.0-alpha.jar
 
 生成到 `lavaflow-version.txt` 的版本与提交会打进 JAR：设备启动时以一行 INFO 输出（`LavaFlow build <版本> (<提交>)`），并进入 `DeviceInfo` 的 `driverInfo`，因此崩溃报告的 “Graphics Drivers” 一行同样带提交。工作区有未提交改动时提交带 `-dirty` 后缀；环境无 `git` 时退化为 `unknown`。
 
-GitHub Actions 会对推送、拉取请求与手动触发运行构建，然后将 JAR 作为工作流产物发布。
+GitHub Actions 会对推送、拉取请求与手动触发运行构建，然后将 JAR 作为工作流产物发布。工作流执行
+`gradle --no-daemon clean check jar installDist`，然后**真跑一次渲染器**：在 lavapipe 上、开着验证层跑 600 帧。
+
+那一步断言的是"验证层确实应答了"（grep 到上面那条 INFO），而**不是**"退出码为 0"——见 smoke 一节，成功时渲染器
+什么都不打印。它需要安装三样东西：软件 Vulkan 驱动（`mesa-vulkan-drivers`）、**验证层本身**
+（`vulkan-validationlayers`）与虚拟显示（`xvfb`）。漏装验证层时渲染器仍会退出 0，步骤会按设计失败。
 
 ## smoke 渲染器
 
@@ -211,6 +233,54 @@ gradle run --args='--frames=120'
 ```
 
 窗口应通过 Vulkan 持续清屏，并在标题中显示所选 GPU 与帧数。关闭窗口时会演练有序的资源回收。
+
+注意：smoke 成功时**不向 stdout/stderr 输出任何内容**，所选设备与帧数只出现在窗口标题里。因此"退出码为 0"
+对一个根本没起来的渲染器同样成立——要把一次运行当真，就开着验证层跑，并确认那条 INFO 出现：
+
+```sh
+gradle installDist
+JAVA_OPTS=-Dlavaflow.validation=true build/install/lavaflow/bin/lavaflow --frames=600
+```
+
+## 验证与诊断
+
+### Vulkan 验证层（`lavaflow.validation`）
+
+加上 `-Dlavaflow.validation=true` 即可让 LavaFlow 请求 Khronos 验证层与 `VK_EXT_debug_utils`。该开关对两个
+后端都生效：Minecraft 适配器（`LavaFlowVulkanContext`）与独立渲染器（`LavaFlowRenderer`），两者都把验证层
+消息以 `[LavaFlow Vulkan validation]` 前缀打到 stderr。
+
+设计上，**一项无法被满足的请求会被报出来，而不是被丢掉**：
+
+| 情况 | 输出 |
+| --- | --- |
+| 层与调试扩展均可用 | `INFO: Vulkan validation enabled through the VK_LAYER_KHRONOS_validation layer` |
+| 层不可用 | `WARNING: lavaflow.validation is set, but the VK_LAYER_KHRONOS_validation layer is not available, so this run will not be validated.` |
+| 调试扩展不可用 | `WARNING: VK_EXT_debug_utils is unavailable, so validation messages have no way of reaching the log` |
+
+**所以"没有验证层消息"并不等于"没有问题"**：要确认它真的在验证，必须看见那条 INFO。曾经有一版实现是静默的——
+开关打开、什么都不发生，读起来与"验证通过"完全一样。
+
+Linux 桌面上需要**单独安装层本身**，只装驱动不够：
+
+```sh
+sudo apt-get install vulkan-validationlayers
+```
+
+**Android 上目前用不了。** 实测环境（见"已实测环境"）里既没有验证层也没有 `VK_EXT_debug_utils`，开关在移动端
+只会打印上面那两条 WARNING。要在手机上拿到验证输出，需要自行把验证层按 arm64 装进设备。
+
+### 在桌面上复现移动端画像（`lavaflow.baselineDevice`）
+
+`-Dlavaflow.baselineDevice=true` 把选中的设备描述成"除 `VK_KHR_swapchain` 外什么都没有"的样子：dynamic
+rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶点属性除数一并置为不可用。它存在的目的
+是在桌面上走通 LavaFlow 为移动端准备的回退路径，而不必每次真机试。
+
+五项各自还有独立的开关（`lavaflow.forceDescriptorSets`、`lavaflow.forceLegacyRenderPass`、
+`lavaflow.forceNoMultiDrawIndirect`、`lavaflow.forceNoVertexAttributeDivisor`、`lavaflow.forceNoFillModeNonSolid`），
+用于单独隔离一条路径。
+
+实测的 vivo PD1962 / Mali-G76 上报的能力集与此**完全一致**（五项全 false），所以这个开关是那台设备的忠实模拟。
 
 ## 在 Fabric 上安装
 
@@ -230,6 +300,7 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 
 ## 已知限制
 
+- **移动端无法运行验证层**：Android 的 FCL 环境里没有验证层，也没有 `VK_EXT_debug_utils`，因此 `lavaflow.validation` 在手机上只能打印两条 WARNING（见"验证与诊断"）。Mali 专属问题目前只能靠真机日志与桌面上的 `lavaflow.baselineDevice` 夹逼。
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
 - **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并返回其 `VkCommands.Unsupported`，AsyncParticles 随之走 CPU 粒子路径，永远走不到那句强转。
 - **GPU 粒子加速不可用的原因是结构性的，与版本或扩展能力无关**：AsyncParticles 的 Vulkan 渲染器要的不是裸 `VkDevice`，而是一个 Mojang `VulkanDevice` 包装对象（`vkDevice()`、`createCommandEncoder()`，其内部类还继承 `VulkanGpuBuffer`）。LavaFlow 的后端是另一套实现，只实现 `GpuDeviceBackend`，拿不出这个对象。因此即使设备支持 Vulkan 1.4 与全部可选扩展，该路径同样走不通。（曾按 Mali-G76 的 Vulkan 1.1 归因于能力不足，那是不对的：在 `device 1.4.x` 的设备上 AsyncParticles 会按 `apiVersion >= 1.3` 直接置 `pushDescriptor`/`synchronization2` 为真，反而会尝试启用。）
@@ -286,6 +357,9 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 | 模组 | Fabric Loader 0.19.5，Sodium 0.9.2+mc26.3 |
 
 该设备会走 LavaFlow 的**全部回退路径**（旧版渲染通道、descriptor-set 而非 push descriptor、逐条 `vkCmdDrawIndexed` 而非 multi-draw），因此这些路径已有真机覆盖。尚未覆盖的是桌面驱动，以及具备上述可选能力的设备。 资源重载（连续三轮）在该设备上跑通，管线关闭→描述符集失效的路径每轮都会走到。
+
+同一个 JAR（`0.1.0-alpha (64e8b68)`）后来在这台设备上又跑过一轮，JVM 参数带 `-Dlavaflow.validation=true`：
+结果证实移动端无法启用验证层（日志里只有那两条 WARNING），其余表现一致——启动、建世界、渲染、退出码 0，无崩溃。
 
 ## 致谢
 
