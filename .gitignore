@@ -10,3 +10,4 @@ logs/
 refs/
 run/
 .trae/
+build.log
