@@ -33,7 +33,31 @@ jobs:
       # which is wired to `check` only. Running just `test` silently executes one pure-logic test
       # class and skips everything that covers the backend.
       - name: Build and test
-        run: gradle --no-daemon clean check jar
+        run: gradle --no-daemon clean check jar installDist
+
+      # The runner has no GPU and no display, so the smoke run needs a software Vulkan driver and a
+      # virtual X server. lavapipe is deterministic, which is what makes an exact assertion here
+      # reasonable rather than flaky.
+      - name: Install a software Vulkan driver and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers xvfb
+
+      # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
+      # build where the renderer never started. The run is therefore validated, and the step asserts
+      # that the layer answered: a switch that silently does nothing must not pass.
+      - name: Smoke-test the renderer under the validation layer
+        run: |
+          export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            env JAVA_OPTS=-Dlavaflow.validation=true \
+            build/install/lavaflow/bin/lavaflow --frames=600 > build/smoke.log 2>&1
+          cat build/smoke.log
+          grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke.log
+          if grep -q "\[LavaFlow Vulkan validation\]" build/smoke.log; then
+            echo "::error::the validation layer reported findings during the smoke run"
+            exit 1
+          fi
 
       - name: Upload Fabric mod
         uses: actions/upload-artifact@v4
