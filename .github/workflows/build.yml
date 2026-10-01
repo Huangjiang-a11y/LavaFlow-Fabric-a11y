@@ -37,11 +37,35 @@ jobs:
       # flaky. The validation layer has to be installed as well: without it the renderer still exits
       # 0, it just reports that the switch could not be honoured, and the smoke step fails on purpose
       # rather than passing a run that validated nothing.
+      #
+      # The image points apt at azure.archive.ubuntu.com, which intermittently answers "Ign:" for
+      # every index; apt then retries for 20+ minutes before falling back to archive.ubuntu.com
+      # (actions/runner-images#14594, about 20% of runs). That step does not fail, it hangs — and this
+      # repository has seen it: the same workflow on the same commit took 11s on one branch and 455s
+      # on the other. apt's own retries and timeouts are therefore bounded, so an unhealthy mirror is
+      # abandoned in seconds rather than eating the job's 20-minute limit.
+      #
+      # The step is deliberately non-fatal. A missing package is caught downstream instead: without
+      # xvfb there is no xvfb-run, and the smoke step asserts that the validation layer actually
+      # answered. So a flaky mirror cannot turn the build red, while a missing package still can —
+      # and the warnings below say what is missing when that happens.
       - name: Install a software Vulkan driver, the validation layer and a virtual display
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers vulkan-validationlayers xvfb
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10"
+          if ! timeout 150 sudo apt-get $APT_OPTS update -qq; then
+            echo "::warning::apt-get update did not finish; continuing with what the image already has"
+          fi
+          if ! timeout 200 sudo apt-get $APT_OPTS install -y --no-install-recommends \
+                 mesa-vulkan-drivers vulkan-validationlayers xvfb; then
+            echo "::warning::apt-get install did not finish; the steps below assert what actually landed"
+          fi
+          for package in mesa-vulkan-drivers vulkan-validationlayers xvfb; do
+            dpkg -s "$package" >/dev/null 2>&1 || echo "::warning::$package is not installed"
+          done
+          command -v xvfb-run >/dev/null 2>&1 || echo "::warning::xvfb-run is missing"
+          ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1 \
+            || echo "::warning::no lavapipe ICD found; the smoke step will not be able to create a device"
 
       # `check` rather than `test`: the Vulkan-facing tests live in the minecraft-test source set,
       # which is wired to `check` only. Running just `test` silently executes one pure-logic test
@@ -49,33 +73,8 @@ jobs:
       - name: Build and test
         run: |
           export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
-          LOG="${RUNNER_TEMP:-/tmp}/gradle-build.log"
-          df -h / | tail -1
-          set +e
           xvfb-run -a -s "-screen 0 1280x720x24" \
-            gradle --no-daemon --stacktrace clean check jar installDist 2>&1 | tee "$LOG"
-          status=${PIPESTATUS[0]}
-          set -e
-          if [ "$status" -ne 0 ]; then
-            # 失败原因必须能从注解里读到：完整日志需要鉴权，注解不需要。
-            echo "::error::gradle exited with code $status"
-            # 注解有条数上限，因此最有用的信息排在最前：**有失败**的测试类的失败消息。
-            # 早前把这一节放在日志摘录之后，结果失败消息正好被上限截掉，等于白报一轮。
-            for f in build/test-results/*/TEST-*.xml; do
-              [ -f "$f" ] || continue
-              counts="$(grep -oaE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$f" | head -1)"
-              case "$counts" in
-                *'failures="0"'*'errors="0"'*) continue ;;
-              esac
-              echo "::error::$(basename "$f"): $counts"
-              grep -oaE 'message="[^"]{0,220}"' "$f" | head -3 | sed 's/message=//;s/::/:/g' \
-                | while IFS= read -r m; do echo "::error::$(basename "$f") $m"; done || true
-            done
-            grep -aE 'FAILURE:|What went wrong|> Task .* FAILED|error:|Caused by:|Could not|UnsatisfiedLink|No space left' "$LOG" \
-              | head -6 | sed 's/::/:/g' | while IFS= read -r line; do echo "::error::$line"; done || true
-            exit "$status"
-          fi
-          grep -aE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' build/test-results/*/TEST-*.xml | sed 's/^/  /' || true
+            gradle --no-daemon clean check jar installDist
 
       # The context test skips itself when DISPLAY is unset (Assumptions.assumeTrue), and a skipped
       # test leaves the build green all the same. Without this step a reordered workflow would
@@ -84,17 +83,11 @@ jobs:
       - name: Assert the context test ran rather than skipped
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowVulkanContextTest.xml
-          if [ ! -f "$report" ]; then
-            echo "::error::$report is missing"
-            ls -R build/test-results 2>/dev/null | head -30 || true
-            exit 1
-          fi
-          counts="$(grep -oaE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report" | head -1)"
-          echo "context test: $counts"
-          case "$counts" in
-            *'tests="1"'*'skipped="0"'*'failures="0"'*'errors="0"'*) echo "ok: it ran rather than skipped" ;;
-            *) echo "::error::context test did not run cleanly: $counts"; exit 1 ;;
-          esac
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'tests="1"' "$report"
+          grep -q 'skipped="0"' "$report"
+          grep -q 'failures="0"' "$report"
+          echo "context test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
@@ -106,11 +99,7 @@ jobs:
             env JAVA_OPTS=-Dlavaflow.validation=true \
             build/install/lavaflow/bin/lavaflow --frames=600 > build/smoke.log 2>&1
           cat build/smoke.log
-          if ! grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke.log; then
-            echo "::error::the validation layer did not confirm it was active"
-            tail -5 build/smoke.log | sed 's/::/:/g' | while IFS= read -r line; do echo "::error::$line"; done || true
-            exit 1
-          fi
+          grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke.log
           if grep -q "\[LavaFlow Vulkan validation\]" build/smoke.log; then
             echo "::error::the validation layer reported findings during the smoke run"
             exit 1
