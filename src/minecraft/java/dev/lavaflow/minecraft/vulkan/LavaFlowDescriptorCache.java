@@ -46,6 +46,9 @@ final class LavaFlowDescriptorCache {
     private final Map<Key, CachedSet> sets = new HashMap<>();
     private final Map<Key, Long> bufferViews = new HashMap<>();
     private final Map<Long, List<Key>> byResource = new HashMap<>();
+    // Reused across buffer-view lookups: the key is only read on lookup, and a stored key owns its array
+    // (see Key.copy). Not thread-safe, like the rest of this cache — it lives on the render thread.
+    private final long[] bufferViewKey = new long[3];
     private int poolIndex;
 
     private record CachedSet(long set, long pool) {}
@@ -74,9 +77,12 @@ final class LavaFlowDescriptorCache {
         }
 
         @Override public int hashCode() { return hash; }
+
+        /** Returns a key that owns its array, so a caller may reuse the array it passed in. */
+        Key copy() { return new Key(owner, values.clone()); }
     }
 
-    /** Returns the set cached for {@code key}, or {@code 0} when there is none. */
+    /** Returns the set cached for {@code key}, or {@code 0} when there is none. The key is only read. */
     long lookup(Key key) {
         CachedSet cached = sets.get(key);
         return cached == null ? 0L : cached.set();
@@ -98,10 +104,14 @@ final class LavaFlowDescriptorCache {
                 int result = vkAllocateDescriptorSets(context.device(), allocation, out);
                 if (result == VK_SUCCESS) {
                     long set = out.get(0);
-                    sets.put(key, new CachedSet(set, pools.get(poolIndex)));
-                    for (long handle : resourceHandles) registerResource(handle, key);
+                    // The key is retained by both maps below, so it is copied on the way in. Callers may
+                    // then build keys from scratch arrays they reuse across calls — see
+                    // LavaFlowRenderPass.pushDescriptors, which runs on every descriptor change.
+                    Key stored = key.copy();
+                    sets.put(stored, new CachedSet(set, pools.get(poolIndex)));
+                    for (long handle : resourceHandles) registerResource(handle, stored);
                     // The layout is half the key, so the entry must not outlive it either.
-                    registerResource(layout, key);
+                    registerResource(layout, stored);
                     return set;
                 }
                 if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
@@ -115,8 +125,11 @@ final class LavaFlowDescriptorCache {
 
     /** Returns a buffer view for the given range, creating and caching it on first use. */
     long bufferView(long buffer, int format, long offset, long length) {
-        Key key = new Key(format, new long[]{buffer, offset, length});
-        Long cached = bufferViews.get(key);
+        bufferViewKey[0] = buffer;
+        bufferViewKey[1] = offset;
+        bufferViewKey[2] = length;
+        Key probe = new Key(format, bufferViewKey);
+        Long cached = bufferViews.get(probe);
         if (cached != null) return cached;
         try (MemoryStack stack = stackPush()) {
             VkBufferViewCreateInfo info = VkBufferViewCreateInfo
@@ -124,8 +137,9 @@ final class LavaFlowDescriptorCache {
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateBufferView(context.device(), info, null, out), "vkCreateBufferView");
             long view = out.get(0);
-            bufferViews.put(key, view);
-            registerResource(buffer, key);
+            Key stored = probe.copy();
+            bufferViews.put(stored, view);
+            registerResource(buffer, stored);
             return view;
         }
     }

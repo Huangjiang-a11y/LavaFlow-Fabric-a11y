@@ -43,7 +43,14 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     // Dynamic-rendering pipelines keyed by the VkFormat of the depth attachment (VK_FORMAT_UNDEFINED = no depth).
     // Dynamic rendering requires the pipeline's depthAttachmentFormat to match the render pass, so the format
     // is part of the cache key rather than a boolean that assumes a fixed format.
-    private final Map<Integer, Long> dynamicPipelines = new HashMap<>();
+    //
+    // Parallel arrays rather than a Map: this is consulted on every pipeline bind, the distinct depth formats
+    // are a handful, and a boxed Integer key would allocate for every format above the Integer cache — which
+    // VK_FORMAT_D24_UNORM_S8_UINT (129) and VK_FORMAT_D32_SFLOAT_S8_UINT (130) both are. Mirrors the
+    // legacyRenderPasses/legacyPipelines pair below.
+    private int[] dynamicFormats = new int[4];
+    private long[] dynamicPipelines = new long[4];
+    private int dynamicPipelineCount;
     private long[] legacyRenderPasses = new long[4];
     private long[] legacyPipelines = new long[4];
     private int legacyPipelineCount;
@@ -239,8 +246,10 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     long pipelineFor(int depthVkFormat, long renderPass) {
         if (closed) throw new IllegalStateException("Pipeline is closed");
         if (device.context().dynamicRendering()) {
-            Long cached = dynamicPipelines.get(depthVkFormat);
-            return cached != null ? cached : createDynamicPipeline(depthVkFormat);
+            for (int i = 0; i < dynamicPipelineCount; i++) {
+                if (dynamicFormats[i] == depthVkFormat) return dynamicPipelines[i];
+            }
+            return createDynamicPipeline(depthVkFormat);
         }
         for (int i = 0; i < legacyPipelineCount; i++) {
             if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
@@ -249,10 +258,18 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     }
 
     private synchronized long createDynamicPipeline(int depthVkFormat) {
-        Long cached = dynamicPipelines.get(depthVkFormat);
-        if (cached != null) return cached;
+        for (int i = 0; i < dynamicPipelineCount; i++) {
+            if (dynamicFormats[i] == depthVkFormat) return dynamicPipelines[i];
+        }
         long pipeline = createGraphicsPipeline(depthVkFormat, 0);
-        dynamicPipelines.put(depthVkFormat, pipeline);
+        if (dynamicPipelineCount == dynamicFormats.length) {
+            int grown = dynamicPipelineCount * 2;
+            dynamicFormats = Arrays.copyOf(dynamicFormats, grown);
+            dynamicPipelines = Arrays.copyOf(dynamicPipelines, grown);
+        }
+        dynamicFormats[dynamicPipelineCount] = depthVkFormat;
+        dynamicPipelines[dynamicPipelineCount] = pipeline;
+        dynamicPipelineCount++;
         return pipeline;
     }
 
@@ -441,8 +458,8 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         // it. A pipeline compiled later can be handed the same handle, and an entry left behind would
         // answer a lookup for a layout it was never built for instead of missing the cache.
         device.invalidateDescriptorCache(descriptorSetLayout);
-        long[] nativeDynamicPipelines = dynamicPipelines.values().stream().mapToLong(Long::longValue).toArray();
-        dynamicPipelines.clear();
+        long[] nativeDynamicPipelines = Arrays.copyOf(dynamicPipelines, dynamicPipelineCount);
+        dynamicPipelineCount = 0;
         long[] nativeLegacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount);
         legacyPipelineCount = 0;
         device.defer(() -> {
