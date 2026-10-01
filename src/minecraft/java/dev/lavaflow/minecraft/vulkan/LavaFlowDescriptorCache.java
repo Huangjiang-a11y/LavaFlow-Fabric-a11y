@@ -1,5 +1,6 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import org.lwjgl.vulkan.*;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferViewCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
@@ -49,6 +50,7 @@ final class LavaFlowDescriptorCache {
     // Reused across buffer-view lookups: the key is only read on lookup, and a stored key owns its
     // array (see Key.copy). Not thread-safe, like the rest of this cache — it lives on the render thread.
     private final long[] bufferViewKey = new long[3];
+    private final WriteScratch writeScratch = new WriteScratch();
     private int poolIndex;
 
     private record CachedSet(long set, long pool) {}
@@ -177,7 +179,10 @@ final class LavaFlowDescriptorCache {
         });
     }
 
+    WriteScratch writes() { return writeScratch; }
+
     void destroy() {
+        writeScratch.close();
         for (long view : bufferViews.values()) vkDestroyBufferView(context.device(), view, null);
         for (long pool : pools) vkDestroyDescriptorPool(context.device(), pool, null);
         bufferViews.clear();
@@ -185,6 +190,62 @@ final class LavaFlowDescriptorCache {
         byResource.clear();
         pools.clear();
         poolIndex = 0;
+    }
+
+    /**
+     * Reusable structures for building descriptor writes.
+     *
+     * <p>Building the writes for one set of bindings used to allocate, per descriptor change: a
+     * {@code VkWriteDescriptorSet.Buffer}, a {@code VkWriteDescriptorSet} view per entry, and a buffer or
+     * image info per entry. Descriptor changes happen far more often than sets are allocated, so these are
+     * kept between pushes and grown on demand instead.
+     *
+     * <p>Heap-allocated on purpose: each view holds a pointer into the buffer it came from, so a
+     * stack-allocated buffer would leave them dangling once the call returned. Freed with the pools in
+     * {@link #destroy()}.
+     *
+     * <p>The structures keep every field a previous push left them, so callers must write every field they
+     * rely on and clear the union members they do not — see LavaFlowRenderPass.buildWrites.
+     *
+     * <p>Not thread-safe, like the rest of this cache.
+     */
+    static final class WriteScratch implements AutoCloseable {
+        private VkWriteDescriptorSet.Buffer writeBuffer;
+        private VkWriteDescriptorSet[] writes = new VkWriteDescriptorSet[0];
+        private VkDescriptorBufferInfo.Buffer bufferInfoBuffer;
+        private VkDescriptorBufferInfo[] bufferInfos = new VkDescriptorBufferInfo[0];
+        private VkDescriptorImageInfo.Buffer imageInfoBuffer;
+        private VkDescriptorImageInfo[] imageInfos = new VkDescriptorImageInfo[0];
+
+        /** Returns a write structure per entry, reusing the ones kept from the previous call. */
+        VkWriteDescriptorSet.Buffer writes(int count) {
+            if (writeBuffer == null || writeBuffer.capacity() < count) {
+                close();
+                writeBuffer = VkWriteDescriptorSet.calloc(count);
+                writes = new VkWriteDescriptorSet[count];
+                for (int i = 0; i < count; i++) writes[i] = writeBuffer.get(i);
+                bufferInfoBuffer = VkDescriptorBufferInfo.calloc(count);
+                bufferInfos = new VkDescriptorBufferInfo[count];
+                for (int i = 0; i < count; i++) bufferInfos[i] = bufferInfoBuffer.get(i);
+                imageInfoBuffer = VkDescriptorImageInfo.calloc(count);
+                imageInfos = new VkDescriptorImageInfo[count];
+                for (int i = 0; i < count; i++) imageInfos[i] = imageInfoBuffer.get(i);
+            }
+            return writeBuffer;
+        }
+
+        VkWriteDescriptorSet write(int index) { return writes[index]; }
+        VkDescriptorBufferInfo bufferInfo(int index) { return bufferInfos[index]; }
+        VkDescriptorImageInfo imageInfo(int index) { return imageInfos[index]; }
+
+        @Override public void close() {
+            if (writeBuffer != null) { writeBuffer.free(); writeBuffer = null; }
+            if (bufferInfoBuffer != null) { bufferInfoBuffer.free(); bufferInfoBuffer = null; }
+            if (imageInfoBuffer != null) { imageInfoBuffer.free(); imageInfoBuffer = null; }
+            writes = new VkWriteDescriptorSet[0];
+            bufferInfos = new VkDescriptorBufferInfo[0];
+            imageInfos = new VkDescriptorImageInfo[0];
+        }
     }
 
     private long createPool() {

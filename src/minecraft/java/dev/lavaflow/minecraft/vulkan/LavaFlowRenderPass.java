@@ -392,6 +392,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (!(pipeline instanceof LavaFlowRenderPipeline lavaPipeline)) {
             throw new IllegalArgumentException("Pipeline must be a LavaFlowRenderPipeline");
         }
+        LavaFlowFrameStats.pipelineBind(this.pipeline == lavaPipeline);
         this.pipeline = lavaPipeline;
         // One slot per compiled uniform; the frontend replays the uniforms it already holds right after
         // this call, and 26.3 resolves names to slots there rather than here.
@@ -571,6 +572,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 break;
             }
         }
+        LavaFlowFrameStats.descriptorPushed();
         if (context.pushDescriptors()) {
             try (MemoryStack stack = stackPush()) {
                 vkCmdPushDescriptorSetKHR(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
