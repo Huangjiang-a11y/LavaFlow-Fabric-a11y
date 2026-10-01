@@ -1,6 +1,10 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Frame pacing statistics for LavaFlow development, enabled with {@code -Dlavaflow.frameStats=true}.
@@ -31,6 +35,16 @@ public final class LavaFlowFrameStats {
     private static long submits;
     private static long submitsAtReport;
     private static long framesAtReport;
+    // Who is churning: the descriptor cache invalidation counter says how often a retirement hit the cache,
+    // these say what was retired. They exist because a run showed ~21 retirements per frame at the main
+    // menu, which is far too many to guess at.
+    private static long retiredBuffers;
+    private static long retiredViews;
+    private static long retiredSamplers;
+    private static long retiredBuffersAtReport;
+    private static long retiredViewsAtReport;
+    private static long retiredSamplersAtReport;
+    private static final Map<String, Integer> retiredViewLabels = new HashMap<>();
     private static long pipelineBinds;
     private static long pipelineBindsAtReport;
     private static long pipelineRebinds;
@@ -92,6 +106,39 @@ public final class LavaFlowFrameStats {
         descriptorPushes++;
     }
 
+    /** Counts one retired GPU buffer. */
+    public static void bufferRetired() {
+        if (!ENABLED) return;
+        retiredBuffers++;
+    }
+
+    /** Counts one retired texture view, and remembers the label of the texture it viewed. */
+    public static void viewRetired(String label) {
+        if (!ENABLED) return;
+        retiredViews++;
+        if (label != null) retiredViewLabels.merge(label, 1, Integer::sum);
+    }
+
+    /** Counts one retired sampler. */
+    public static void samplerRetired() {
+        if (!ENABLED) return;
+        retiredSamplers++;
+    }
+
+    /** The busiest texture labels among the view retirements since the last report, most retired first. */
+    private static String topRetiredViewLabels() {
+        if (retiredViewLabels.isEmpty()) return "-";
+        List<Map.Entry<String, Integer>> top = new ArrayList<>(retiredViewLabels.entrySet());
+        top.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < Math.min(3, top.size()); i++) {
+            if (i > 0) out.append(", ");
+            out.append(top.get(i).getKey()).append('=').append(top.get(i).getValue());
+        }
+        retiredViewLabels.clear();
+        return out.toString();
+    }
+
     private LavaFlowFrameStats() {}
 
     /** Records one rendered frame. */
@@ -143,19 +190,27 @@ public final class LavaFlowFrameStats {
         double bindsPerFrame = framesSince == 0 ? 0 : bindsSince / (double) framesSince;
         double rebindRatio = bindsSince == 0 ? 0 : rebindsSince / (double) bindsSince;
         double pushesPerFrame = framesSince == 0 ? 0 : (descriptorPushes - descriptorPushesAtReport) / (double) framesSince;
+        double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
+        double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
+        double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
+        String topViewLabels = topRetiredViewLabels();
         framesAtReport = totalFrames;
         descriptorSetsAtReport = descriptorSets;
         descriptorHitsAtReport = descriptorHits;
         descriptorInvalidationsAtReport = descriptorInvalidations;
         barriersAtReport = barriers;
         submitsAtReport = submits;
+        retiredBuffersAtReport = retiredBuffers;
+        retiredViewsAtReport = retiredViews;
+        retiredSamplersAtReport = retiredSamplers;
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         descriptorPushesAtReport = descriptorPushes;
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
                         + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
-                        + " binds_per_frame={11} rebind_ratio={12} pushes_per_frame={13}",
+                        + " binds_per_frame={11} rebind_ratio={12} pushes_per_frame={13}"
+                        + " retired_buffer={14} retired_view={15} retired_sampler={16} top_retired_view={17}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -169,6 +224,10 @@ public final class LavaFlowFrameStats {
                 String.format("%.1f", submitsPerFrame),
                 String.format("%.1f", bindsPerFrame),
                 String.format("%.3f", rebindRatio),
-                String.format("%.1f", pushesPerFrame));
+                String.format("%.1f", pushesPerFrame),
+                String.format("%.2f", buffersPerFrame),
+                String.format("%.2f", viewsPerFrame),
+                String.format("%.2f", samplersPerFrame),
+                topViewLabels);
     }
 }

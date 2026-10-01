@@ -169,6 +169,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (closed) return;
         if (mappingCount != 0) throw new IllegalStateException("Cannot close a mapped buffer");
         closed = true;
+        LavaFlowFrameStats.bufferRetired();
         device.invalidateDescriptorCache(buffer);
         device.defer(this::destroyNow);
     }
