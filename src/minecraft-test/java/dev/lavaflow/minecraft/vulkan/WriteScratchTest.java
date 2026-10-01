@@ -47,7 +47,7 @@ class WriteScratchTest {
         try {
             VkWriteDescriptorSet.Buffer first = scratch.writes(3);
             VkWriteDescriptorSet view = scratch.write(0);
-            VkDescriptorBufferInfo info = scratch.bufferInfo(0);
+            VkDescriptorBufferInfo.Buffer info = scratch.bufferInfo(0);
 
             VkWriteDescriptorSet.Buffer second = scratch.writes(3);
 

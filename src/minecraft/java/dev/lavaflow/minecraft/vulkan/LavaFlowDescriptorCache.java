@@ -212,10 +212,10 @@ final class LavaFlowDescriptorCache {
     static final class WriteScratch implements AutoCloseable {
         private VkWriteDescriptorSet.Buffer writeBuffer;
         private VkWriteDescriptorSet[] writes = new VkWriteDescriptorSet[0];
-        private VkDescriptorBufferInfo.Buffer bufferInfoBuffer;
-        private VkDescriptorBufferInfo[] bufferInfos = new VkDescriptorBufferInfo[0];
-        private VkDescriptorImageInfo.Buffer imageInfoBuffer;
-        private VkDescriptorImageInfo[] imageInfos = new VkDescriptorImageInfo[0];
+        // One single-element buffer per entry: pBufferInfo/pImageInfo take a pointer to one info struct, so
+        // the infos cannot be shared between entries the way the write structures can be.
+        private VkDescriptorBufferInfo.Buffer[] bufferInfos = new VkDescriptorBufferInfo.Buffer[0];
+        private VkDescriptorImageInfo.Buffer[] imageInfos = new VkDescriptorImageInfo.Buffer[0];
 
         /** Returns a write structure per entry, reusing the ones kept from the previous call. */
         VkWriteDescriptorSet.Buffer writes(int count) {
@@ -224,27 +224,25 @@ final class LavaFlowDescriptorCache {
                 writeBuffer = VkWriteDescriptorSet.calloc(count);
                 writes = new VkWriteDescriptorSet[count];
                 for (int i = 0; i < count; i++) writes[i] = writeBuffer.get(i);
-                bufferInfoBuffer = VkDescriptorBufferInfo.calloc(count);
-                bufferInfos = new VkDescriptorBufferInfo[count];
-                for (int i = 0; i < count; i++) bufferInfos[i] = bufferInfoBuffer.get(i);
-                imageInfoBuffer = VkDescriptorImageInfo.calloc(count);
-                imageInfos = new VkDescriptorImageInfo[count];
-                for (int i = 0; i < count; i++) imageInfos[i] = imageInfoBuffer.get(i);
+                bufferInfos = new VkDescriptorBufferInfo.Buffer[count];
+                for (int i = 0; i < count; i++) bufferInfos[i] = VkDescriptorBufferInfo.calloc(1);
+                imageInfos = new VkDescriptorImageInfo.Buffer[count];
+                for (int i = 0; i < count; i++) imageInfos[i] = VkDescriptorImageInfo.calloc(1);
             }
             return writeBuffer;
         }
 
         VkWriteDescriptorSet write(int index) { return writes[index]; }
-        VkDescriptorBufferInfo bufferInfo(int index) { return bufferInfos[index]; }
-        VkDescriptorImageInfo imageInfo(int index) { return imageInfos[index]; }
+        VkDescriptorBufferInfo.Buffer bufferInfo(int index) { return bufferInfos[index]; }
+        VkDescriptorImageInfo.Buffer imageInfo(int index) { return imageInfos[index]; }
 
         @Override public void close() {
             if (writeBuffer != null) { writeBuffer.free(); writeBuffer = null; }
-            if (bufferInfoBuffer != null) { bufferInfoBuffer.free(); bufferInfoBuffer = null; }
-            if (imageInfoBuffer != null) { imageInfoBuffer.free(); imageInfoBuffer = null; }
+            for (VkDescriptorBufferInfo.Buffer info : bufferInfos) info.free();
+            for (VkDescriptorImageInfo.Buffer info : imageInfos) info.free();
             writes = new VkWriteDescriptorSet[0];
-            bufferInfos = new VkDescriptorBufferInfo[0];
-            imageInfos = new VkDescriptorImageInfo[0];
+            bufferInfos = new VkDescriptorBufferInfo.Buffer[0];
+            imageInfos = new VkDescriptorImageInfo.Buffer[0];
         }
     }
 
