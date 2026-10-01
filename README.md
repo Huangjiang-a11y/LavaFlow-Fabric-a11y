@@ -244,7 +244,7 @@ AsyncParticles 在 `Backends` 的静态初始化器里按后端名分支：名�
 
 - **移动端无法运行验证层**：Android 的 FCL 环境里没有验证层，也没有 `VK_EXT_debug_utils`，因此 `lavaflow.validation` 在手机上只能打印两条 WARNING（见"验证与诊断"）。Mali 专属问题目前只能靠真机日志与桌面上的 `lavaflow.baselineDevice` 夹逼。
 - **wireframe 会被降级为实心，而不是被跳过**：设备不支持非 solid fill mode 时，`LavaFlowRenderPipeline` 把线框多边形模式改写为 `VK_POLYGON_MODE_FILL` 后照常创建管线，因此线框/调试渲染表现为实心、**且不报错**。26.3 的行为不同：26.3 的 `DeviceFeatures` 多了 `wireframeFillMode` 字段，由其驱动 Minecraft 主动跳过这些可选管线并打 ERROR。**两分支此处不要互相搬运。**
-- **本分支走 GLFW，26.3 走 SDL**：26.3 的 `createInstance()` 必须显式调用 `SDL_Vulkan_LoadLibrary`——它的 `createDevice` 按设计跑在窗口之前，此时无人加载该库，漏掉会让设备查找抛出**指向错误方向**的报错（`No Vulkan 1.1 device with a combined graphics and presentation queue family found`，真因与呈现队列族无关）。本分支用 GLFW，没有这个前提，**不要搬运。**
+- **本分支走 GLFW，26.3 走 SDL**：26.3 的 `createInstance()` 必须显式调用 `SDL_Vulkan_LoadLibrary`——它的 `createDevice` 按设计跑在窗口之前，此时无人加载该库，漏掉会让设备查找抛出**指向错误方向**的报错（`No Vulkan 1.1 device with a graphics queue family and a presentable queue family found`，真因是那句 `SDL_Vulkan_LoadLibrary` 没跑到、与设备本身无关）。本分支用 GLFW，没有这个前提，**不要搬运。**
 - **AsyncParticles 需靠 mixin 兜底**：把 LavaFlow 的设备强转成 Mojang `VulkanDevice` 必然失败，且发生在静态初始化器里（会拖垮整个游戏）。守卫见上文"AsyncParticles 兼容性"。
 - **GPU 粒子加速不可用的原因是结构性的**：与版本或扩展能力无关——需要的不是一个裸 `VkDevice`，而是一整套 Mojang 后端对象。即使设备支持 Vulkan 1.4 与全部可选扩展，该路径同样走不通。详见上文。
 - **`TextureAtlasMaxSizeDebugMixin` 是诊断兼 workaround**：它在 `TextureAtlas.maxSupportedTextureSize()` 返回时记录原始值、并用反射探测 `GpuDevice` 实际暴露的方法；当该值 **≤ 0** 时改写为 8192。26.3 上的对应 mixin（`TextureAtlasMaxSizeFallbackMixin`）仅在该情形下介入并记一条 WARN，本分支则每次调用都会记录 INFO。底层限制传递修好后可以去掉那次 `setReturnValue`。
