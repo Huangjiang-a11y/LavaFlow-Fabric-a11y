@@ -18,7 +18,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
 
     private final LavaFlowDevice device;
     private final LavaFlowCommandEncoder encoder;
-    private List<ByteBuffer> cpuAllocations = new ArrayList<>();
+    private final CpuSlabs cpuSlabs = new CpuSlabs();
     private final List<MappedBlock> mappedBlocks = new ArrayList<>();
     private final List<GpuBlock> gpuBlocks = new ArrayList<>();
     private int mappedBlockIndex = -1;
@@ -47,15 +47,21 @@ final class LavaFlowTransientMemory implements TransientMemory {
         }
     }
 
+    /**
+     * Releases one submit batch's CPU slabs once the work that read them has completed.
+     *
+     * <p>The slabs come from {@link MemoryUtil#memAlignedAlloc}, so they are released with the matching
+     * free. Individual allocations are not released here: they are slices of these slabs.
+     */
     static final class Retired implements AutoCloseable {
-        private final List<ByteBuffer> cpuAllocations;
+        private final List<ByteBuffer> slabs;
 
-        Retired(List<ByteBuffer> cpuAllocations) {
-            this.cpuAllocations = cpuAllocations;
+        Retired(List<ByteBuffer> slabs) {
+            this.slabs = slabs;
         }
 
         @Override public void close() {
-            for (ByteBuffer allocation : cpuAllocations) MemoryUtil.memFree(allocation);
+            for (ByteBuffer slab : slabs) MemoryUtil.memAlignedFree(slab);
         }
     }
 
@@ -66,9 +72,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
 
     @Override public ByteBuffer allocateCpu(long size, long alignment, long submitIndex, long lifetime) {
         if (size > Integer.MAX_VALUE) throw new IllegalArgumentException("CPU allocation exceeds 2 GiB");
-        ByteBuffer result = MemoryUtil.memAlloc((int)size);
-        cpuAllocations.add(result);
-        return result;
+        return cpuSlabs.allocate((int) size, alignment);
     }
 
     @Override public GpuBufferSlice.MappedView allocateStaging(long size, long alignment, int usage,
@@ -215,10 +219,9 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     Retired retire() {
-        if (cpuAllocations.isEmpty()) return null;
-        Retired retired = new Retired(cpuAllocations);
-        cpuAllocations = new ArrayList<>();
-        return retired;
+        List<ByteBuffer> slabs = cpuSlabs.detach();
+        if (slabs.isEmpty()) return null;
+        return new Retired(slabs);
     }
 
     void recycle() {
@@ -237,6 +240,72 @@ final class LavaFlowTransientMemory implements TransientMemory {
         mappedBlocks.clear();
         gpuBlocks.clear();
         mappedBlockIndex = gpuBlockIndex = -1;
+    }
+
+    /**
+     * Hands out CPU allocations from large slabs instead of one native allocation per request.
+     *
+     * <p>Minecraft asks for a transient CPU buffer per upload, and chunk meshing does that many times in
+     * a frame; a malloc/free pair per request is needless work when they all die together at the end of
+     * the submit batch. Each slice points into a slab, and the slabs are what the batch releases — see
+     * {@link Retired}.
+     *
+     * <p>A returned buffer has capacity exactly {@code size}, the same native byte order that
+     * {@code MemoryUtil.memAlloc} would have given, and an absolute address that honours {@code alignment}.
+     * The last part is why slabs come from {@code memAlignedAlloc}: aligning an offset inside a merely
+     * malloc'd slab would not align the address the caller is handed.
+     *
+     * <p>Not thread-safe: one instance belongs to one submit slot, used from the render thread.
+     */
+    static final class CpuSlabs {
+        private static final int SLAB_SIZE = 1024 * 1024;
+        private static final long DEFAULT_ALIGNMENT = 256;
+
+        private List<ByteBuffer> slabs = new ArrayList<>();
+        private ByteBuffer current;
+        private long currentAlignment;
+        private long offset;
+
+        ByteBuffer allocate(int size, long alignment) {
+            if (size < 0) throw new IllegalArgumentException("size must not be negative");
+            long required = alignToPowerOfTwo(Math.max(1L, alignment));
+            if (current == null || required > currentAlignment
+                    || alignUp(offset, required) + size > current.capacity()) {
+                long slabAlignment = Math.max(DEFAULT_ALIGNMENT, required);
+                long slabSize = Math.max(SLAB_SIZE, alignUp(size, slabAlignment));
+                if (slabAlignment > Integer.MAX_VALUE || slabSize > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("slab allocation exceeds " + Integer.MAX_VALUE);
+                }
+                current = MemoryUtil.memAlignedAlloc((int) slabAlignment, (int) slabSize);
+                currentAlignment = slabAlignment;
+                offset = 0;
+                slabs.add(current);
+            }
+            long start = alignUp(offset, required);
+            ByteBuffer slice = current.slice((int) start, size);
+            offset = start + size;
+            return slice;
+        }
+
+        /** Hands the slabs over, leaving this allocator empty for the next batch. */
+        List<ByteBuffer> detach() {
+            List<ByteBuffer> handed = slabs;
+            slabs = new ArrayList<>();
+            current = null;
+            currentAlignment = 0;
+            offset = 0;
+            return handed;
+        }
+
+        private static long alignToPowerOfTwo(long value) {
+            long rounded = Long.highestOneBit(value);
+            return rounded == value ? value : rounded << 1;
+        }
+
+        private static long alignUp(long value, long alignment) {
+            long remainder = value % alignment;
+            return remainder == 0 ? value : value + (alignment - remainder);
+        }
     }
 
     private static long alignUp(long value, long alignment) {

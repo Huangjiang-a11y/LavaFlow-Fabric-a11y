@@ -60,4 +60,22 @@ class LavaFlowDescriptorCacheTest {
         assertEquals(new LavaFlowDescriptorCache.Key(LAYOUT, resources).hashCode(),
                 new LavaFlowDescriptorCache.Key(LAYOUT, resources.clone()).hashCode());
     }
+
+    /**
+     * A key the cache keeps must not follow later writes to the array it was built from. Both callers
+     * that build keys out of arrays they reuse — {@code pushDescriptors} and {@code bufferView} — rely on
+     * this, and a key that kept the array would silently change what the cache had already accepted.
+     */
+    @Test
+    void copiedKeysDoNotFollowTheCallersArray() {
+        long layout = 0x0000_7F00_0000_1234L;
+        long[] reused = {0x1000L, 0x2000L};
+        LavaFlowDescriptorCache.Key probe = new LavaFlowDescriptorCache.Key(layout, reused);
+        LavaFlowDescriptorCache.Key stored = probe.copy();
+
+        reused[0] = 0x9999L;
+
+        assertNotEquals(probe, stored, "a stored key must keep the values it was built from");
+        assertEquals(new LavaFlowDescriptorCache.Key(layout, new long[]{0x1000L, 0x2000L}), stored);
+    }
 }

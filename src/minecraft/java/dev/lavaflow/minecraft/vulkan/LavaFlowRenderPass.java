@@ -77,6 +77,13 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int scissorHeight;
     private final long[] pendingVertexBuffers = new long[RenderPass.MAX_VERTEX_BUFFERS];
     private final long[] pendingVertexOffsets = new long[RenderPass.MAX_VERTEX_BUFFERS];
+    // Scratch arrays for the descriptor-set path. That path runs on every descriptor change rather than
+    // once per set — a set is only allocated when a binding combination has not been seen before — so the
+    // garbage it used to produce was worth removing. They are sized exactly to the binding count because
+    // the cache key hashes the whole array: a longer one would put its tail into the key. Safe to
+    // overwrite on return — the cache copies the key it retains (see allocateAndStore).
+    private long[] keyScratch = new long[0];
+    private long[] resourceScratch = new long[0];
     private int pendingVertexMask;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
@@ -578,8 +585,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // combination that has not been seen before.
         boolean dynamic = pipeline.dynamicUniforms();
         int entryCount = entries.size();
-        long[] keyValues = new long[entryCount * 3];
-        long[] resourceHandles = new long[entryCount * 2];
+        if (keyScratch.length != entryCount * 3) keyScratch = new long[entryCount * 3];
+        if (resourceScratch.length != entryCount * 2) resourceScratch = new long[entryCount * 2];
+        long[] keyValues = keyScratch;
+        long[] resourceHandles = resourceScratch;
+        // Every slot must be written on every push: a sampled image fills only two of its three slots, so
+        // without this a value left by an earlier push would become part of this key, and two identical
+        // binding sets would stop producing identical keys.
+        java.util.Arrays.fill(keyValues, 0L);
         int handleCount = 0;
         int dynamicCount = 0;
         for (int i = 0; i < entryCount; i++) {
