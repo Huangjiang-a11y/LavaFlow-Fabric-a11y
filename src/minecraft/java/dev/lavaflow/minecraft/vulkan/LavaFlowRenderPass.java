@@ -399,7 +399,11 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     @Override public void pushDebugGroup(Supplier<String> label) {}
     @Override public void popDebugGroup() {}
     @Override public void setPipeline(RenderPipeline pipeline) {
-        this.pipeline = encoder.device().pipeline(pipeline);
+        LavaFlowRenderPipeline resolved = encoder.device().pipeline(pipeline);
+        // Counts whether this repeats the pipeline already bound: whether Minecraft re-binds a pipeline per
+        // draw decides whether eliding a repeat is worth the trouble — see LavaFlowFrameStats.
+        LavaFlowFrameStats.pipelineBind(this.pipeline == resolved);
+        this.pipeline = resolved;
         if (!this.pipeline.isValid()) throw new IllegalStateException("Pipeline is invalid: " + pipeline.getLocation());
         if (begun) recordPipelineBind();
         descriptorsDirty = true;
@@ -591,6 +595,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                 break;
             }
         }
+        LavaFlowFrameStats.descriptorPushed();
         if (context.pushDescriptors()) {
             try (MemoryStack stack = stackPush()) {
                 vkCmdPushDescriptorSetKHR(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -679,20 +684,22 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private VkWriteDescriptorSet.Buffer buildWrites(MemoryStack stack, List<LavaFlowRenderPipeline.Entry> entries,
                                                     long descriptorSet, boolean dynamicUniforms) {
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
-        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(entries.size(), stack);
+        LavaFlowDescriptorCache.WriteScratch scratch = cache.writes();
+        VkWriteDescriptorSet.Buffer writes = scratch.writes(entries.size());
         for (int i = 0; i < entries.size(); i++) {
             LavaFlowRenderPipeline.Entry entry = entries.get(i);
-            VkWriteDescriptorSet write = writes.get(i).sType$Default().dstBinding(i)
-                    .dstArrayElement(0).descriptorCount(1)
-                    .descriptorType(pipeline.vkDescriptorType(entry.type()));
-            if (descriptorSet != 0) write.dstSet(descriptorSet);
+            // Reused structures, so every union member an earlier push could have left behind is cleared:
+            // only the member matching this entry's type carries meaning.
+            VkWriteDescriptorSet write = scratch.write(i).sType$Default().dstBinding(i)
+                    .dstArrayElement(0).descriptorCount(1).dstSet(descriptorSet)
+                    .descriptorType(pipeline.vkDescriptorType(entry.type()))
+                    .pBufferInfo(null).pImageInfo(null).pTexelBufferView(null);
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
                     GpuBufferSlice slice = requireUniform(entry.name());
-                    VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                    write.pBufferInfo(scratch.bufferInfo(i)
                             .buffer(((LavaFlowGpuBuffer) slice.buffer()).handle())
-                            .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length());
-                    write.pBufferInfo(bufferInfo);
+                            .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length()));
                 }
                 case SAMPLED_IMAGE -> {
                     TextureBinding binding = textures.get(entry.name());
@@ -701,10 +708,9 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     if (sampledTexture.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                         throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
                     }
-                    VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
+                    write.pImageInfo(scratch.imageInfo(i)
                             .sampler(binding.sampler.handle()).imageView(binding.view.handle())
-                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-                    write.pImageInfo(imageInfo);
+                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL));
                 }
                 case TEXEL_BUFFER -> {
                     GpuBufferSlice slice = requireUniform(entry.name());

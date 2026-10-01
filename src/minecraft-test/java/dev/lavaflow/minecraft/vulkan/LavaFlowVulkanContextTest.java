@@ -1,5 +1,6 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import static org.lwjgl.vulkan.VK10.*;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
@@ -64,6 +65,13 @@ class LavaFlowVulkanContextTest {
                 assertFalse(context.multiDrawIndirect(), "baselineDevice 应关闭 multi-draw indirect");
                 assertFalse(context.fillModeNonSolid(), "baselineDevice 应关闭非 solid 填充模式");
                 assertFalse(context.vertexAttributeDivisor(), "baselineDevice 应关闭顶点属性除数");
+
+                // 内存堆与类型只读一次并缓存。缓存没填上时，堆大小会是 0、类型查找会抛——所以这两条
+                // 断言覆盖的是"表真的读到了"，而不只是"方法没崩"。
+                assertNotEquals(0L, context.largestDeviceLocalHeapSize(),
+                        "缓存里应有设备本地堆的大小");
+                assertNotEquals(-1, context.findMemoryType(0xFFFF, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                        "缓存里应能找到主机可见的内存类型");
 
                 VkPhysicalDeviceProperties properties = context.properties();
                 assertNotNull(properties, "上下文未暴露物理设备属性");

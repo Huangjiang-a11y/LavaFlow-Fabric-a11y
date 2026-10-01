@@ -31,6 +31,12 @@ public final class LavaFlowFrameStats {
     private static long submits;
     private static long submitsAtReport;
     private static long framesAtReport;
+    private static long pipelineBinds;
+    private static long pipelineBindsAtReport;
+    private static long pipelineRebinds;
+    private static long pipelineRebindsAtReport;
+    private static long descriptorPushes;
+    private static long descriptorPushesAtReport;
 
     /** Counts one descriptor set allocated because no cached set matched. */
     public static void descriptorSetAllocated() {
@@ -60,6 +66,26 @@ public final class LavaFlowFrameStats {
     public static void workSubmitted() {
         if (!ENABLED) return;
         submits++;
+    }
+
+    /**
+     * Counts one pipeline bind, and whether it repeated the pipeline that was already bound.
+     *
+     * <p>Whether Minecraft re-binds a pipeline per draw decides whether eliding a repeat is worth the
+     * trouble: re-binding the same pipeline re-records vkCmdBindPipeline and re-marks the descriptors
+     * dirty, but a bind that is not repeated makes eliding it pointless. Reported as a ratio so the answer
+     * comes from the game rather than from a guess.
+     */
+    public static void pipelineBind(boolean repeated) {
+        if (!ENABLED) return;
+        pipelineBinds++;
+        if (repeated) pipelineRebinds++;
+    }
+
+    /** Counts one descriptor write push, whether through push descriptors or a cached set. */
+    public static void descriptorPushed() {
+        if (!ENABLED) return;
+        descriptorPushes++;
     }
 
     private LavaFlowFrameStats() {}
@@ -108,15 +134,24 @@ public final class LavaFlowFrameStats {
         double invalidationsPerFrame = framesSince == 0 ? 0 : invalidationsSince / (double) framesSince;
         double barriersPerFrame = framesSince == 0 ? 0 : (barriers - barriersAtReport) / (double) framesSince;
         double submitsPerFrame = framesSince == 0 ? 0 : (submits - submitsAtReport) / (double) framesSince;
+        long bindsSince = pipelineBinds - pipelineBindsAtReport;
+        long rebindsSince = pipelineRebinds - pipelineRebindsAtReport;
+        double bindsPerFrame = framesSince == 0 ? 0 : bindsSince / (double) framesSince;
+        double rebindRatio = bindsSince == 0 ? 0 : rebindsSince / (double) bindsSince;
+        double pushesPerFrame = framesSince == 0 ? 0 : (descriptorPushes - descriptorPushesAtReport) / (double) framesSince;
         framesAtReport = totalFrames;
         descriptorSetsAtReport = descriptorSets;
         descriptorHitsAtReport = descriptorHits;
         descriptorInvalidationsAtReport = descriptorInvalidations;
         barriersAtReport = barriers;
         submitsAtReport = submits;
+        pipelineBindsAtReport = pipelineBinds;
+        pipelineRebindsAtReport = pipelineRebinds;
+        descriptorPushesAtReport = descriptorPushes;
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
-                        + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}",
+                        + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
+                        + " binds_per_frame={11} rebind_ratio={12} pushes_per_frame={13}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -127,6 +162,9 @@ public final class LavaFlowFrameStats {
                 String.format("%.3f", hitRate),
                 String.format("%.2f", invalidationsPerFrame),
                 String.format("%.1f", barriersPerFrame),
-                String.format("%.1f", submitsPerFrame));
+                String.format("%.1f", submitsPerFrame),
+                String.format("%.1f", bindsPerFrame),
+                String.format("%.3f", rebindRatio),
+                String.format("%.1f", pushesPerFrame));
     }
 }

@@ -47,6 +47,14 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private VkQueue presentQueue;
     private int graphicsFamily = -1;
     private int presentFamily = -1;
+    // Memory heaps and types are fixed for the device's lifetime, so they are read once and kept:
+    // findMemoryType scans this table on every buffer and texture allocation, and it used to pay a driver
+    // call plus a stack-allocated property struct for each one. Keyed on the device it was read from, so
+    // a caller that asks before the device is selected cannot freeze another device's table.
+    private VkPhysicalDevice memoryPropertiesSource;
+    private int[] memoryTypeFlags = new int[0];
+    private int memoryTypeCount;
+    private long largestDeviceLocalHeap;
     private long commandPool;
     private String deviceName;
     private VkPhysicalDeviceProperties properties;
@@ -72,9 +80,17 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         final int depthLoadOp;
         final int hash;
 
+        /** Returns a key that owns its arrays, so a caller may reuse the arrays it passed in. */
+        LegacyRenderPassKey copy() {
+            return new LegacyRenderPassKey(colorFormats.clone(), colorLoadOps.clone(), depthFormat, depthLoadOp);
+        }
+
         LegacyRenderPassKey(int[] colorFormats, int[] colorLoadOps, int depthFormat, int depthLoadOp) {
-            this.colorFormats = colorFormats.clone();
-            this.colorLoadOps = colorLoadOps.clone();
+            // Borrowed: this key is only read on lookup, and a stored key owns its arrays — see copy().
+            // The caller builds these arrays per render pass, so cloning them on every lookup was two
+            // allocations per pass for nothing.
+            this.colorFormats = colorFormats;
+            this.colorLoadOps = colorLoadOps;
             this.depthFormat = depthFormat;
             this.depthLoadOp = depthLoadOp;
             this.hash = 31 * (31 * Arrays.hashCode(this.colorFormats) + Arrays.hashCode(this.colorLoadOps))
@@ -97,9 +113,15 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         final int height;
         final int hash;
 
+        /** Returns a key that owns its array, so a caller may reuse the array it passed in. */
+        LegacyFramebufferKey copy() {
+            return new LegacyFramebufferKey(renderPass, views.clone(), width, height);
+        }
+
         LegacyFramebufferKey(long renderPass, long[] views, int width, int height) {
             this.renderPass = renderPass;
-            this.views = views.clone();
+            // Borrowed: see LegacyRenderPassKey.copy().
+            this.views = views;
             this.width = width;
             this.height = height;
             this.hash = 31 * (31 * (31 * Long.hashCode(renderPass) + Arrays.hashCode(this.views)) + width) + height;
@@ -322,9 +344,25 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     }
 
     public long largestDeviceLocalHeapSize() {
+        ensureMemoryProperties();
+        return largestDeviceLocalHeap;
+    }
+
+    /**
+     * Reads the device's memory heaps and types once, and keeps the table.
+     *
+     * <p>Both are static properties of a physical device, so asking again per allocation was pure
+     * overhead. Everything here comes out of the one query, so a caller that wants only the largest
+     * device-local heap pays for it exactly once as well.
+     */
+    private void ensureMemoryProperties() {
+        if (physicalDevice == memoryPropertiesSource) return;
         try (MemoryStack stack = stackPush()) {
             VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
             vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
+            int typeCount = memory.memoryTypeCount();
+            if (memoryTypeFlags.length < typeCount) memoryTypeFlags = new int[typeCount];
+            for (int i = 0; i < typeCount; i++) memoryTypeFlags[i] = memory.memoryTypes(i).propertyFlags();
             long largest = 0;
             for (int i = 0; i < memory.memoryHeapCount(); i++) {
                 VkMemoryHeap heap = memory.memoryHeaps(i);
@@ -332,7 +370,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     largest = Math.max(largest, heap.size());
                 }
             }
-            return largest;
+            memoryTypeCount = typeCount;
+            largestDeviceLocalHeap = largest;
+            memoryPropertiesSource = physicalDevice;
         }
     }
 
@@ -495,19 +535,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * back, so the caller states a preference and falls back to any match.
      */
     int findMemoryType(int typeBits, int requiredFlags, int preferredFlags) {
-        try (MemoryStack stack = stackPush()) {
-            VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.malloc(stack);
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
-            int fallback = -1;
-            for (int i = 0; i < memory.memoryTypeCount(); i++) {
-                if ((typeBits & (1 << i)) == 0) continue;
-                int flags = memory.memoryTypes(i).propertyFlags();
-                if ((flags & requiredFlags) != requiredFlags) continue;
-                if (preferredFlags != 0 && (flags & preferredFlags) == preferredFlags) return i;
-                if (fallback < 0) fallback = i;
-            }
-            if (fallback >= 0) return fallback;
+        ensureMemoryProperties();
+        int fallback = -1;
+        for (int i = 0; i < memoryTypeCount; i++) {
+            if ((typeBits & (1 << i)) == 0) continue;
+            int flags = memoryTypeFlags[i];
+            if ((flags & requiredFlags) != requiredFlags) continue;
+            if (preferredFlags != 0 && (flags & preferredFlags) == preferredFlags) return i;
+            if (fallback < 0) fallback = i;
         }
+        if (fallback >= 0) return fallback;
         throw new IllegalStateException("No compatible Vulkan memory type for flags 0x" + Integer.toHexString(requiredFlags));
     }
 
@@ -585,7 +622,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateRenderPass(device, info, null, out), "vkCreateRenderPass(fallback)");
             long renderPass = out.get(0);
-            legacyRenderPasses.put(key, renderPass);
+            legacyRenderPasses.put(key.copy(), renderPass);
             return renderPass;
         }
     }
@@ -600,7 +637,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateFramebuffer(device, info, null, out), "vkCreateFramebuffer(fallback)");
             long framebuffer = out.get(0);
-            legacyFramebuffers.put(key, framebuffer);
+            legacyFramebuffers.put(key.copy(), framebuffer);
             return framebuffer;
         }
     }
