@@ -37,11 +37,35 @@ jobs:
       # flaky. The validation layer has to be installed as well: without it the renderer still exits
       # 0, it just reports that the switch could not be honoured, and the smoke step fails on purpose
       # rather than passing a run that validated nothing.
+      #
+      # The image points apt at azure.archive.ubuntu.com, which intermittently answers "Ign:" for
+      # every index; apt then retries for 20+ minutes before falling back to archive.ubuntu.com
+      # (actions/runner-images#14594, about 20% of runs). That step does not fail, it hangs — and this
+      # repository has seen it: the same workflow on the same commit took 11s on one branch and 455s
+      # on the other. apt's own retries and timeouts are therefore bounded, so an unhealthy mirror is
+      # abandoned in seconds rather than eating the job's 20-minute limit.
+      #
+      # The step is deliberately non-fatal. A missing package is caught downstream instead: without
+      # xvfb there is no xvfb-run, and the smoke step asserts that the validation layer actually
+      # answered. So a flaky mirror cannot turn the build red, while a missing package still can —
+      # and the warnings below say what is missing when that happens.
       - name: Install a software Vulkan driver, the validation layer and a virtual display
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers vulkan-validationlayers xvfb
+          APT_OPTS="-o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10"
+          if ! timeout 150 sudo apt-get $APT_OPTS update -qq; then
+            echo "::warning::apt-get update did not finish; continuing with what the image already has"
+          fi
+          if ! timeout 200 sudo apt-get $APT_OPTS install -y --no-install-recommends \
+                 mesa-vulkan-drivers vulkan-validationlayers xvfb; then
+            echo "::warning::apt-get install did not finish; the steps below assert what actually landed"
+          fi
+          for package in mesa-vulkan-drivers vulkan-validationlayers xvfb; do
+            dpkg -s "$package" >/dev/null 2>&1 || echo "::warning::$package is not installed"
+          done
+          command -v xvfb-run >/dev/null 2>&1 || echo "::warning::xvfb-run is missing"
+          ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1 \
+            || echo "::warning::no lavapipe ICD found; the smoke step will not be able to create a device"
 
       # `check` rather than `test`: the Vulkan-facing tests live in the minecraft-test source set,
       # which is wired to `check` only. Running just `test` silently executes one pure-logic test
