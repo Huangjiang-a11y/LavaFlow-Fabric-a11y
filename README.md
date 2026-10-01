@@ -59,8 +59,8 @@ SDL 的 Vulkan 入口只有在 SDL 自己加载过 Vulkan 库之后才有意义�
 `SDL_Vulkan_LoadLibrary`（该调用幂等：重复调用、以及窗口已存在后再调，实测均返回 true 且不报错）。
 
 桌面端漏掉它会得到一个**指向错误方向的报错**：库未加载时呈现查询对每个队列族都返回 false，于是每个设备都被拒，
-最终抛 `No Vulkan 1.1 device with a combined graphics and presentation queue family found`——而真因与呈现队列族
-无关。
+最终抛 `No Vulkan 1.1 device with a graphics queue family and a presentable queue family found`——真因在那句
+`SDL_Vulkan_LoadLibrary`，与设备本身是否有可呈现的队列族无关。
 
 **Android 上这一步不起作用**（既不会因此修好，也不会因此变坏）：SDL 的 Android 后端没有实现呈现查询钩子
 （`SDL_androidvideo.c` 只挂了 LoadLibrary / UnloadLibrary / GetInstanceExtensions / CreateSurface /
@@ -70,8 +70,23 @@ DestroySurface 五个），平台无法回答时的默认是**返回 true**；�
 **26.2 走 GLFW，没有这个前提，不要搬运过来。**
 
 `LavaFlowVulkanContextTest` 覆盖了这个前提：把上面那次 `SDL_Vulkan_LoadLibrary` 去掉，它就会以
-`No Vulkan 1.1 device with a combined graphics and presentation queue family found` 失败。该用例因此把
+`No Vulkan 1.1 device with a graphics queue family and a presentable queue family found` 失败。该用例因此把
 **窗口刻意排在上下文之后**创建——带 `SDL_WINDOW_VULKAN` 的窗口会隐式加载 Vulkan 库，顺序颠倒就会把这个前提盖掉。
+
+### 与 26.2 的差异：surface 建立时机，以及由此决定的呈现判断
+
+26.2 先建 surface、再选设备，因此能用 `vkGetPhysicalDeviceSurfaceSupportKHR` 逐族问"这个族能否呈现到**这个
+surface**"——这是权威答案。**26.3 做不到，原因不在实现而在调用顺序**：Minecraft 的 `GpuBackend.createDevice` 跑在
+`createWindow` 之前，设备必须在窗口存在之前建成，而该查询的第一个参数就是 surface。所以 26.3 只能问 SDL 的
+`SDL_Vulkan_GetPresentationSupport`，它回答的是"这个族在**该显示**上能否呈现"，粒度是显示而非某个 surface。这是
+能问到的最近似问题，不等价于权威答案：理论上存在 SDL 答"可以"、而窗口的 surface 实际不支持的情形；26.2 不受此影响。
+
+队列族分离与上者无关，已与 26.2 对齐：两者现在都允许图形族与呈现族**不是同一个族**——`findFamilies` 分别取两者，
+`createDevice` 相应建 1 或 2 条队列，交换链在两者不同时以 concurrent 模式创建，并呈现到 `presentQueue`。此前 26.3
+只接受"图形+呈现合一"的族，会把这类设备整个拒掉，那正是"26.2 能用而 26.3 不能用"的那批设备。
+
+*这一处没有自动化用例能覆盖分离路径：lavapipe 只暴露一个"图形+呈现合一"的族，走不到两族不同的分支。*
+
 
 ## 当前功能
 

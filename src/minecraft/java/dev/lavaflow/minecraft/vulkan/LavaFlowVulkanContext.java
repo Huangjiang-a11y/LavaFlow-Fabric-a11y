@@ -161,7 +161,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private void createInstance() {
         // SDL's Vulkan entry points are only usable once SDL has loaded the Vulkan loader library.
         // Without it SDL_Vulkan_GetPresentationSupport answers false for every queue family, and
-        // findGraphicsFamily rejects every device before the window that would have loaded it
+        // findFamilies rejects every device before the window that would have loaded it
         // implicitly exists. Idempotent, so the second caller costs nothing.
         if (!SDLVulkan.SDL_Vulkan_LoadLibrary((CharSequence)null)) {
             LOGGER.log(System.Logger.Level.WARNING, "SDL_Vulkan_LoadLibrary failed: {0}",
@@ -314,9 +314,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             DeviceCapabilities selectedCapabilities = null;
             for (int i = 0; i < devices.capacity(); i++) {
                 VkPhysicalDevice candidate = new VkPhysicalDevice(devices.get(i), instance);
-                int family = findGraphicsFamily(candidate);
+                int[] families = findFamilies(candidate);
                 DeviceCapabilities candidateCapabilities = queryCapabilities(candidate);
-                if (family < 0 || !candidateCapabilities.swapchain()) continue;
+                if (families[0] < 0 || families[1] < 0 || !candidateCapabilities.swapchain()) continue;
                 VkPhysicalDeviceProperties candidateProperties = VkPhysicalDeviceProperties.calloc();
                 vkGetPhysicalDeviceProperties(candidate, candidateProperties);
                 int api = candidateProperties.apiVersion();
@@ -329,8 +329,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 if (score > best) {
                     if (properties != null) properties.free();
                     best = score; physicalDevice = candidate;
-                    // One family serves both roles; see findGraphicsFamily.
-                    graphicsFamily = presentFamily = family;
+                    // These may be the same family or two; see findFamilies.
+                    graphicsFamily = families[0];
+                    presentFamily = families[1];
                     properties = candidateProperties; deviceName = properties.deviceNameString();
                     selectedCapabilities = candidateCapabilities;
                 } else candidateProperties.free();
@@ -346,7 +347,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
         if (physicalDevice == null) {
             throw new IllegalStateException(
-                    "No Vulkan 1.1 device with a combined graphics and presentation queue family found");
+                    "No Vulkan 1.1 device with a graphics queue family and a presentable queue family "
+                            + "found; SDL reported no presentable family, which on desktop means the Vulkan "
+                            + "loader was not loaded (see SDL_Vulkan_LoadLibrary)");
         }
         // lavaflow.baselineDevice emulates a device that exposes nothing beyond VK_KHR_swapchain, which is
         // what the ARM64 Android targets report. It exists so the fallback paths can be exercised and
@@ -403,24 +406,34 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     }
 
     /**
-     * Finds the one queue family LavaFlow renders and presents from.
+     * Finds the queue family to render from and the one to present from.
      *
-     * <p>The surface does not exist yet, so presentation support is asked of SDL rather than of
-     * {@code vkGetPhysicalDeviceSurfaceSupportKHR}. Graphics and presentation therefore have to
-     * share a family: a queue family cannot be added to a device after {@code vkCreateDevice}, so a
-     * device whose present family differs cannot be used at all and is rejected by returning -1.
+     * <p>The surface does not exist yet — Minecraft calls {@code GpuBackend.createDevice} before it
+     * creates the window — so presentation support is asked of SDL, per family, rather than of
+     * {@code vkGetPhysicalDeviceSurfaceSupportKHR}. SDL answers for the display rather than for a
+     * particular surface, so this is the closest question available, not an equally strong one.
+     *
+     * <p>Both families are returned because a queue family cannot be added to a device after
+     * {@code vkCreateDevice}: accepting only a family that does both would reject every device that
+     * exposes graphics and presentation separately, which {@code LavaFlowGpuSurface} already handles
+     * (it creates the swapchain in concurrent mode when the two differ).
+     *
+     * @return {@code {graphicsFamily, presentFamily}}, either {@code -1} when the device has none
      */
-    private int findGraphicsFamily(VkPhysicalDevice candidate) {
+    private int[] findFamilies(VkPhysicalDevice candidate) {
         try (MemoryStack stack = stackPush()) {
             IntBuffer count = stack.ints(0);
             vkGetPhysicalDeviceQueueFamilyProperties(candidate, count, null);
             VkQueueFamilyProperties.Buffer props = VkQueueFamilyProperties.malloc(count.get(0), stack);
             vkGetPhysicalDeviceQueueFamilyProperties(candidate, count, props);
+            int graphics = -1;
+            int present = -1;
             for (int i = 0; i < props.capacity(); i++) {
-                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
-                if (SDLVulkan.SDL_Vulkan_GetPresentationSupport(instance, candidate, i)) return i;
+                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) graphics = i;
+                if (SDLVulkan.SDL_Vulkan_GetPresentationSupport(instance, candidate, i)) present = i;
+                if (graphics >= 0 && present >= 0) break;
             }
-            return -1;
+            return new int[] {graphics, present};
         }
     }
 
@@ -476,8 +489,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
     private void createDevice() {
         try (MemoryStack stack = stackPush()) {
-            VkDeviceQueueCreateInfo.Buffer queues = VkDeviceQueueCreateInfo.calloc(1, stack);
+            int queueCount = graphicsFamily == presentFamily ? 1 : 2;
+            VkDeviceQueueCreateInfo.Buffer queues = VkDeviceQueueCreateInfo.calloc(queueCount, stack);
             queues.get(0).sType$Default().queueFamilyIndex(graphicsFamily).pQueuePriorities(stack.floats(1));
+            if (queueCount == 2) {
+                queues.get(1).sType$Default().queueFamilyIndex(presentFamily).pQueuePriorities(stack.floats(1));
+            }
             VkPhysicalDeviceFeatures supported = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(physicalDevice, supported);
             VkPhysicalDeviceFeatures enabled = VkPhysicalDeviceFeatures.calloc(stack)
@@ -512,9 +529,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             device = new VkDevice(out.get(0), physicalDevice, info);
             PointerBuffer q = stack.mallocPointer(1);
             vkGetDeviceQueue(device, graphicsFamily, 0, q); graphicsQueue = new VkQueue(q.get(0), device);
-            // Presentation rides the same queue: findGraphicsFamily only accepts a family that
-            // supports both, so there is no second family to fetch a queue from.
-            presentQueue = graphicsQueue;
+            if (presentFamily == graphicsFamily) {
+                // One family for both roles means one queue for both roles.
+                presentQueue = graphicsQueue;
+            } else {
+                vkGetDeviceQueue(device, presentFamily, 0, q); presentQueue = new VkQueue(q.get(0), device);
+            }
         }
     }
 
