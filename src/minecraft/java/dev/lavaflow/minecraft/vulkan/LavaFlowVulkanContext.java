@@ -11,6 +11,7 @@ import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -71,6 +72,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
     private boolean closed;
+    // Whether the validation layer really answered for this instance, and every message it reported.
+    // Both are kept so a test can assert on them: "the run exited 0" is also true of a run that
+    // validated nothing, and a switch that silently does nothing answers the wrong question.
+    private boolean validationEnabled;
+    private final List<String> validationMessages = Collections.synchronizedList(new ArrayList<>());
 
     private record DeviceCapabilities(boolean swapchain, boolean pushDescriptors, boolean dynamicRendering,
                                       boolean fillModeNonSolid, boolean multiDrawIndirect,
@@ -202,6 +208,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
         boolean requested = Boolean.getBoolean("lavaflow.validation");
         boolean validation = requested && instanceLayerAvailable(VK_LAYER_KHRONOS_VALIDATION);
+        validationEnabled = validation;
         boolean debugUtils = requested
                 && instanceExtensionAvailable(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         // No apostrophes in these messages: System.Logger formats through MessageFormat, which eats
@@ -288,6 +295,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private void createDebugMessenger(MemoryStack stack) {
         debugCallback = VkDebugUtilsMessengerCallbackEXT.create((severity, types, callbackData, userData) -> {
             String message = VkDebugUtilsMessengerCallbackDataEXT.create(callbackData).pMessageString();
+            validationMessages.add(message);
             System.err.println("[LavaFlow Vulkan validation] " + message);
             return VK_FALSE;
         });
@@ -643,6 +651,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         return LavaFlowSpirv.VERSION_1_3;
     }
     boolean pushDescriptors() { return pushDescriptors; }
+
+    /**
+     * Whether the validation layer is actually running for this instance, as opposed to merely being
+     * asked for. False when the loader does not offer the layer, or when nothing asked for it.
+     */
+    boolean validationEnabled() { return validationEnabled; }
+
+    /**
+     * Everything the validation layer has reported so far, oldest first, as a snapshot. Empty means
+     * the layer answered and had no findings; see {@link #validationEnabled()} to tell that apart
+     * from a layer that never ran.
+     */
+    List<String> validationMessages() {
+        synchronized (validationMessages) {
+            return List.copyOf(validationMessages);
+        }
+    }
     boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }

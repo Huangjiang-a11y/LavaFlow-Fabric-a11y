@@ -4,14 +4,13 @@ import static org.lwjgl.vulkan.VK10.*;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
+import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.displayAvailable;
+import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.exposeVulkanLoaderToLwjgl;
+import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.restore;
+import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.setSwitches;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -38,6 +37,9 @@ import static org.lwjgl.sdl.SDLVideo.*;
  *
  * <p>需要显示服务器与可用 Vulkan 设备：无 {@code DISPLAY} 时跳过（本地可用 {@code xvfb-run}）。
  * CI 会断言这个用例确实执行了、而不是被跳过。
+ *
+ * <p>这条用例停在 surface：descriptor 路径由 {@link LavaFlowDescriptorPathTest} 覆盖，
+ * 它同样起真设备，但把 descriptor set 真的写下去。
  */
 class LavaFlowVulkanContextTest {
 
@@ -89,62 +91,5 @@ class LavaFlowVulkanContextTest {
             SDL_Quit();
             restore(saved);
         }
-    }
-
-    /**
-     * 桌面发行版把 Vulkan loader（libvulkan.so.1）放在多架构目录（如 /usr/lib/x86_64-linux-gnu），
-     * 那个目录不在 JVM 默认的 java.library.path 里；而 LWJGL 解压原生库时会把
-     * org.lwjgl.librarypath 设成自己的解压目录，此后只在那里按文件名找库。SDL3 在镜像里没有，
-     * 必须解压，于是搜索被收缩、loader 找不到，VK 初始化报
-     * {@code Failed to locate library: libvulkan.so.1}——报错点却完全看不出与原生库有关。
-     *
-     * <p>这里把系统 loader 拷进 LWJGL 正在查找的那个目录。找不到系统 loader 时什么都不做，
-     * 让失败保持原样，而不是把它掩盖过去。
-     */
-    private static void exposeVulkanLoaderToLwjgl() throws IOException {
-        Path loader = LOADER_DIRS.stream()
-                .map(dir -> dir.resolve("libvulkan.so.1"))
-                .filter(Files::exists)
-                .findFirst()
-                .orElse(null);
-        String searchPath = System.getProperty("org.lwjgl.librarypath");
-        if (loader == null || searchPath == null || searchPath.isBlank()) {
-            return;
-        }
-        for (String dir : searchPath.split(File.pathSeparator)) {
-            Path target = Path.of(dir).resolve("libvulkan.so.1");
-            if (!Files.exists(target)) {
-                Files.copy(loader, target);
-            }
-        }
-    }
-
-    private static final List<Path> LOADER_DIRS = List.of(
-            Path.of("/usr/lib/x86_64-linux-gnu"),
-            Path.of("/usr/lib/aarch64-linux-gnu"),
-            Path.of("/usr/lib64"),
-            Path.of("/usr/lib"),
-            Path.of("/lib"),
-            Path.of("/usr/local/lib"));
-
-    private static boolean displayAvailable() {
-        String display = System.getenv("DISPLAY");
-        return display != null && !display.isBlank();
-    }
-
-    private static Map<String, String> setSwitches(Map<String, String> values) {
-        Map<String, String> previous = new HashMap<>();
-        values.forEach((key, value) -> {
-            String old = System.getProperty(key);
-            if (old != null) {
-                previous.put(key, old);
-            }
-            System.setProperty(key, value);
-        });
-        return previous;
-    }
-
-    private static void restore(Map<String, String> previous) {
-        previous.forEach(System::setProperty);
     }
 }
