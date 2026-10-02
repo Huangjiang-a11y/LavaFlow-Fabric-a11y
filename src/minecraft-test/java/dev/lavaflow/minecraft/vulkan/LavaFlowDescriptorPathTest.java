@@ -388,6 +388,10 @@ class LavaFlowDescriptorPathTest {
     /**
      * Asserts the layer answered and had nothing to say about any of the above.
      *
+     * <p>The whole device lifetime inside the test is covered, not only the descriptor writes — which
+     * is what turned up a 1.2 structure used against a 1.1 instance in the context constructor the
+     * first time this ran. Findings from code outside this class are still findings.
+     *
      * <p>Where the layer is missing the assertion has nothing to stand on, so it says so rather than
      * passing vacuously — a green run that validated nothing is the failure mode this whole test
      * exists to remove. CI installs the layer and asserts separately that it answered.
@@ -399,7 +403,7 @@ class LavaFlowDescriptorPathTest {
             return;
         }
         assertEquals(0, context.validationMessages().size(),
-                () -> "descriptor path produced validation findings: " + context.validationMessages());
+                () -> "this test produced validation findings: " + context.validationMessages());
     }
 
     private static void check(int result, String operation) {
