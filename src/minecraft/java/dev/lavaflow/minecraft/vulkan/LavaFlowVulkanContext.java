@@ -350,7 +350,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
-        queryVulkan11Properties();
+        queryMaxMemoryAllocationSize();
     }
 
     public long largestDeviceLocalHeapSize() {
@@ -390,14 +390,25 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         return Boolean.getBoolean("lavaflow.baselineDevice") || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
     }
 
-    private void queryVulkan11Properties() {
+    /**
+     * Reads the driver's cap on a single allocation, which is a Vulkan 1.1 core value: it comes from
+     * {@code VK_KHR_maintenance3}, promoted to core in 1.1, and lives in
+     * {@link VkPhysicalDeviceMaintenance3Properties}.
+     *
+     * <p>Not {@code VkPhysicalDeviceVulkan11Properties}. That structure is named for 1.1 but was
+     * introduced in Vulkan 1.2 as a bundle of everything 1.1 promoted, and putting it in this chain
+     * against an instance created at 1.1 is a spec violation — a validation layer reports
+     * {@code VUID-VkPhysicalDeviceProperties2-pNext-pNext}, which is how it was found. The value is
+     * the same either way; only the structure carrying it is version-legal here.
+     */
+    private void queryMaxMemoryAllocationSize() {
         try (MemoryStack stack = stackPush()) {
-            VkPhysicalDeviceVulkan11Properties vulkan11 = VkPhysicalDeviceVulkan11Properties.calloc(stack)
-                    .sType$Default();
+            VkPhysicalDeviceMaintenance3Properties maintenance3 = VkPhysicalDeviceMaintenance3Properties
+                    .calloc(stack).sType$Default();
             VkPhysicalDeviceProperties2 properties2 = VkPhysicalDeviceProperties2.calloc(stack)
-                    .sType$Default().pNext(vulkan11.address());
+                    .sType$Default().pNext(maintenance3.address());
             vkGetPhysicalDeviceProperties2(physicalDevice, properties2);
-            long reported = vulkan11.maxMemoryAllocationSize();
+            long reported = maintenance3.maxMemoryAllocationSize();
             // Some drivers (e.g. Mali) report 0 here, which per the Vulkan spec means the limit is
             // bounded by the heap rather than a fixed value. Fall back to the largest device-local
             // heap size instead of a fabricated huge ceiling, so allocation sizing stays within what
@@ -410,6 +421,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             maxMemoryAllocationSize = reported;
         }
     }
+
 
     private int[] findFamilies(VkPhysicalDevice candidate) {
         try (MemoryStack stack = stackPush()) {
