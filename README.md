@@ -190,6 +190,12 @@ JAVA_OPTS=-Dlavaflow.validation=true build/install/lavaflow/bin/lavaflow --frame
 **所以"没有验证层消息"并不等于"没有问题"**：要确认它真的在验证，必须看见那条 INFO。曾经有一版实现是静默的——
 开关打开、什么都不发生，读起来与"验证通过"完全一样。
 
+**覆盖边界**：`LavaFlowDescriptorPathTest`（在 `minecraftTest` 里，随 `check` 跑）在真设备上走
+`vkUpdateDescriptorSets` 那条路：descriptor set 随 buffer 退役、buffer view 随 buffer 退役、sampled image
+随 view/sampler 退役，各自断言**零条**层消息；另有一个 canary 故意写一条规范禁止的写
+（`descriptorCount = 0`），断言层确实报了——否则前面那些「零条」对「层根本没在跑」同样成立。
+CI 会断言这四个用例确实执行、且没有跳过。
+
 Linux 桌面上需要**单独安装层本身**，只装驱动不够：
 
 ```sh
