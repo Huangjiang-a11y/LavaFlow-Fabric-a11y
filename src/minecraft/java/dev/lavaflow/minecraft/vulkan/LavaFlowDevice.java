@@ -200,7 +200,20 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         return buffer;
     }
     @Override public List<String> getLastDebugMessages() { return List.of(); }
-    @Override public boolean isDebuggingEnabled() { return false; }
+    /**
+     * Whether the frontend resolves the names of the objects it asks us to create.
+     *
+     * <p>This is not a hint we are free to ignore: the frontend resolves a texture's label supplier only
+     * when this is true, and passes null otherwise. Returning false -- as this did -- therefore makes every
+     * texture created through the frontend anonymous. That went unnoticed until the churn report needed
+     * names for the views it was retiring and could only say
+     * {@code [unlabeled 16x16 RGBA8_UNORM mips=1 layers=1 usage=0x5]}.
+     *
+     * <p>Tied to the diagnostics that read those names rather than left always-on, so a normal run does no
+     * label formatting it will never look at. The frontend's only other use of this flag is Minecraft's F3
+     * report, which appends {@link #getLastDebugMessages()} -- empty here either way.
+     */
+    @Override public boolean isDebuggingEnabled() { return LavaFlowFrameStats.enabled(); }
     @Override public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, ShaderSource source) {
         ensureOpen();
         return pipelines.computeIfAbsent(pipeline,
