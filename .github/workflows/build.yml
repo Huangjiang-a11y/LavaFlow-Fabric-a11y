@@ -89,6 +89,28 @@ jobs:
           grep -q 'failures="0"' "$report"
           echo "context test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      # And the same for the descriptor path. That class skips itself without a display, and its
+      # canary skips itself without the validation layer — so either skip would leave the descriptor
+      # writes covered nowhere, which is exactly the situation this test was added to end. The four
+      # methods are named rather than counted so the step says which coverage is missing when it
+      # fails, and the canary is one of them because without it the other three assert nothing.
+      - name: Assert the descriptor path test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowDescriptorPathTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          for method in descriptorSetsAreWrittenOnARealDeviceAndRetireWithTheirBuffer \
+                        bufferViewsAreCreatedOnARealDeviceAndRetireWithTheirBuffer \
+                        sampledImageDescriptorsRetireWithTheirViewAndTheirSampler \
+                        theValidationLayerReportsAStaleHandle; do
+            grep -q "testcase name=\"$method" "$report" \
+              || { echo "::error::$method did not run"; exit 1; }
+          done
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the descriptor path test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the descriptor path test failed"; exit 1; }
+          echo "descriptor path test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
       # that the layer answered: a switch that silently does nothing must not pass.

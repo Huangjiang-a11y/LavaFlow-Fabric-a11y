@@ -296,11 +296,12 @@ class LavaFlowDescriptorPathTest {
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice();
             LavaFlowVulkanContext context = device.context();
-            if (!context.validationEnabled()) {
-                System.err.println("[LavaFlow] lavaflow.validation was requested but the layer is not "
-                        + "installed, so this canary cannot speak and the assertions above are unbacked");
-                return;
-            }
+            // Skipped rather than passed when the layer is missing — the same shape as the context
+            // test's display check, and CI asserts that nothing in this class was skipped. That is
+            // what keeps the "no findings" assertions above from being true for the wrong reason: a
+            // layer that never spoke satisfies them just as well.
+            assumeTrue(context.validationEnabled(),
+                    "需要验证层（vulkan-validationlayers 或 Vulkan SDK）才能断言已销毁的句柄会被报出来");
             VkDevice vkDevice = context.device();
             LavaFlowDescriptorCache cache = device.descriptorCache();
             layout = createSetLayout(vkDevice, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
