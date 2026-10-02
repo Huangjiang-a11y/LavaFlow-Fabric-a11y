@@ -222,6 +222,11 @@ gradle --no-daemon clean check jar
 
 注意 `gradle test` **不会**运行 `minecraftTest`——后者挂在 `check` 上。只跑 `test` 会静默跳过覆盖 Vulkan 相关逻辑的那部分测试。
 
+还有两个会让诊断结论失真的 Gradle 行为：`test` / `minecraftTest` 命中增量或构建缓存时（`UP-TO-DATE`、
+`FROM-CACHE`）构建照样成功，而用例一个都没跑——所以任何靠 grep 验证层输出下结论的流程都必须带
+`--no-build-cache --rerun-tasks`。另外 `minecraftTest` 的输出（含验证层启用行与任何验证消息）在
+`build/test-results/minecraftTest/*.xml` 里，不在 gradle 控制台。
+
 其中 `LavaFlowVulkanContextTest` 不是纯逻辑用例：它会真的构造一次 Minecraft 侧上下文，把
 `createInstance → selectDevice → createDevice → createSurface` 整条路走一遍，并以 `lavaflow.baselineDevice`
 起（五项可选能力俱不可用，即移动端画像）。它需要显示服务器与可用 Vulkan 设备，无 `DISPLAY` 时**自行跳过**，
@@ -294,6 +299,15 @@ sudo apt-get install vulkan-validationlayers
 **Android 上目前用不了。** 实测环境（见"已实测环境"）里既没有验证层也没有 `VK_EXT_debug_utils`，开关在移动端
 只会打印上面那两条 WARNING。要在手机上拿到验证输出，需要自行把验证层按 arm64 装进设备。
 
+验证层的覆盖范围就是这次运行**真正做过的事**：
+
+- 它能覆盖 `createInstance → selectDevice → createDevice → createSurface` 这段：`LavaFlowVulkanContextTest`
+  会在验证层下真的走一遍（2026-10 实测：MC 侧 69 个用例全过、0 跳过，**0 条验证消息**）。
+- 它**不能**用来判定 descriptor 路径是否 API 干净：独立 smoke 渲染器（`src/main/java/dev/lavaflow/vulkan/`）
+  没有任何 descriptor 代码，现有用例也不驱动 `LavaFlowRenderPass.pushDescriptors`。本地要走到那次崩溃
+  所在的调用（`vkUpdateDescriptorSets`），只能新写一个真设备用例把 `LavaFlowRenderPipeline` +
+  `LavaFlowRenderPass` 跑起来。
+
 ### 在桌面上复现移动端画像（`lavaflow.baselineDevice`）
 
 `-Dlavaflow.baselineDevice=true` 把选中的设备描述成"除 `VK_KHR_swapchain` 外什么都没有"的样子：dynamic
@@ -305,6 +319,23 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 用于单独隔离一条路径。
 
 实测的 vivo PD1962 / Mali-G76 上报的能力集与此**完全一致**（五项全 false），所以这个开关是那台设备的忠实模拟。
+
+### 资源 churn 的实测基线（`lavaflow.frameStats`）
+
+`-Dlavaflow.frameStats=true` 会让 `FrameStatsMixin` 周期输出一行计数器，用来看"有没有东西在每帧被创建/退役"——
+比只看帧率更能定位问题。字段：`sets_per_frame`、`hit_rate`、`invalidations_per_frame`、`barriers`、
+`binds_per_frame`、`rebind_ratio`、`pushes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、
+`top_retired_view`。
+
+Mali-G76 设备实测（渲染距离 2 区块，故 165~185 fps 不代表正常视距）：
+
+| 场景 | `retired_buffer` /帧 | `retired_view` /帧 | 解读 |
+| --- | --- | --- | --- |
+| 启动 / 资源加载 | ~0.2 | **~24.8** | `invalidations_per_frame ≈ 24.85`：一次性资源加载摊在几秒里，不是每帧泄漏 |
+| 稳态主菜单 | **~12.2** | 0.00 | `invalidations_per_frame = 0.00`——完全不碰 descriptor 缓存；菜单受 60fps 限制，没有可见代价 |
+| 世界内 | ~0.0~0.5 | **0.00** | 不存在持续 churn（`barriers` ≈ 17.5/帧） |
+
+结论：**不要**为菜单那 12 个短命 buffer 做 buffer 回收——它不碰 descriptor 缓存，也换不到可观察的帧率。
 
 ## 在 Fabric 上安装
 
@@ -330,6 +361,9 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 - **GPU 粒子加速不可用的原因是结构性的，与版本或扩展能力无关**：AsyncParticles 的 Vulkan 渲染器要的不是裸 `VkDevice`，而是一个 Mojang `VulkanDevice` 包装对象（`vkDevice()`、`createCommandEncoder()`，其内部类还继承 `VulkanGpuBuffer`）。LavaFlow 的后端是另一套实现，只实现 `GpuDeviceBackend`，拿不出这个对象。因此即使设备支持 Vulkan 1.4 与全部可选扩展，该路径同样走不通。（曾按 Mali-G76 的 Vulkan 1.1 归因于能力不足，那是不对的：在 `device 1.4.x` 的设备上 AsyncParticles 会按 `apiVersion >= 1.3` 直接置 `pushDescriptor`/`synchronization2` 为真，反而会尝试启用。）
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
+
+- **Mali-G76 上出现过一次未解释的原生崩溃**：渲染线程在驱动的 `vkUpdateDescriptorSets` 里 SIGSEGV，
+  进程直接死。现状、已排除的嫌疑，以及若再现该做什么，见「状态 → 一次未解释的驱动崩溃」。
 
 ## 后续可做
 
@@ -384,6 +418,29 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 
 同一个 JAR（`0.1.0-alpha (64e8b68)`）后来在这台设备上又跑过一轮，JVM 参数带 `-Dlavaflow.validation=true`：
 结果证实移动端无法启用验证层（日志里只有那两条 WARNING），其余表现一致——启动、建世界、渲染、退出码 0，无崩溃。
+
+### 一次未解释的驱动崩溃（Mali-G76）
+
+**现象**：渲染线程在**刚进入世界后的 lightmap 绘制**里，于驱动的 `vkUpdateDescriptorSets` 内部触发
+`libGLES_mali.so` 原生崩溃（Java 层无异常，进程直接死）。当时构建里含一处"复用 descriptor 写入结构体"
+的改动（`4c308d5`：把 `calloc` 出的 `VkWriteDescriptorSet` 与 info 结构体换成跨帧复用的堆缓冲）。
+
+**已撤销**（`20485cb`；26.2 对齐于 `dc20fed`）。撤销后同一设备连续多轮运行干净，其中包括一轮
+**反复进出世界 12 次、20888 帧**的压力测试——而"进出世界"正是崩溃发生的那个时刻。
+
+**成因未解释，但已排除一处嫌疑**：复读代码后可以确定，那处改动与该崩溃**没有可解释的因果**。两个版本
+交给驱动的字段值完全一致——每次 push 都重设 `sType / dstSet / dstBinding / dstArrayElement /
+descriptorCount / descriptorType`，而未被该 entry 类型使用的联合成员在两个版本里都是 NULL（一个是显式
+置空，一个是 `calloc` 零初始化）。所以"撤掉它就好了"更可能是巧合，或是分配/时序上的扰动。
+
+处置：
+
+- 那处改动**维持撤销**。理由不是"它是元凶"，而是它没有可验证的收益（实测每帧只省 8~27 次小 `calloc`，
+  量级见 `pushes_per_frame`），而当前状态是唯一被真机验证过的状态。
+- **当前构建仍有可能再现这个崩溃**。若再现，请保留完整日志（尤其是崩溃前那几帧的上下文）——那比任何
+  本地推断都有价值。
+- 剩余可疑方向：Mali 驱动在该写入模式上的 bug；或"已销毁的资源句柄仍被写进 descriptor"这类
+  use-after-free——后者正是验证层能抓的，但本地没有任何用例能走到那条路径（见「验证与诊断」）。
 
 ## 致谢
 
