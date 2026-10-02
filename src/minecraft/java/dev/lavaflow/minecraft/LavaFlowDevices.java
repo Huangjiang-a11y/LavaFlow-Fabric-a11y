@@ -56,4 +56,16 @@ public final class LavaFlowDevices {
     public static boolean isCurrentDeviceLavaFlow() {
         return isLavaFlow(RenderSystem.getDevice());
     }
+
+    /**
+     * The device Minecraft is rendering with, or {@code null} before one exists.
+     *
+     * <p>{@code getDevice()} above throws {@code IllegalStateException} until the device is initialized, so
+     * a caller that runs during startup -- before the game has picked a backend -- cannot use it. Whether
+     * the current device is LavaFlow's is asked that early by the Vitrail guard, whose answer decides
+     * whether a shader pack is read at all.
+     */
+    public static GpuDevice currentDeviceOrNull() {
+        return RenderSystem.tryGetDevice();
+    }
 }

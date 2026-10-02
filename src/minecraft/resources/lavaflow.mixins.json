@@ -9,7 +9,8 @@
     "FramerateLimitMixin",
     "PreferredGraphicsApiMixin",
     "TextureAtlasMaxSizeFallbackMixin",
-    "AsyncParticlesVulkanBackendMixin"
+    "AsyncParticlesVulkanBackendMixin",
+    "VitrailBackendMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -19,6 +19,7 @@ LavaFlow 是 Minecraft Blaze3D API 的实验性 Vulkan 1.1 图形后端。它用
 | Minecraft 运行时 | Java 25 |
 | 图形 API | Vulkan 1.1 |
 | Sodium（可选） | 0.9.2（实测版本） |
+| Vitrail Shaders（可选） | 0.12.0-beta：引擎站到一边，包不绘制（见"已知限制"） |
 | 桌面 smoke 渲染器 | Java 21 字节码 |
 
 后端为不具备以下能力的 Vulkan 1.1 设备提供兼容路径：dynamic rendering、synchronization2、push descriptors、multi-draw indirect、非 solid fill mode、顶点属性除数。桌面端与 ARM64 Android 设备均在范围内。实际驱动行为与性能因 GPU 而异。
@@ -137,6 +138,7 @@ src/
 │   ├── LavaFlowBackend.java              # 实现 Blaze3D GpuBackend
 │   ├── LavaFlowDevices.java              # 判定当前设备是否为 LavaFlow 后端
 │   ├── AsyncParticlesCompat.java         # AsyncParticles 兼容（可选模组的反射桥接）
+│   ├── VitrailCompat.java                # Vitrail 兼容（可选模组的后端判定）
 │   ├── MixinPluginUtil.java
 │   ├── vulkan/                           # Blaze3D Vulkan 实现
 │   │   ├── LavaFlowVulkanContext.java         # 实例/设备/队列/交换链与扩展协商
@@ -158,7 +160,8 @@ src/
 │   │   ├── FramerateLimitMixin.java              # 帧率限制插桩（系统属性门控）
 │   │   ├── FrameStatsMixin.java                  # 帧统计插桩（系统属性门控）
 │   │   ├── TextureAtlasMaxSizeFallbackMixin.java # 图集尺寸异常时的兜底（见"已知限制"）
-│   │   └── AsyncParticlesVulkanBackendMixin.java # AsyncParticles 兼容（可选模组）
+│   │   ├── AsyncParticlesVulkanBackendMixin.java # AsyncParticles 兼容（可选模组）
+│   │   └── VitrailBackendMixin.java              # Vitrail 兼容（可选模组）
 │   └── sodium/                           # Sodium 兼容
 │       ├── LavaFlowSodium.java                # 绘制路径选择
 │       ├── LavaFlowSodiumMixinPlugin.java     # 未安装 Sodium 时跳过
@@ -444,6 +447,7 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 - **wireframe 管线会被跳过**：设备不支持非 solid fill mode 时，需要线框填充的管线（如 `minecraft:pipeline/wireframe`）无法创建；LavaFlow 会记录错误并跳过它们，游戏其余部分继续运行。这属于设计内行为，不是缺陷。
 - **AsyncParticles 需靠 mixin 兜底**：AsyncParticles 会因自身名字判断而把 LavaFlow 的设备强转成 Mojang 的 `VulkanDevice`，该转换必然失败且发生在静态初始化器里（会拖垮整个游戏）。`AsyncParticlesVulkanBackendMixin` 拦截 `getVkCaps` 并返回其 `VkCommands.Unsupported`，AsyncParticles 随之走 CPU 粒子路径，永远走不到那句强转。
 - **GPU 粒子加速不可用的原因是结构性的，与版本或扩展能力无关**：AsyncParticles 的 Vulkan 渲染器要的不是裸 `VkDevice`，而是一个 Mojang `VulkanDevice` 包装对象（`vkDevice()`、`createCommandEncoder()`，其内部类还继承 `VulkanGpuBuffer`）。LavaFlow 的后端是另一套实现，只实现 `GpuDeviceBackend`，拿不出这个对象。因此即使设备支持 Vulkan 1.4 与全部可选扩展，该路径同样走不通。（曾按 Mali-G76 的 Vulkan 1.1 归因于能力不足，那是不对的：在 `device 1.4.x` 的设备上 AsyncParticles 会按 `apiVersion >= 1.3` 直接置 `pushDescriptor`/`synchronization2` 为真，反而会尝试启用。）
+- **Vitrail Shaders 在 LavaFlow 上不绘制**：Vitrail 是把 OptiFine 格式的包跑在游戏自己的 Vulkan 后端上的光影引擎，而它的引擎写的是那个后端的**类**，不是设备门面：`VulkanBackendMixin` 包住 `VulkanBackend.createDevice(...)` 来申请包需要的设备特性（`vertexPipelineStoresAndAtomics`、`shaderStorageImageExtendedFormats`、`independentBlend`、`geometryShader`、16/8 位算术），其余部分从 `VulkanRenderPass`、`VulkanDevice`、`VulkanCommandEncoder`、`VulkanGpuTextureView` 取裸句柄。LavaFlow 注册的是自己的 `GpuDeviceBackend`，这些对象一个都不存在。它自己那些 `instanceof` 检测（`PackCompute`、`ShadowCompare`）确实答"不是"并在本地退让，但引擎整体已经被**名字**打开了——`HostReport.otherBackend` 只比设备上报的字符串，而 LavaFlow 上报的正是 `"Vulkan"`。半开的引擎比不开更糟：翻译后的着色器带上了 Vitrail 自己的 `OfGlobals` uniform 块，而填它的那段代码在永不执行的原生路径上，第一次绘制就在空槽上抛 `Missing uniform OfGlobals`（`pushDescriptors` ← Sodium 的 `VKIndirectDrawBatch.draw`）。这个抛法不是 LavaFlow 比原版严：Mojang 自己的 `VulkanRenderPass.pushDescriptors` 遇到空 uniform-buffer 槽同样抛 `IllegalStateException`（两边都在 26.3 客户端上核对过）。`VitrailBackendMixin` 因此只回答它那一句"这是我能画的后端吗"为"另一个后端"，余下的交给它自己那条路：包既不读也不画，游戏保持自己的画面，并在日志与聊天里自己说明。名字核对于 vitrail v0.12.0-beta（`dev.vitrail.HostReport#otherBackend`）。
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
 
@@ -481,6 +485,10 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 **注意**：无论是否实现上述渲染器，`AsyncParticlesVulkanBackendMixin` 的守卫都必须保留——它拦的 `Backends.getVkCaps` 在静态初始化器里，与用哪个粒子渲染器无关。
 
 *以上依据 AsyncParticles 26.3.2.0-alpha.3+26.3 与 26.3 的 `VulkanDevice` 字节码核对。*
+
+### 让 Vitrail 在 LavaFlow 上绘制
+
+不只是"把守卫拿掉"。Vitrail 的引擎要的是原生后端的对象，而不是设备门面：申请设备特性靠包住 `VulkanBackend.createDevice(...)`，取命令缓冲靠 `VulkanCommandEncoder`，写描述符靠手写 `VkWriteDescriptorSet`（`PackCompute.pushDescriptors`），读纹理靠 `VulkanGpuTextureView`。这些都在 LavaFlow 只实现 `GpuDeviceBackend` 的边界之外，与 AsyncParticles 的 GPU 粒子一样是结构性的，不是版本或扩展能力问题。要让包真在这里绘制，等于把这套内部对象重新提供出来——那是另一个项目，不是一条兼容守卫。
 
 ## 状态
 
