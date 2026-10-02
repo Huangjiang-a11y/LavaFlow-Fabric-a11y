@@ -55,6 +55,7 @@ final class LavaFlowGpuSampler extends GpuSampler {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
+        LavaFlowFrameStats.samplerRetired();
         device.invalidateDescriptorCache(sampler);
         device.defer(() -> vkDestroySampler(context.device(), sampler, null));
     }
