@@ -135,7 +135,7 @@ jobs:
           for method in descriptorSetsAreWrittenOnARealDeviceAndRetireWithTheirBuffer \
                         bufferViewsAreCreatedOnARealDeviceAndRetireWithTheirBuffer \
                         sampledImageDescriptorsRetireWithTheirViewAndTheirSampler \
-                        theValidationLayerReportsAStaleHandle; do
+                        theValidationLayerReportsAForbiddenWrite; do
             grep -q "testcase name=\"$method" "$report" \
               || { echo "::error::$method did not run"; exit 1; }
           done
