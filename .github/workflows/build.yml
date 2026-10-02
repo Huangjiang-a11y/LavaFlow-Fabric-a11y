@@ -77,6 +77,28 @@ jobs:
             gradle --no-daemon clean check jar installDist
 
       # The context test skips itself when DISPLAY is unset (Assumptions.assumeTrue), and a skipped
+      # These tests depend on a software driver and a validation layer whose versions differ between
+      # the runner image and any developer machine, and the raw Gradle log is not readable without
+      # repository admin. So a failure is surfaced as an annotation, which anyone who can see the run
+      # can read, and which names the failing case and what the layer said rather than leaving it to
+      # be guessed at from an exit code.
+      - name: Surface test failures as annotations
+        if: failure()
+        run: |
+          found=0
+          for report in build/test-results/*/TEST-*.xml; do
+            [ -f "$report" ] || continue
+            grep -qE 'failures="[1-9]|errors="[1-9]' "$report" || continue
+            found=1
+            detail=$(tr '\n' ' ' < "$report" | sed -n 's/.*\(<failure.*<\/failure>\).*/\1/p' | cut -c1-1200)
+            [ -n "$detail" ] || detail="$(tr '\n' ' ' < "$report" | grep -o '<failure[^>]*>' | head -1)"
+            [ -n "$detail" ] || detail="the report records a failure but carries no failure element"
+            echo "::error title=$(basename "$report")::$detail"
+            stderr=$(tr '\n' ' ' < "$report" | sed -n 's/.*<system-err>\(.*\)<\/system-err>.*/\1/p' | cut -c1-1200)
+            [ -n "$stderr" ] && echo "::error title=stderr of $(basename "$report")::$stderr"
+          done
+          [ "$found" = 1 ] || echo "::error title=build failed before the tests ran::no test report recorded a failure"
+
       # test leaves the build green all the same. Without this step a reordered workflow would
       # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
       # failure this test exists to catch.
