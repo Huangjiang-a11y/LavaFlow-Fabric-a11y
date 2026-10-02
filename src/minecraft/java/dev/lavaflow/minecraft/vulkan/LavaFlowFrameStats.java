@@ -159,8 +159,19 @@ public final class LavaFlowFrameStats {
         retiredSamplers++;
     }
 
-    /** The busiest texture labels among the view retirements since the last report, most retired first. */
+    /**
+     * The busiest texture labels among the view retirements since the last report, most retired first,
+     * with the number of distinct labels when that exceeds the number shown.
+     *
+     * <p>The distinct count matters because the interesting distributions here are flat: a device run
+     * retiring ~3200 views while reloading resources showed the top three as
+     * {@code minecraft:missingno=12, minecraft:item/cave_spider_spawn_egg=1,
+     * minecraft:block/sniffer_egg_very_cracked_bottom=1} -- 14 of 3200 named, because every texture
+     * resource is retired exactly once. "2589 distinct" says one-per-resource at a glance; a top-three
+     * of counts cannot.
+     */
     private static String topRetiredViewLabels() {
+        int distinct = retiredViewLabels.size();
         if (retiredViewLabels.isEmpty()) return "-";
         List<Map.Entry<String, Integer>> top = new ArrayList<>(retiredViewLabels.entrySet());
         top.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
@@ -169,6 +180,8 @@ public final class LavaFlowFrameStats {
             if (i > 0) out.append(", ");
             out.append(top.get(i).getKey()).append('=').append(top.get(i).getValue());
         }
+        int shown = Math.min(3, top.size());
+        if (distinct > shown) out.append(" (distinct=").append(distinct).append(')');
         retiredViewLabels.clear();
         return out.toString();
     }

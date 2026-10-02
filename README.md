@@ -327,6 +327,9 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 `binds_per_frame`、`rebind_ratio`、`pushes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、
 `retired_texture`、`partial_clears`、`top_retired_view`。
 
+`top_retired_view` 在条目多于展示数时会附上 `(distinct=N)`，因为这里常见的分布是**平的**（每份资源各退役
+一次），只列前几名几乎说不出信息量——见下文第二轮实测。
+
 `retired_texture` 要和 `retired_view` 一起看才能分辨"纹理本身在换"和"只有 view 在换"。`partial_clears`
 是 `clearColorAndDepthTextures` 的调用次数——那是 LavaFlow 自己唯一会制造 view churn 的地方（每次调用
 造两个 view 并立刻销毁），所以它是"这些 churn 是不是我们自己造成的"这个问题的分子。
@@ -388,6 +391,36 @@ frames=111 ... sets_per_frame=29.6 hit_rate=0.062 invalidations_per_frame=29.11
 结论：加载期的 view 与 descriptor churn 是 **Minecraft 重载纹理资源**造成的，随加载结束归零（后续每份
 报告都是 `retired_view=0.00`、`retired_texture=0.00`），既不是泄漏，也不该由 LavaFlow 回收。注意
 `top_retired_view` 一次只列前 3 名，top-3 之外还有约 20% 未列出。
+
+#### 按名字确认（2026-10-02 第二轮，bundle `7f1f48a`）
+
+label 修复上线后，同一台设备的加载期身份从"形状"变成了真实资源名：
+
+```text
+frames=132 ... retired_view=24.39 retired_texture=24.39 partial_clears=0.0
+top_retired_view=minecraft:missingno=12, minecraft:item/cave_spider_spawn_egg=1,
+                 minecraft:block/sniffer_egg_very_cracked_bottom=1
+```
+
+逐张 PNG 的资源名（`block/…`、`item/…`），绝大多数恰好 1 次——与上一轮"字节码逐项吻合
+`ReloadableTexture.doLoad`"一致，归属由推断变成点名。`minecraft:missingno`（缺失贴图占位）是唯一出现
+多次的身份（12 次）。这一轮也暴露了呈现问题：整个区间约 3200 次退役而 top-3 只列出 14 个，因为分布是平的；
+`(distinct=N)` 就是为此加的——"2589 个不同身份、各一次"一句话说清"每份资源一张"，top-3 的计数说不清。
+
+#### `partial_clears` 抓到了我们自己路径上的一个来源
+
+同一轮里 `partial_clears` 第一次非零，出现在打开物品栏前后（frames 9629~10663）：
+
+```text
+frames=10110 ... retired_view=2.00 invalidations_per_frame=0.00 partial_clears=1.0
+top_retired_view=UI items atlas=481, UI items atlas depth=481
+```
+
+`partial_clears × 2 == retired_view` 逐位成立，身份是 `UI items atlas` / `UI items atlas depth`：物品栏的
+`GuiItemAtlas` 每次重建都清一次 color+depth，而 `clearColorAndDepthTextures` 每次调用正是造两个临时 view
+（`finally` 里销毁）——所以这两个 view 是**我们自己**造的，不是 Minecraft 的。代价有限：`invalidations_per_frame
+= 0.00`（完全不碰 descriptor 缓存），速率 ≤1 次清屏/帧，只在图集重建时发生。这一条同样是"用数字说清"而不是
+"读调用图猜"。
 
 ## 在 Fabric 上安装
 
