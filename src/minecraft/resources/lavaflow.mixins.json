@@ -8,7 +8,8 @@
     "FramerateLimitMixin",
     "PreferredGraphicsApiMixin",
     "TextureAtlasMaxSizeDebugMixin",
-    "AsyncParticlesVulkanBackendMixin"
+    "AsyncParticlesVulkanBackendMixin",
+    "VitrailBackendMixin"
   ],
   "injectors": {
     "defaultRequire": 1
