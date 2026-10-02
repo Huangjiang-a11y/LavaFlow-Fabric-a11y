@@ -447,8 +447,8 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 - **部分 mixin 属于诊断代码**：`FramerateLimitMixin` 与 `FrameStatsMixin` 由系统属性门控；`TextureAtlasMaxSizeFallbackMixin` 仅在图集尺寸上报为非正值时介入并记一条 WARN，实测该分支未触发。
 - **`LavaFlowShaderc.compile()` 已无调用者**：着色器编译归前端后，该类只剩定位 shaderc 动态库的作用。
 
-- **Mali-G76 上出现过一次未解释的原生崩溃**：渲染线程在驱动的 `vkUpdateDescriptorSets` 里 SIGSEGV，
-  进程直接死。现状、已排除的嫌疑，以及若再现该做什么，见「状态 → 一次未解释的驱动崩溃」。
+- **Mali-G76 上出现过一次驱动侧原生崩溃**：渲染线程在驱动的 `vkUpdateDescriptorSets` 里 SIGSEGV，
+  进程直接死。缺陷已定位并修复，重加后真机两轮复测未见崩溃；机制、证据与仍未证明的部分，见「状态 → 一次未解释的驱动崩溃」。
 
 ## 后续可做
 
