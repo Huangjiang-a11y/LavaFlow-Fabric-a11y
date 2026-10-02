@@ -252,6 +252,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (x < 0 || y < 0 || x + width > color.getWidth(0) || y + height > color.getHeight(0)) {
             throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
         }
+        LavaFlowFrameStats.partialClear();
         GpuTextureView colorView = device.createTextureView(color);
         GpuTextureView depthView = device.createTextureView(depth);
         try {

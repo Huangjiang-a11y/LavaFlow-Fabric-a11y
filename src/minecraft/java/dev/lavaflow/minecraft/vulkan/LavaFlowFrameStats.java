@@ -41,6 +41,10 @@ public final class LavaFlowFrameStats {
     private static long retiredBuffers;
     private static long retiredViews;
     private static long retiredSamplers;
+    private static long retiredTextures;
+    private static long partialClears;
+    private static long retiredTexturesAtReport;
+    private static long partialClearsAtReport;
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -108,11 +112,34 @@ public final class LavaFlowFrameStats {
         retiredBuffers++;
     }
 
-    /** Counts one retired texture view, and remembers the label of the texture it viewed. */
-    public static void viewRetired(String label) {
+    /**
+     * Counts one retired texture view under {@code identity}, the name of the texture it viewed.
+     *
+     * <p>The identity is required and must say something even when the texture has no label — see
+     * {@code LavaFlowGpuTexture.identity()}. It used to be dropped when null, which quietly turned the
+     * whole tally empty in the one situation it exists for: a device run retired ~21 views per frame
+     * while this reported nothing, because every one of those textures had no label.
+     */
+    public static void viewRetired(String identity) {
         if (!ENABLED) return;
         retiredViews++;
-        if (label != null) retiredViewLabels.merge(label, 1, Integer::sum);
+        retiredViewLabels.merge(identity, 1, Integer::sum);
+    }
+
+    /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
+    public static void textureRetired() {
+        if (!ENABLED) return;
+        retiredTextures++;
+    }
+
+    /**
+     * Counts one {@code clearColorAndDepthTextures} call. Those create two texture views that are
+     * destroyed again immediately, so this is the one place LavaFlow itself manufactures view churn
+     * and it is worth being able to rule in or out by number rather than by reading the call graph.
+     */
+    public static void partialClear() {
+        if (!ENABLED) return;
+        partialClears++;
     }
 
     /** Counts one retired sampler. */
@@ -189,6 +216,8 @@ public final class LavaFlowFrameStats {
         double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
+        double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
+        double clearsPerFrame = framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
         framesAtReport = totalFrames;
         descriptorSetsAtReport = descriptorSets;
@@ -199,6 +228,8 @@ public final class LavaFlowFrameStats {
         retiredBuffersAtReport = retiredBuffers;
         retiredViewsAtReport = retiredViews;
         retiredSamplersAtReport = retiredSamplers;
+        retiredTexturesAtReport = retiredTextures;
+        partialClearsAtReport = partialClears;
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         descriptorPushesAtReport = descriptorPushes;
@@ -206,7 +237,8 @@ public final class LavaFlowFrameStats {
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
                         + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
                         + " binds_per_frame={11} rebind_ratio={12} pushes_per_frame={13}"
-                        + " retired_buffer={14} retired_view={15} retired_sampler={16} top_retired_view={17}",
+                        + " retired_buffer={14} retired_view={15} retired_sampler={16} retired_texture={17}"
+                        + " partial_clears={18} top_retired_view={19}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -224,6 +256,8 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", buffersPerFrame),
                 String.format("%.2f", viewsPerFrame),
                 String.format("%.2f", samplersPerFrame),
+                String.format("%.2f", texturesPerFrame),
+                String.format("%.1f", clearsPerFrame),
                 topViewLabels);
     }
 }

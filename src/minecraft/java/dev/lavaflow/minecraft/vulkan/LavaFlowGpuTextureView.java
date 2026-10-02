@@ -47,7 +47,7 @@ final class LavaFlowGpuTextureView extends GpuTextureView {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
-        LavaFlowFrameStats.viewRetired(texture.getLabel());
+        LavaFlowFrameStats.viewRetired(texture.identity());
         device.invalidateDescriptorCache(view);
         device.defer(() -> {
             context.releaseLegacyFramebuffers(view);
