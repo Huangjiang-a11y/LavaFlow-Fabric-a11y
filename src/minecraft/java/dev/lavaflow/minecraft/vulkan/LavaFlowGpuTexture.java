@@ -114,7 +114,19 @@ final class LavaFlowGpuTexture implements GpuTexture {
     private void destroyIfUnreferenced() {
         if (!closed || views != 0 || destroyed) return;
         destroyed = true;
+        LavaFlowFrameStats.textureRetired();
         device.defer(this::destroyNow);
+    }
+
+    /**
+     * How this texture names itself in the churn counters: its label, or a description of it when it
+     * has none. Never null, and that is the point — a texture without a label used to make the view
+     * tally silently record nothing, which is the opposite of what a diagnostic is for.
+     */
+    String identity() {
+        if (label != null) return label;
+        return "[unlabeled " + width + "x" + height + " " + format + " mips=" + mipLevels
+                + " layers=" + depthOrLayers + " usage=0x" + Integer.toHexString(usage) + "]";
     }
 
     private void destroyNow() {

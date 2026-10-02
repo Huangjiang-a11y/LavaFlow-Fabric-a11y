@@ -325,7 +325,17 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 `-Dlavaflow.frameStats=true` 会让 `FrameStatsMixin` 周期输出一行计数器，用来看"有没有东西在每帧被创建/退役"——
 比只看帧率更能定位问题。字段：`sets_per_frame`、`hit_rate`、`invalidations_per_frame`、`barriers`、
 `binds_per_frame`、`rebind_ratio`、`pushes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、
-`top_retired_view`。
+`retired_texture`、`partial_clears`、`top_retired_view`。
+
+`retired_texture` 要和 `retired_view` 一起看才能分辨"纹理本身在换"和"只有 view 在换"。`partial_clears`
+是 `clearColorAndDepthTextures` 的调用次数——那是 LavaFlow 自己唯一会制造 view churn 的地方（每次调用
+造两个 view 并立刻销毁），所以它是"这些 churn 是不是我们自己造成的"这个问题的分子。
+
+`top_retired_view` 曾经**每一份报告都是 `-`**：退役计数在涨（加载期约 21 张 view/帧），而 label 表始终
+为空——因为那批纹理没有 label，当时 label 为 null 就不记账，于是在最需要它的场景里静默失效。现在纹理
+通过 `identity()` 自报家门：有 label 用 label，没有则退化成
+`[unlabeled 1024x512 RGBA8_UNORM mips=1 layers=1 usage=0x4]`。所以这一栏下一次真机运行才第一次能答出
+"到底是谁在退役 view"。
 
 Mali-G76 设备实测（渲染距离 2 区块，故 165~185 fps 不代表正常视距）：
 
@@ -336,6 +346,12 @@ Mali-G76 设备实测（渲染距离 2 区块，故 165~185 fps 不代表正常�
 | 世界内 | ~0.0~0.5 | **0.00** | 不存在持续 churn（`barriers` ≈ 17.5/帧） |
 
 结论：**不要**为菜单那 12 个短命 buffer 做 buffer 回收——它不碰 descriptor 缓存，也换不到可观察的帧率。
+
+同一台设备 2026-10-02 又一次运行（bundle `df99b43`，视距 2→10）复现了上表：加载期
+`retired_view=21.18`/帧 配 `invalidations_per_frame=21.26`（同一现象，量级一致），而世界内从 frames≈2757
+起 `sets_per_frame=0.0`、`hit_rate=1.000`、`invalidations_per_frame=0.00` 一路保持到 10585 帧。也就是说
+descriptor 侧的稳态 churn 已经不存在，剩下的全在加载期——而"加载期那批到底是谁"正是上一段那个洞要回答
+的问题。
 
 ## 在 Fabric 上安装
 
