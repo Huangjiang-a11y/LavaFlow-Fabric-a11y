@@ -68,6 +68,7 @@ src/
 │
 ├── minecraft/java/dev/lavaflow/minecraft/
 │   ├── LavaFlowBackend.java              # Fabric 适配器，实现 Blaze3D GpuBackend
+│   ├── AsyncParticlesCompat.java         # AsyncParticles 兼容（可选模组的守卫逻辑）
 │   ├── LavaFlowDevices.java              # "当前设备是不是 LavaFlow 的"（可选模组守卫共用）
 │   ├── VitrailCompat.java                # Vitrail 兼容（可选模组的后端判定）
 │   ├── vulkan/                           # Blaze3D Vulkan 实现（20+ 类）
@@ -246,12 +247,14 @@ AsyncParticles 在 `Backends` 的静态初始化器里按后端名分支：名�
 
 `AsyncParticlesVulkanBackendMixin` 拦下 `getVkCaps`：当后端不是 Mojang 的 `VulkanDevice` 时，直接返回 AsyncParticles 自己的 `VkCommands.Unsupported`（用反射在它自己的类加载器里构造，以保证类型完全一致）。AsyncParticles 随后报告无 Vulkan GPU 加速并走 CPU 粒子路径，永远走不到那句强转。
 
+判定与构造都在 `AsyncParticlesCompat` 里，mixin 类只留注入器——普通 mixin 成员会被合并进第三方模组的目标类，而且放在外面才够得到测试。`isMojangVulkanDevice` 走 `LavaFlowDevices.backendOf`（两条守卫共用一处；读不到记 WARNING，而不是静默站到一边），`unsupportedVkCaps` 按名字反射构造那个类型，造不出来就返回 `null` 并记 ERROR——那种情况下放行原方法、让它自己报错，比用一个它的代码处理不了的值取消掉好。守卫生效时记一条 INFO：没有它，"生效了"和"AsyncParticles 根本没问过"在日志里长得一模一样。名字核对于 AsyncParticles **26.2.2.9+26.2**：`Backends.getVkCaps(GpuDevice)` 是私有静态方法、第一步是 `((VulkanDevice) device.backend).vkDevice()`；`VkCommands` 是 public abstract class，`Unsupported` 是它的 public 嵌套类、带 public 无参构造。
+
 **本分支与 26.3 在此处的实现必须不同，不要互相搬运。** 差异源自 Mojang 在 26.3 把 `GpuDevice` 从类改成了接口：
 
 | | 本分支（26.2） | 26.3 |
 | --- | --- | --- |
 | `GpuDevice` | `com.mojang.blaze3d.systems.GpuDevice`，**类**，含 `private final GpuDeviceBackend backend` | `com.mojang.renderpearl.api.device.GpuDevice`，**接口**，无任何字段 |
-| 取后端 | 直接 `getDeclaredField("backend")` 可行 | 同样的反射必抛 `NoSuchFieldException`（该分支的守卫曾因此成为空操作） |
+| 取后端 | 反射，集中在 `LavaFlowDevices.backendOf`（两条守卫共用） | 同样的反射必抛 `NoSuchFieldException`（该分支的守卫曾因此成为空操作），那边走 accessor mixin |
 | `VulkanDevice` | `com.mojang.blaze3d.vulkan.VulkanDevice` | `com.mojang.renderpearl.backend.vulkan.VulkanDevice` |
 
 ## Vitrail 兼容性
