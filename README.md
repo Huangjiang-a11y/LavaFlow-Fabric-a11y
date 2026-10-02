@@ -331,17 +331,23 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 是 `clearColorAndDepthTextures` 的调用次数——那是 LavaFlow 自己唯一会制造 view churn 的地方（每次调用
 造两个 view 并立刻销毁），所以它是"这些 churn 是不是我们自己造成的"这个问题的分子。
 
-`top_retired_view` 曾经**每一份报告都是 `-`**：退役计数在涨（加载期约 21 张 view/帧），而 label 表始终
-为空——因为那批纹理没有 label，当时 label 为 null 就不记账，于是在最需要它的场景里静默失效。现在纹理
-通过 `identity()` 自报家门：有 label 用 label，没有则退化成
-`[unlabeled 1024x512 RGBA8_UNORM mips=1 layers=1 usage=0x4]`。所以这一栏下一次真机运行才第一次能答出
-"到底是谁在退役 view"。
+`top_retired_view` 曾经**每一份报告都是 `-`**：退役计数在涨（加载期约 21~29 张 view/帧），而 label 表
+始终为空。两层原因，都修了：
+
+1. label 为 null 时 `viewRetired` 直接不记账，于是它在最需要它的场景里静默失效。现在纹理通过
+   `identity()` 自报家门：有 label 用 label，没有则退化成
+   `[unlabeled 1024x512 RGBA8_UNORM mips=1 layers=1 usage=0x4]`。
+2. 更深的一层：**那批纹理本来就没有 label**。前端 `FrontendGpuDevice.createTexture(Supplier<String>, …)`
+   只在 `isDebuggingEnabled()` 为真时才去解析 label 供应器，否则直接传 null；而这个开关转发给 backend，
+   也就是 LavaFlow 的 `LavaFlowDevice.isDebuggingEnabled()`——它当时硬编码返回 false，于是经由前端创建的
+   **每一张**纹理都成了匿名对象。现在它跟随 `lavaflow.frameStats`（唯一会读这些名字的诊断）打开，正常
+   运行的代价不变。
 
 Mali-G76 设备实测（渲染距离 2 区块，故 165~185 fps 不代表正常视距）：
 
 | 场景 | `retired_buffer` /帧 | `retired_view` /帧 | 解读 |
 | --- | --- | --- | --- |
-| 启动 / 资源加载 | ~0.2 | **~24.8** | `invalidations_per_frame ≈ 24.85`：一次性资源加载摊在几秒里，不是每帧泄漏 |
+| 启动 / 资源加载 | ~0.2 | **~24.8** | `invalidations_per_frame ≈ 24.85`：一次性资源加载摊在几秒里，不是每帧泄漏（身份已实测，见下） |
 | 稳态主菜单 | **~12.2** | 0.00 | `invalidations_per_frame = 0.00`——完全不碰 descriptor 缓存；菜单受 60fps 限制，没有可见代价 |
 | 世界内 | ~0.0~0.5 | **0.00** | 不存在持续 churn（`barriers` ≈ 17.5/帧） |
 
@@ -350,8 +356,38 @@ Mali-G76 设备实测（渲染距离 2 区块，故 165~185 fps 不代表正常�
 同一台设备 2026-10-02 又一次运行（bundle `df99b43`，视距 2→10）复现了上表：加载期
 `retired_view=21.18`/帧 配 `invalidations_per_frame=21.26`（同一现象，量级一致），而世界内从 frames≈2757
 起 `sets_per_frame=0.0`、`hit_rate=1.000`、`invalidations_per_frame=0.00` 一路保持到 10585 帧。也就是说
-descriptor 侧的稳态 churn 已经不存在，剩下的全在加载期——而"加载期那批到底是谁"正是上一段那个洞要回答
-的问题。
+descriptor 侧的稳态 churn 已经不存在，剩下的全在加载期。
+
+#### 加载期那批 churn 是什么（2026-10-02 实测）
+
+上表"启动 / 资源加载"那行的"一次性资源加载摊在几秒里"当时是**推断**——因为身份那一栏一直是 `-`。补上
+`retired_texture`、`partial_clears` 与兜底身份后，同一台设备（bundle `3fcb594`）的报告第一次答出了身份：
+
+```text
+frames=111 ... sets_per_frame=29.6 hit_rate=0.062 invalidations_per_frame=29.11
+  binds_per_frame=2.7 pushes_per_frame=31.6 retired_buffer=0.21
+  retired_view=29.01 retired_texture=29.01 partial_clears=0.0
+  top_retired_view=[unlabeled 16x16 RGBA8_UNORM mips=1 layers=1 usage=0x5]=2266,
+                   [unlabeled 8x8 RGBA8_UNORM mips=1 layers=1 usage=0x5]=154,
+                   [unlabeled 32x32 RGBA8_UNORM mips=1 layers=1 usage=0x5]=153
+```
+
+- `retired_texture` 与 `retired_view` **逐位相等**：每张纹理恰好一个 view，两者同生共死——不是"只有 view
+  在换"。
+- `partial_clears=0.0`：`clearColorAndDepthTextures` 一次都没被调，**这批 churn 与 LavaFlow 无关**（这正是
+  那个计数器存在的意义——用数字排除，而不是通读调用图）。
+- `usage=0x5`（`COPY_DST|TEXTURE_BINDING`）、`RGBA8_UNORM`、`mips=1`、`layers=1`、尺寸取自源 PNG：这一组
+  参数与 `ReloadableTexture.doLoad` 的字节码**逐项吻合**（`iconst_5`、`RGBA8_UNORM`、
+  `NativeImage.getWidth/getHeight`、`iconst_1`、`iconst_1`），而该方法正是**先 `close()` 旧的再建新的**，
+  即测到的"先退役再新建"。`SpriteContents$AnimatedTexture` 在同一位置传 `layers = byMipLevel.length`
+  （16×16 会是 5），被 `layers=1` 排除；`FontTexture` 与 `PalettedTextureManager$AtlasTexture` 则分别是
+  256×256 与 512×512，尺寸对不上。
+- 16×16 占 top-3 的绝大多数，正是方块/物品 PNG 的标准尺寸；整个加载窗口约 3200 张，对应"每份纹理资源
+  一张"，而资源加载被摊到各帧上，于是表现为 ~29 张/帧而非瞬时一批。
+
+结论：加载期的 view 与 descriptor churn 是 **Minecraft 重载纹理资源**造成的，随加载结束归零（后续每份
+报告都是 `retired_view=0.00`、`retired_texture=0.00`），既不是泄漏，也不该由 LavaFlow 回收。注意
+`top_retired_view` 一次只列前 3 名，top-3 之外还有约 20% 未列出。
 
 ## 在 Fabric 上安装
 

@@ -137,6 +137,13 @@ public final class LavaFlowFrameStats {
     }
 
     /**
+     * Whether the churn counters are collecting. Also what makes object names worth resolving: the
+     * frontend asks the backend this before unwrapping a texture's label supplier (see
+     * {@code LavaFlowDevice.isDebuggingEnabled()}), and those names are read only by this report.
+     */
+    public static boolean enabled() { return ENABLED; }
+
+    /**
      * Counts one {@code clearColorAndDepthTextures} call. Those create two texture views that are
      * destroyed again immediately, so this is the one place LavaFlow itself manufactures view churn
      * and it is worth being able to rule in or out by number rather than by reading the call graph.
