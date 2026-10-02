@@ -15,17 +15,23 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # These actions are held at the first release that runs on Node 24, because the runners have
+      # deprecated Node 20 and force these actions onto Node 24 instead. That puts a floor on the
+      # runner version (2.327.1), which GitHub-hosted runners always meet. upload-artifact is the one
+      # exception that has to go a major further: v5 declares node20 as well, so the deprecation
+      # warning survives it and only v6 actually fixes it. Newer majors exist for all four, but they
+      # bring changes beyond this one and are not what the warning asks for.
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: "9.5.1"
 
@@ -162,7 +168,7 @@ jobs:
           fi
 
       - name: Upload Fabric mod
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lavaflow-fabric
           path: build/libs/lavaflow-*.jar
