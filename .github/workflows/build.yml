@@ -103,12 +103,13 @@ jobs:
           # the layer died, which no exit code can tell us.
           for hs in hs_err_pid*.log; do
             [ -f "$hs" ] || continue
-            for section in "T H R E A D" "Java frames:" "Native frames:"; do
-              body=$(sed -n "/^---------------  $section/,/^\$/p" "$hs" | head -c 1500)
-              [ -n "$body" ] && echo "::error title=$hs ($section)::$body"
+            for range in 1,90 91,180 181,270; do
+              from=${range%,*}; to=${range#*,}
+              echo "::error title=$hs lines $from-$to::$(sed -n "${from},${to}p" "$hs" | tr '\n' '|' | cut -c1-4000)"
             done
           done
           echo "::notice title=test reports present::$(ls build/test-results/*/ 2>/dev/null | tr '\n' ' ' | cut -c1-600)"
+          echo "::notice title=descriptor path cases::$(grep -o '<testcase name="[^"]*"\|/>\|<skipped\|</testcase>' build/test-results/*/TEST-*LavaFlowDescriptorPathTest.xml 2>/dev/null | tr '\n' ' ' | cut -c1-900)"
 
       # test leaves the build green all the same. Without this step a reordered workflow would
       # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
