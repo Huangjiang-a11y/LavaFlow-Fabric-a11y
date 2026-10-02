@@ -291,6 +291,18 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 
 ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mali-G76 / Exynos 980，走全部回退路径）；本分支 README 暂无对应的真机记录。
 
+### descriptor 写入结构体的高水位计数缺陷（已修）
+
+26.2 与 26.3 同步：`WriteScratch` 的跨帧复用曾被两地一起撤掉（26.2 `dc20fed` / 26.3 `20485cb`），
+现在随修复一起重加（26.3 侧 `9d02f08`）。
+
+缺陷：`writes(count)` 只按 `capacity` 决定是否重建、从不调 `limit`，而 LWJGL 把 buffer 的 `remaining()`
+当作 `descriptorWriteCount`——某次推入条数少于此前高水位时，驱动会被告知读那个高水位，多出来的槽位里是
+上一次推入留下的 `dstSet` 与 buffer/image 句柄（可能已销毁）。这是 26.3 在 Mali-G76 上那次
+`vkUpdateDescriptorSets` 原生崩溃的来源（真机记录见 26.3 的 README）。现在 `writes(count)` 把
+`remaining()` 钉到本次条数，`WriteScratchTest` 有 5 条用例，其中一条直接断言"驱动被告知读几条"。
+
+
 ## 致谢
 
 - 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。

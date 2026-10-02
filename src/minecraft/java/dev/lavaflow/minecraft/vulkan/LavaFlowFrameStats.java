@@ -50,11 +50,7 @@ public final class LavaFlowFrameStats {
         descriptorHits++;
     }
 
-    /**
-     * Counts one resource retirement: the cached sets and buffer views that referenced a destroyed
-     * resource. It is per resource, not per cache wipe — the cache retires only the entries that
-     * reference the handle, so a frame that destroys twenty short-lived resources shows twenty here.
-     */
+    /** Counts one cache-wide invalidation caused by a resource being destroyed. */
     public static void descriptorCacheInvalidated() {
         if (!ENABLED) return;
         descriptorInvalidations++;
