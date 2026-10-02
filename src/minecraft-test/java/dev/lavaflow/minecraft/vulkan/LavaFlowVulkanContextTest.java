@@ -41,14 +41,13 @@ class LavaFlowVulkanContextTest {
     void startsOnADeviceWithNothingButSwapchain() throws IOException {
         assumeTrue(displayAvailable(), "需要显示服务器才能创建窗口（本地可用 xvfb-run）");
 
-        GLFWErrorCallback errors = GLFWErrorCallback.createPrint(System.err).set();
         long window = NULL;
         Map<String, String> saved = setSwitches(Map.of(
                 "lavaflow.baselineDevice", "true",
                 // 与 baselineDevice 的默认行为一致的显式声明，便于失败时定位是哪一项。
                 "java.awt.headless", "false"));
         try {
-            assumeTrue(glfwInit(), "GLFW 初始化失败");
+            LavaFlowTestSupport.ensureGlfw();
             exposeVulkanLoaderToLwjgl();
             glfwDefaultWindowHints();
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -82,8 +81,6 @@ class LavaFlowVulkanContextTest {
             if (window != NULL) {
                 glfwDestroyWindow(window);
             }
-            glfwTerminate();
-            errors.free();
             restore(saved);
         }
     }

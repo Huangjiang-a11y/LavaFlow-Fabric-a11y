@@ -1,5 +1,8 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import org.lwjgl.glfw.GLFWErrorCallback;
+
+import static org.lwjgl.glfw.GLFW.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -31,6 +34,24 @@ final class LavaFlowTestSupport {
         return display != null && !display.isBlank();
     }
 
+
+    private static boolean glfwReady;
+
+    /**
+     * Brings GLFW up exactly once per JVM, and deliberately never tears it down again.
+     *
+     * <p>Two test classes need GLFW and run in the same JVM. Creating the error callback again after a
+     * class has freed it and terminated GLFW raises {@code NullPointerException} inside LWJGL's upcall
+     * table ({@code Upcalls.upcallGet}) -- which names neither the class at fault nor the reason. So the
+     * callback is installed once and left installed; the process exits shortly after, which is the
+     * cheapest correct lifetime here.
+     */
+    static synchronized void ensureGlfw() {
+        if (glfwReady) return;
+        GLFWErrorCallback.createPrint(System.err).set();
+        if (!glfwInit()) throw new IllegalStateException("GLFW 初始化失败");
+        glfwReady = true;
+    }
     /**
      * Desktop distributions keep the Vulkan loader (libvulkan.so.1) in a multiarch directory such as
      * {@code /usr/lib/x86_64-linux-gnu}, which is not on the JVM's default search path; and LWJGL

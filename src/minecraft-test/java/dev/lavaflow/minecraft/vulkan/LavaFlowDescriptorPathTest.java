@@ -66,20 +66,13 @@ import static org.lwjgl.vulkan.VK10.*;
  */
 class LavaFlowDescriptorPathTest {
 
-    private static GLFWErrorCallback errors;
 
     @BeforeAll
     static void initGlfw() {
         assumeTrue(displayAvailable(), "需要显示服务器才能创建窗口（本地可用 xvfb-run）");
-        errors = GLFWErrorCallback.createPrint(System.err).set();
-        assumeTrue(glfwInit(), "GLFW 初始化失败");
+        LavaFlowTestSupport.ensureGlfw();
     }
 
-    @AfterAll
-    static void terminateGlfw() {
-        glfwTerminate();
-        if (errors != null) errors.free();
-    }
 
     /** 256 bytes: one R32G32B32A32 texel is 16, so this is a legal texel buffer range too. */
     private static final long BUFFER_SIZE = 256L;
