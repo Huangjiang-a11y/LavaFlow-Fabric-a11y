@@ -659,20 +659,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private VkWriteDescriptorSet.Buffer buildWrites(MemoryStack stack, List<LavaFlowRenderPipeline.Entry> entries,
                                                     long descriptorSet, boolean dynamicUniforms) {
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
-        VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(entries.size(), stack);
+        LavaFlowDescriptorCache.WriteScratch scratch = cache.writes();
+        VkWriteDescriptorSet.Buffer writes = scratch.writes(entries.size());
         for (int i = 0; i < entries.size(); i++) {
             LavaFlowRenderPipeline.Entry entry = entries.get(i);
-            VkWriteDescriptorSet write = writes.get(i).sType$Default().dstBinding(i)
-                    .dstArrayElement(0).descriptorCount(1)
-                    .descriptorType(pipeline.vkDescriptorType(entry.type()));
-            if (descriptorSet != 0) write.dstSet(descriptorSet);
+            // Reused structures, so every union member an earlier push could have left behind is cleared:
+            // only the member matching this entry's type carries meaning.
+            VkWriteDescriptorSet write = scratch.write(i).sType$Default().dstBinding(i)
+                    .dstArrayElement(0).descriptorCount(1).dstSet(descriptorSet)
+                    .descriptorType(pipeline.vkDescriptorType(entry.type()))
+                    .pBufferInfo(null).pImageInfo(null).pTexelBufferView(null);
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
                     GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
-                    VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                    write.pBufferInfo(scratch.bufferInfo(i)
                             .buffer(((LavaFlowGpuBuffer) slice.buffer()).handle())
-                            .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length());
-                    write.pBufferInfo(bufferInfo);
+                            .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length()));
                 }
                 case SAMPLED_IMAGE -> {
                     TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
@@ -681,10 +683,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     if (sampledTexture.layout() != VK_IMAGE_LAYOUT_GENERAL) {
                         throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
                     }
-                    VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack)
+                    write.pImageInfo(scratch.imageInfo(i)
                             .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
-                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-                    write.pImageInfo(imageInfo);
+                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL));
                 }
                 case TEXEL_BUFFER -> {
                     GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
