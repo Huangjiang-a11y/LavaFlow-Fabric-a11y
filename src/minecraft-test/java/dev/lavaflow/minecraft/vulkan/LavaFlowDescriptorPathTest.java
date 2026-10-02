@@ -300,23 +300,25 @@ class LavaFlowDescriptorPathTest {
     }
 
     /**
-     * The canary: it writes a buffer handle whose buffer has already been destroyed, and asserts the
-     * layer says so.
+     * The canary: it makes a descriptor write the spec forbids and asserts the layer says so.
      *
      * <p>Without it every "no findings" assertion in this class would be satisfied just as well by a
      * layer that never spoke — the failure mode this whole file exists to rule out, and one this
-     * repository has already hit once (a test that passed while covering nothing because a stale
+     * repository has already hit once (a test that passed while covering nothing, because a stale
      * native library happened to be found elsewhere).
      *
-     * <p>It also pins down what the Mali crash's second candidate looks like from here. For a stale
-     * handle the layer reports
-     * {@code vkUpdateDescriptorSets(): pDescriptorWrites[0].pBufferInfo[0].buffer Invalid VkBuffer
-     * Object ...} — the very call the crash died in, reached with a handle to something already
-     * freed. If that candidate is what happens on the device, this is the shape of the evidence, and
-     * a build that reaches it goes red here instead of surviving to a tombstone.
+     * <p>The violation is deliberately a stateless one: a descriptorCount of zero, which
+     * {@code VUID-VkWriteDescriptorSet-descriptorCount-00317} forbids. Writing a handle whose buffer
+     * has already been destroyed is the more on-the-nose provocation — it is what the Mali crash's
+     * second candidate looks like — but it makes the layer look up an object it has already
+     * forgotten, and the layer version CI runs dies of a SIGSEGV inside vkUpdateDescriptorSets when
+     * handed one. That turns the canary into a report about a layer bug instead of a check that the
+     * layer is listening. Both prove the same thing about this suite; only one is portable across
+     * layer versions. The stale-handle case is covered where it can be asserted without provoking it:
+     * every test above destroys a resource and asserts the cache stops handing its set out.
      */
     @Test
-    void theValidationLayerReportsAStaleHandle() throws Exception {
+    void theValidationLayerReportsAForbiddenWrite() throws Exception {
         assumeTrue(displayAvailable(), "需要显示服务器才能创建 GLFW 窗口（本地可用 xvfb-run）");
         Map<String, String> saved = setSwitches(Map.of(
                 "lavaflow.baselineDevice", "true",
@@ -333,28 +335,32 @@ class LavaFlowDescriptorPathTest {
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice(window, (id, type) -> null);
             LavaFlowVulkanContext context = device.context();
-            if (!context.validationEnabled()) {
-                System.err.println("[LavaFlow] lavaflow.validation was requested but the layer is not "
-                        + "installed, so this canary cannot speak and the assertions above are unbacked");
-                return;
-            }
+            // Skipped rather than passed when the layer is missing — the same shape as the context
+            // test's display check, and CI asserts that nothing in this class was skipped. That is
+            // what keeps the "no findings" assertions above from being true for the wrong reason: a
+            // layer that never spoke satisfies them just as well.
+            assumeTrue(context.validationEnabled(),
+                    "需要验证层（vulkan-validationlayers 或 Vulkan SDK）才能断言这条违规会被报出来");
             VkDevice vkDevice = context.device();
             LavaFlowDescriptorCache cache = device.descriptorCache();
             layout = createSetLayout(vkDevice, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 
-            // Deliberately the use-after-free the cache is built to prevent: take the handle, destroy
-            // the buffer for real, then write that handle anyway.
-            LavaFlowGpuBuffer doomed = new LavaFlowGpuBuffer(device, GpuBuffer.USAGE_UNIFORM, BUFFER_SIZE);
-            long staleHandle = doomed.handle();
-            doomed.close();
-            device.completePending();
-
-            long set = cache.allocateAndStore(new LavaFlowDescriptorCache.Key(layout, new long[]{staleHandle}),
-                    layout, new long[]{staleHandle});
-            writeUniform(vkDevice, set, staleHandle, BUFFER_SIZE);
+            // Every handle here is live, so the only thing wrong with the write below is what is in
+            // the struct itself — nothing the layer has to look anything up to judge.
+            LavaFlowGpuBuffer buffer = new LavaFlowGpuBuffer(device, GpuBuffer.USAGE_UNIFORM, BUFFER_SIZE);
+            long handle = buffer.handle();
+            long set = cache.allocateAndStore(new LavaFlowDescriptorCache.Key(layout, new long[]{handle}),
+                    layout, new long[]{handle});
+            writeUniformWithZeroCount(vkDevice, set, handle, BUFFER_SIZE);
 
             assertFalse(context.validationMessages().isEmpty(),
-                    "验证层对已销毁句柄没有报错，所以本类其余用例的'无 findings'断言是空转的");
+                    "验证层对这条违规没有报错，所以本类其余用例的'无 findings'断言是空转的");
+
+            // The layer also reports objects a device is destroyed while still holding, so a buffer
+            // left open here would be a leak this test caused — and one it would silently absorb, since
+            // the canary only checks that messages arrived, not what they say.
+            buffer.close();
+            device.completePending();
         } finally {
             if (device != null) {
                 if (layout != 0L) device.descriptorCache().invalidate(layout);
@@ -392,6 +398,22 @@ class LavaFlowDescriptorPathTest {
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
             writes.get(0).sType$Default().dstSet(set).dstBinding(0).dstArrayElement(0)
                     .descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                    .pBufferInfo(info);
+            vkUpdateDescriptorSets(device, writes, null);
+        }
+    }
+
+    /**
+     * The same write with a descriptorCount of zero, which the spec forbids and a stateless check
+     * catches without consulting any object's state — see the canary for why that matters.
+     */
+    private static void writeUniformWithZeroCount(VkDevice device, long set, long buffer, long range) {
+        try (MemoryStack stack = stackPush()) {
+            VkDescriptorBufferInfo.Buffer info = VkDescriptorBufferInfo.calloc(1, stack)
+                    .buffer(buffer).offset(0L).range(range);
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
+            writes.get(0).sType$Default().dstSet(set).dstBinding(0).dstArrayElement(0)
+                    .descriptorCount(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
                     .pBufferInfo(info);
             vkUpdateDescriptorSets(device, writes, null);
         }
