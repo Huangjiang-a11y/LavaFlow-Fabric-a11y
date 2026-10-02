@@ -98,6 +98,17 @@ jobs:
             [ -n "$stderr" ] && echo "::error title=stderr of $(basename "$report")::$stderr"
           done
           [ "$found" = 1 ] || echo "::error title=build failed before the tests ran::no test report recorded a failure"
+          # A JVM crash inside the validation layer leaves no failing test behind, so it is reported
+          # from the JVM's own error log instead — its Java frames name the test that was running when
+          # the layer died, which no exit code can tell us.
+          for hs in hs_err_pid*.log; do
+            [ -f "$hs" ] || continue
+            for section in "T H R E A D" "Java frames:" "Native frames:"; do
+              body=$(sed -n "/^---------------  $section/,/^\$/p" "$hs" | head -c 1500)
+              [ -n "$body" ] && echo "::error title=$hs ($section)::$body"
+            done
+          done
+          echo "::notice title=test reports present::$(ls build/test-results/*/ 2>/dev/null | tr '\n' ' ' | cut -c1-600)"
 
       # test leaves the build green all the same. Without this step a reordered workflow would
       # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
