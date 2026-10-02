@@ -1,5 +1,7 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.system.MemoryStack;
@@ -8,6 +10,7 @@ import org.lwjgl.vulkan.*;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -68,6 +71,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
     private boolean closed;
+    // Whether the validation layer really answered for this instance, and every message it reported.
+    // Both are kept so a test can assert on them: "the run exited 0" is also true of a run that
+    // validated nothing, and a switch that silently does nothing answers the wrong question.
+    private boolean validationEnabled;
+    private final List<String> validationMessages = Collections.synchronizedList(new ArrayList<>());
 
     private record DeviceCapabilities(boolean swapchain, boolean pushDescriptors, boolean dynamicRendering,
                                       boolean fillModeNonSolid, boolean multiDrawIndirect,
@@ -179,6 +187,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         try (MemoryStack stack = stackPush()) {
             boolean requested = Boolean.getBoolean("lavaflow.validation");
             boolean validation = requested && instanceLayerAvailable(VK_LAYER_KHRONOS_VALIDATION);
+            validationEnabled = validation;
             boolean debugUtils = requested
                     && instanceExtensionAvailable(EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             if (requested && !validation) {
@@ -266,6 +275,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private void createDebugMessenger(MemoryStack stack) {
         debugCallback = VkDebugUtilsMessengerCallbackEXT.create((severity, types, callbackData, userData) -> {
             String message = VkDebugUtilsMessengerCallbackDataEXT.create(callbackData).pMessageString();
+            validationMessages.add(message);
             System.err.println("[LavaFlow Vulkan validation] " + message);
             return VK_FALSE;
         });
@@ -340,7 +350,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
-        queryMaxMemoryAllocationSize();
+        queryVulkan11Properties();
     }
 
     public long largestDeviceLocalHeapSize() {
@@ -380,25 +390,14 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         return Boolean.getBoolean("lavaflow.baselineDevice") || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
     }
 
-    /**
-     * Reads the driver's cap on a single allocation, which is a Vulkan 1.1 core value: it comes from
-     * {@code VK_KHR_maintenance3}, promoted to core in 1.1, and lives in
-     * {@link VkPhysicalDeviceMaintenance3Properties}.
-     *
-     * <p>Not {@code VkPhysicalDeviceVulkan11Properties}. That structure is named for 1.1 but was
-     * introduced in Vulkan 1.2 as a bundle of everything 1.1 promoted, and putting it in this chain
-     * against an instance created at 1.1 is a spec violation — a validation layer reports
-     * {@code VUID-VkPhysicalDeviceProperties2-pNext-pNext}, which is how it was found. The value is
-     * the same either way; only the structure carrying it is version-legal here.
-     */
-    private void queryMaxMemoryAllocationSize() {
+    private void queryVulkan11Properties() {
         try (MemoryStack stack = stackPush()) {
-            VkPhysicalDeviceMaintenance3Properties maintenance3 = VkPhysicalDeviceMaintenance3Properties
-                    .calloc(stack).sType$Default();
+            VkPhysicalDeviceVulkan11Properties vulkan11 = VkPhysicalDeviceVulkan11Properties.calloc(stack)
+                    .sType$Default();
             VkPhysicalDeviceProperties2 properties2 = VkPhysicalDeviceProperties2.calloc(stack)
-                    .sType$Default().pNext(maintenance3.address());
+                    .sType$Default().pNext(vulkan11.address());
             vkGetPhysicalDeviceProperties2(physicalDevice, properties2);
-            long reported = maintenance3.maxMemoryAllocationSize();
+            long reported = vulkan11.maxMemoryAllocationSize();
             // Some drivers (e.g. Mali) report 0 here, which per the Vulkan spec means the limit is
             // bounded by the heap rather than a fixed value. Fall back to the largest device-local
             // heap size instead of a fabricated huge ceiling, so allocation sizing stays within what
@@ -572,6 +571,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     public VkPhysicalDeviceProperties properties() { return properties; }
     public long maxMemoryAllocationSize() { return maxMemoryAllocationSize; }
     boolean pushDescriptors() { return pushDescriptors; }
+
+    /**
+     * Whether the validation layer is actually running for this instance, as opposed to merely being
+     * asked for. False when the loader does not offer the layer, or when nothing asked for it.
+     */
+    boolean validationEnabled() { return validationEnabled; }
+
+    /**
+     * Everything the validation layer has reported so far, oldest first, as a snapshot. Empty means
+     * the layer answered and had no findings; see {@link #validationEnabled()} to tell that apart
+     * from a layer that never ran.
+     */
+    List<String> validationMessages() {
+        synchronized (validationMessages) {
+            return List.copyOf(validationMessages);
+        }
+    }
     boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
