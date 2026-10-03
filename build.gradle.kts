@@ -202,6 +202,9 @@ tasks.register<Test>("minecraftTest") {
     testClassesDirs = minecraftTest.output.classesDirs
     classpath = minecraftTest.runtimeClasspath
     useJUnitPlatform()
+    // 与 26.3 同步：退役计数由系统属性门控，且类加载时只读一次，只能在这里给——
+    // 少了它，读计数的断言恒为 0 而空过。
+    systemProperty("lavaflow.frameStats", "true")
 }
 
 tasks.named("check") {

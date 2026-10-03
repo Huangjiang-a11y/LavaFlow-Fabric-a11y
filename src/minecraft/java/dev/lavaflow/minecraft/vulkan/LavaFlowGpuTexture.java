@@ -24,6 +24,8 @@ final class LavaFlowGpuTexture extends GpuTexture {
     private int layout = VK_IMAGE_LAYOUT_UNDEFINED;
     private boolean closed;
     private boolean destroyed;
+    // The one view the partial-clear path reuses. See cachedClearView.
+    private LavaFlowGpuTextureView clearView;
 
     LavaFlowGpuTexture(LavaFlowDevice device, int usage, String label, GpuFormat format,
                        int width, int height, int depthOrLayers, int mipLevels) {
@@ -70,6 +72,26 @@ final class LavaFlowGpuTexture extends GpuTexture {
     int layout() { return layout; }
     void layout(int value) { layout = value; }
 
+    /**
+     * The view the partial-clear path uses, created once instead of once per clear.
+     *
+     * <p>{@code clearColorAndDepthTextures} used to build two views per call and destroy them on the way
+     * out. A 26.3 device run measured what that cost — 13.3 partial clears per frame against 26.6 retired
+     * views per frame, exactly double, every one labeled "UI items atlas" or "UI items atlas depth" — and
+     * this path is the same code on both branches. A view is an immutable handle; only the clear rectangle
+     * differs between calls.
+     *
+     * <p>26.2 clears mip 0 only, so one view is enough here; 26.3 takes a mip per call and caches a map.
+     *
+     * <p>The cached view holds a view reference, which is why {@link #close()} releases it first: left
+     * alone it would keep {@code views} above zero forever and the texture would never be destroyed.
+     */
+    synchronized LavaFlowGpuTextureView cachedClearView() {
+        if (closed) throw new IllegalStateException("Texture is closed");
+        if (clearView == null) clearView = new LavaFlowGpuTextureView(device, this, 0, getMipLevels());
+        return clearView;
+    }
+
     synchronized void retainView() {
         if (destroyed) throw new IllegalStateException("Texture is destroyed");
         views++;
@@ -83,6 +105,10 @@ final class LavaFlowGpuTexture extends GpuTexture {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
+        // Release the cached clear view first: it carries a view reference, and while one lives,
+        // destroyIfUnreferenced can never see views == 0. View and image go out through the same
+        // deferred batch in insertion order, so the view goes before the image it viewed.
+        if (clearView != null) { clearView.close(); clearView = null; }
         destroyIfUnreferenced();
     }
 

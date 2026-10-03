@@ -126,6 +126,12 @@ public final class LavaFlowFrameStats {
         retiredViewLabels.merge(identity, 1, Integer::sum);
     }
 
+    /**
+     * Retired views so far. The report diffs this same field; a test reads it to assert that a path
+     * expected to reuse its views retires none. Only meaningful while {@link #enabled()}.
+     */
+    static long retiredViewTotal() { return retiredViews; }
+
     /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
     public static void textureRetired() {
         if (!ENABLED) return;

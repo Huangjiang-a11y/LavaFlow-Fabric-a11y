@@ -253,35 +253,34 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
         }
         LavaFlowFrameStats.partialClear();
-        GpuTextureView colorView = device.createTextureView(color);
-        GpuTextureView depthView = device.createTextureView(depth);
-        try {
-            RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "LavaFlow partial color/depth clear")
-                    .withColorAttachment(colorView)
-                    .withDepthAttachment(depthView)
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(0), color.getHeight(0)));
-            createRenderPass(descriptor);
-            // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
-            // to be begun explicitly.
-            activeRenderPass.ensureBegun();
-            try (MemoryStack stack = stackPush()) {
-                VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
-                rect.rect().offset().set(x, y);
-                rect.rect().extent().set(width, height);
+        // The two attachment views are reused, not created here and destroyed on the way out: this was the
+        // only view churn LavaFlow manufactured itself, and a device run showed it was exactly twice the
+        // partial clears, all of it labeled "UI items atlas" and "UI items atlas depth". See
+        // LavaFlowGpuTexture.cachedClearView for the lifetime rule. (26.3 fix, backported.)
+        GpuTextureView colorView = colorTexture.cachedClearView();
+        GpuTextureView depthView = depthTexture.cachedClearView();
+        RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "LavaFlow partial color/depth clear")
+                .withColorAttachment(colorView)
+                .withDepthAttachment(depthView)
+                .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(0), color.getHeight(0)));
+        createRenderPass(descriptor);
+        // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
+        // to be begun explicitly.
+        activeRenderPass.ensureBegun();
+        try (MemoryStack stack = stackPush()) {
+            VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
+            rect.rect().offset().set(x, y);
+            rect.rect().extent().set(width, height);
 
-                VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(2, stack);
-                attachments.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).colorAttachment(0);
-                attachments.get(0).clearValue().color()
-                        .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
-                attachments.get(1).aspectMask(LavaFlowVk.aspect(depthTexture.getFormat()));
-                attachments.get(1).clearValue().depthStencil().depth((float) depthValue).stencil(0);
-                vkCmdClearAttachments(commandBuffer, attachments, rect);
-            } finally {
-                submitRenderPass();
-            }
+            VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(2, stack);
+            attachments.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).colorAttachment(0);
+            attachments.get(0).clearValue().color()
+                    .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
+            attachments.get(1).aspectMask(LavaFlowVk.aspect(depthTexture.getFormat()));
+            attachments.get(1).clearValue().depthStencil().depth((float) depthValue).stencil(0);
+            vkCmdClearAttachments(commandBuffer, attachments, rect);
         } finally {
-            depthView.close();
-            colorView.close();
+            submitRenderPass();
         }
     }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
