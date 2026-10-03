@@ -9,6 +9,8 @@ import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 
 import java.nio.LongBuffer;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -33,6 +35,8 @@ final class LavaFlowGpuTexture implements GpuTexture {
     private int layout = VK_IMAGE_LAYOUT_UNDEFINED;
     private boolean closed;
     private boolean destroyed;
+    // Views kept for the partial-clear path, one per mip. See cachedClearView.
+    private final Map<Integer, LavaFlowGpuTextureView> clearViews = new HashMap<>();
 
     LavaFlowGpuTexture(LavaFlowDevice device, int usage, String label, GpuFormat format,
                        int width, int height, int depthOrLayers, int mipLevels) {
@@ -95,6 +99,24 @@ final class LavaFlowGpuTexture implements GpuTexture {
     int layout() { return layout; }
     void layout(int value) { layout = value; }
 
+    /**
+     * A view of one mip, created once and reused by the partial-clear path instead of once per clear.
+     *
+     * <p>That path used to build both of its attachment views per call and destroy them on the way out,
+     * and a device run measured what it cost: 13.3 partial clears per frame against 26.6 retired views
+     * per frame — exactly double, every one of them labeled "UI items atlas" or "UI items atlas depth",
+     * which is the pair this call clears. A view is an immutable handle; the clear rectangle is what
+     * differs between calls.
+     *
+     * <p>The cached view holds a view reference, which is why {@link #close()} releases these before
+     * deciding whether the texture can go: left alone they would keep {@code views} above zero forever
+     * and the texture would never be destroyed.
+     */
+    synchronized LavaFlowGpuTextureView cachedClearView(int mipLevel) {
+        if (closed) throw new IllegalStateException("Texture is closed");
+        return clearViews.computeIfAbsent(mipLevel, mip -> new LavaFlowGpuTextureView(device, this, mip, 1));
+    }
+
     synchronized void retainView() {
         if (destroyed) throw new IllegalStateException("Texture is destroyed");
         views++;
@@ -108,6 +130,11 @@ final class LavaFlowGpuTexture implements GpuTexture {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
+        // Release the views this class holds first: each carries a view reference, and while one lives,
+        // destroyIfUnreferenced can never see views == 0. Image and view are destroyed by the same
+        // deferred batch in insertion order, so the view goes before the image it viewed.
+        for (LavaFlowGpuTextureView view : clearViews.values()) view.close();
+        clearViews.clear();
         destroyIfUnreferenced();
     }
 

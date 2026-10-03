@@ -256,36 +256,35 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
         }
         LavaFlowFrameStats.partialClear();
-        GpuTextureView colorView = device.createTextureView(color, mipLevel, 1);
-        GpuTextureView depthView = device.createTextureView(depth, mipLevel, 1);
-        try {
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "LavaFlow partial color/depth clear")
-                    .withColorAttachment(colorView)
-                    .withDepthAttachment(depthView)
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(mipLevel), color.getHeight(mipLevel)))
-                    .build();
-            createRenderPass(descriptor);
-            // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
-            // to be begun explicitly.
-            activeRenderPass.ensureBegun();
-            try (MemoryStack stack = stackPush()) {
-                VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
-                rect.rect().offset().set(x, y);
-                rect.rect().extent().set(width, height);
+        // The two attachment views are reused, not created here and destroyed on the way out. This is the
+        // only view churn LavaFlow manufactured itself, and a device run showed it was all of it: retired
+        // views were exactly twice the partial clears, all of them labeled "UI items atlas" and
+        // "UI items atlas depth". See LavaFlowGpuTexture.cachedClearView for the lifetime rule.
+        GpuTextureView colorView = colorTexture.cachedClearView(mipLevel);
+        GpuTextureView depthView = depthTexture.cachedClearView(mipLevel);
+        RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "LavaFlow partial color/depth clear")
+                .withColorAttachment(colorView)
+                .withDepthAttachment(depthView)
+                .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(mipLevel), color.getHeight(mipLevel)))
+                .build();
+        createRenderPass(descriptor);
+        // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
+        // to be begun explicitly.
+        activeRenderPass.ensureBegun();
+        try (MemoryStack stack = stackPush()) {
+            VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
+            rect.rect().offset().set(x, y);
+            rect.rect().extent().set(width, height);
 
-                VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(2, stack);
-                attachments.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).colorAttachment(0);
-                attachments.get(0).clearValue().color()
-                        .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
-                attachments.get(1).aspectMask(LavaFlowVk.aspect(depthTexture.getFormat()));
-                attachments.get(1).clearValue().depthStencil().depth((float) depthValue).stencil(0);
-                vkCmdClearAttachments(commandBuffer, attachments, rect);
-            } finally {
-                submitRenderPass();
-            }
+            VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(2, stack);
+            attachments.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).colorAttachment(0);
+            attachments.get(0).clearValue().color()
+                    .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
+            attachments.get(1).aspectMask(LavaFlowVk.aspect(depthTexture.getFormat()));
+            attachments.get(1).clearValue().depthStencil().depth((float) depthValue).stencil(0);
+            vkCmdClearAttachments(commandBuffer, attachments, rect);
         } finally {
-            depthView.close();
-            colorView.close();
+            submitRenderPass();
         }
     }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {

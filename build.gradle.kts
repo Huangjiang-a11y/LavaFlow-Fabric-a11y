@@ -205,6 +205,10 @@ tasks.register<Test>("minecraftTest") {
     testClassesDirs = minecraftTest.output.classesDirs
     classpath = minecraftTest.runtimeClasspath
     useJUnitPlatform()
+    // 计数器和开关一样由系统属性门控，且只在类加载时读一次（LavaFlowFrameStats.ENABLED），
+    // 所以只能在这里给：测试方法里再设已经晚了——同一 JVM 里前一个测试可能已经加载过该类。
+    // 少了它，读退役计数的断言会恒等于 0 而空过，正是本仓库栽过一次的"测试绿着但什么都没覆盖"。
+    systemProperty("lavaflow.frameStats", "true")
 }
 
 tasks.named("check") {
