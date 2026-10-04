@@ -151,6 +151,38 @@ jobs:
             || { echo "::error::the descriptor path test failed"; exit 1; }
           echo "descriptor path test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      # Same again for the two classes that cover what the elision work changed: the partial-clear
+      # path and the draw path. Both skip themselves without a display, and each is the only coverage
+      # its fix has, so a silent skip would leave that fix covered nowhere — the same failure the two
+      # steps above exist to prevent, arrived at from a different direction. Methods are named rather
+      # than counted so the step says which coverage is missing when it fails.
+      - name: Assert the partial-clear churn test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowPartialClearChurnTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          for method in repeatedPartialClearsRetireNoViews \
+                        cachedClearViewsAreReleasedWithTheirTexture; do
+            grep -q "testcase name=\"$method" "$report" \
+              || { echo "::error::$method did not run"; exit 1; }
+          done
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the partial-clear churn test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the partial-clear churn test failed"; exit 1; }
+          echo "partial-clear churn test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
+      - name: Assert the rebind elision test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowRebindElisionTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="repeatBindsAndRepeatUniformValuesAreElided' "$report" \
+            || { echo "::error::repeatBindsAndRepeatUniformValuesAreElided did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the rebind elision test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the rebind elision test failed"; exit 1; }
+          echo "rebind elision test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
       # that the layer answered: a switch that silently does nothing must not pass.
