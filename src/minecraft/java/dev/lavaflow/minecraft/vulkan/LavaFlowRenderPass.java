@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -377,6 +378,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     private void recordPipelineBind() {
+        LavaFlowFrameStats.pipelineBindRecorded();
         int depthVkFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -392,7 +394,13 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (!(pipeline instanceof LavaFlowRenderPipeline lavaPipeline)) {
             throw new IllegalArgumentException("Pipeline must be a LavaFlowRenderPipeline");
         }
-        LavaFlowFrameStats.pipelineBind(this.pipeline == lavaPipeline);
+        if (this.pipeline == lavaPipeline) {
+            // Elided here is only the vkCmdBindPipeline recording, not the accounting: the counters
+            // describe what the frontend does, and hiding repeat calls would paint rebind_ratio as 0.
+            LavaFlowFrameStats.pipelineBind(true);
+            return;
+        }
+        LavaFlowFrameStats.pipelineBind(false);
         this.pipeline = lavaPipeline;
         // One slot per compiled uniform; the frontend replays the uniforms it already holds right after
         // this call, and 26.3 resolves names to slots there rather than here.
@@ -405,6 +413,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (index < 0 || index >= uniforms.size()) {
             throw new IllegalStateException("Uniform index " + index + " is outside the bound pipeline's "
                     + uniforms.size() + " uniforms");
+        }
+        if (Objects.equals(uniforms.get(index), value)) {
+            return;
         }
         uniforms.set(index, value);
         descriptorsDirty = true;
