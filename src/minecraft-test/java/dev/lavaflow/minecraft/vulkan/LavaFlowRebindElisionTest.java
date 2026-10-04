@@ -100,7 +100,7 @@ class LavaFlowRebindElisionTest {
             depth = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "rebind test depth",
                     GpuFormat.D32_FLOAT, SIZE, SIZE, 1, 1);
             uniform = device.createBuffer(() -> "rebind test uniform",
-                    GpuBuffer.USAGE_UNIFORM, 16);
+                    GpuBuffer.USAGE_UNIFORM, 128);
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
             RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "rebind test pass")
@@ -114,8 +114,12 @@ class LavaFlowRebindElisionTest {
             long rebindsBefore = LavaFlowFrameStats.pipelineRebindsTotal();
             long recordedBefore = LavaFlowFrameStats.pipelineBindsRecordedTotal();
             long pushesBefore = LavaFlowFrameStats.descriptorPushesTotal();
+            long uniformChangesBefore = LavaFlowFrameStats.uniformChangesTotal();
 
             GpuBufferSlice slice = new GpuBufferSlice(uniform, 0, 16);
+            // Offset 64 rather than 16: minUniformBufferOffsetAlignment is device-defined, and 64
+            // is a multiple of every value the spec allows, so this cannot trip an alignment VUID.
+            GpuBufferSlice otherSlice = new GpuBufferSlice(uniform, 64, 16);
             pass.setPipeline(pipeline); // first bind: recorded when the pass begins
             pass.setUniform(0, slice);  // first value: descriptors marked dirty
             pass.draw(3, 1, 0, 0);      // begin + record the bind + one descriptor push
@@ -124,6 +128,10 @@ class LavaFlowRebindElisionTest {
             pass.setPipeline(pipeline); // same pipeline: request counted, vkCmdBindPipeline elided
             pass.setUniform(0, slice);  // same value: elided, descriptors stay clean
             pass.draw(3, 1, 0, 0);      // second draw: nothing re-recorded, no descriptor push
+            // A genuinely different value has to take the other path, or the assertions above would hold
+            // just as well for a counter that never counts and a dirty flag that is never set.
+            pass.setUniform(0, otherSlice); // different value: this one really dirties
+            pass.draw(3, 1, 0, 0);  // third draw: still no re-record, but the push is owed
             encoder.submitRenderPass();
 
             assertEquals(2, LavaFlowFrameStats.pipelineBindsTotal() - bindsBefore,
@@ -132,8 +140,12 @@ class LavaFlowRebindElisionTest {
                     "第二次绑定同一 pipeline 是重复绑定，rebind_ratio 的分子不能少算");
             assertEquals(1, LavaFlowFrameStats.pipelineBindsRecordedTotal() - recordedBefore,
                     "两次绑定只该录制一次 vkCmdBindPipeline：重复绑定的省的就是这条命令");
-            assertEquals(1, LavaFlowFrameStats.descriptorPushesTotal() - pushesBefore,
-                    "uniform 值没变的那次 setUniform 不该脏 descriptors，第二次 draw 不该再 push");
+            assertEquals(2, LavaFlowFrameStats.uniformChangesTotal() - uniformChangesBefore,
+                    "三次 setUniform 里只有两次真的改了值（首次与换值），重复值那次不算；"
+                            + "计入是必须的——它是除去切换 pipeline 之外唯一的置脏来源，漏计就解释不了 pushes");
+            assertEquals(2, LavaFlowFrameStats.descriptorPushesTotal() - pushesBefore,
+                    "首次脏了推一次、重复值那次不推、换值后又脏了再推一次；"
+                            + "负面对照：把换值那步去掉，这条会红在 1");
         } finally {
             if (pipeline != null) pipeline.close();
             if (uniform != null) uniform.close();

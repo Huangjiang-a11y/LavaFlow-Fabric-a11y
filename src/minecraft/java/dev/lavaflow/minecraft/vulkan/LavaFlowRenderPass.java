@@ -418,6 +418,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             return;
         }
         uniforms.set(index, value);
+        LavaFlowFrameStats.uniformChanged();
         descriptorsDirty = true;
     }
     @Override public void pushConstants(ByteBuffer value) {

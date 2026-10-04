@@ -54,6 +54,9 @@ public final class LavaFlowFrameStats {
     private static long pipelineRebinds;
     private static long pipelineRebindsAtReport;
     private static long pipelineBindsRecorded;
+    private static long pipelineBindsRecordedAtReport;
+    private static long uniformChanges;
+    private static long uniformChangesAtReport;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -111,6 +114,21 @@ public final class LavaFlowFrameStats {
         pipelineBindsRecorded++;
     }
 
+    /**
+     * Counts one {@code setUniform} call that really changed a slot's value, i.e. one that marked the
+     * descriptors dirty.
+     *
+     * <p>Together with {@link #pipelineBindRecorded()} this says where the descriptor pushes come from.
+     * A device run had pushes_per_frame equal to binds_per_frame line for line: the pipeline repeats
+     * were being elided, so either the uniform values genuinely change per draw (a per-draw buffer
+     * offset, which has to be re-pushed) or something else is doing the dirtying. Which one it is is
+     * not guessable from the outside, so the report carries both.
+     */
+    public static void uniformChanged() {
+        if (!ENABLED) return;
+        uniformChanges++;
+    }
+
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
     public static void descriptorPushed() {
         if (!ENABLED) return;
@@ -145,6 +163,7 @@ public final class LavaFlowFrameStats {
     static long pipelineBindsTotal() { return pipelineBinds; }
     static long pipelineRebindsTotal() { return pipelineRebinds; }
     static long pipelineBindsRecordedTotal() { return pipelineBindsRecorded; }
+    static long uniformChangesTotal() { return uniformChanges; }
     static long descriptorPushesTotal() { return descriptorPushes; }
 
     /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
@@ -254,6 +273,10 @@ public final class LavaFlowFrameStats {
         double bindsPerFrame = framesSince == 0 ? 0 : bindsSince / (double) framesSince;
         double rebindRatio = bindsSince == 0 ? 0 : rebindsSince / (double) bindsSince;
         double pushesPerFrame = framesSince == 0 ? 0 : (descriptorPushes - descriptorPushesAtReport) / (double) framesSince;
+        double bindRecordsPerFrame = framesSince == 0 ? 0
+                : (pipelineBindsRecorded - pipelineBindsRecordedAtReport) / (double) framesSince;
+        double uniformChangesPerFrame = framesSince == 0 ? 0
+                : (uniformChanges - uniformChangesAtReport) / (double) framesSince;
         double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
@@ -273,13 +296,16 @@ public final class LavaFlowFrameStats {
         partialClearsAtReport = partialClears;
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
+        pipelineBindsRecordedAtReport = pipelineBindsRecorded;
+        uniformChangesAtReport = uniformChanges;
         descriptorPushesAtReport = descriptorPushes;
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
                         + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
-                        + " binds_per_frame={11} rebind_ratio={12} pushes_per_frame={13}"
-                        + " retired_buffer={14} retired_view={15} retired_sampler={16} retired_texture={17}"
-                        + " partial_clears={18} top_retired_view={19}",
+                        + " binds_per_frame={11} rebind_ratio={12} bind_records_per_frame={13} pushes_per_frame={14}"
+                        + " uniform_changes_per_frame={15}"
+                        + " retired_buffer={16} retired_view={17} retired_sampler={18} retired_texture={19}"
+                        + " partial_clears={20} top_retired_view={21}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -293,7 +319,9 @@ public final class LavaFlowFrameStats {
                 String.format("%.1f", submitsPerFrame),
                 String.format("%.1f", bindsPerFrame),
                 String.format("%.3f", rebindRatio),
+                String.format("%.1f", bindRecordsPerFrame),
                 String.format("%.1f", pushesPerFrame),
+                String.format("%.1f", uniformChangesPerFrame),
                 String.format("%.2f", buffersPerFrame),
                 String.format("%.2f", viewsPerFrame),
                 String.format("%.2f", samplersPerFrame),
