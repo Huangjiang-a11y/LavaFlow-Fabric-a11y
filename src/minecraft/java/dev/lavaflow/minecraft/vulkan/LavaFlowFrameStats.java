@@ -53,6 +53,7 @@ public final class LavaFlowFrameStats {
     private static long pipelineBindsAtReport;
     private static long pipelineRebinds;
     private static long pipelineRebindsAtReport;
+    private static long pipelineBindsRecorded;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -100,6 +101,12 @@ public final class LavaFlowFrameStats {
         if (repeated) pipelineRebinds++;
     }
 
+    /** Counts one {@code vkCmdBindPipeline} actually recorded into a command buffer. */
+    public static void pipelineBindRecorded() {
+        if (!ENABLED) return;
+        pipelineBindsRecorded++;
+    }
+
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
     public static void descriptorPushed() {
         if (!ENABLED) return;
@@ -131,6 +138,10 @@ public final class LavaFlowFrameStats {
      * expected to reuse its views retires none. Only meaningful while {@link #enabled()}.
      */
     static long retiredViewTotal() { return retiredViews; }
+    static long pipelineBindsTotal() { return pipelineBinds; }
+    static long pipelineRebindsTotal() { return pipelineRebinds; }
+    static long pipelineBindsRecordedTotal() { return pipelineBindsRecorded; }
+    static long descriptorPushesTotal() { return descriptorPushes; }
 
     /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
     public static void textureRetired() {

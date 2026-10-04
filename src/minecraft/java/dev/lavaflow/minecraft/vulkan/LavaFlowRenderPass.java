@@ -18,6 +18,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.function.Supplier;
@@ -385,6 +386,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
 
     private void recordPipelineBind() {
+        LavaFlowFrameStats.pipelineBindRecorded();
         int depthVkFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -402,9 +404,16 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         LavaFlowRenderPipeline resolved = encoder.device().pipeline(pipeline);
         // Counts whether this repeats the pipeline already bound: whether Minecraft re-binds a pipeline per
         // draw decides whether eliding a repeat is worth the trouble — see LavaFlowFrameStats.
-        LavaFlowFrameStats.pipelineBind(this.pipeline == resolved);
+        boolean repeated = this.pipeline == resolved;
+        LavaFlowFrameStats.pipelineBind(repeated);
         this.pipeline = resolved;
         if (!this.pipeline.isValid()) throw new IllegalStateException("Pipeline is invalid: " + pipeline.getLocation());
+        if (repeated) {
+            // Only the recording is elided, never the validation above: this pipeline is already bound in the
+            // command buffer and its descriptors are already written, so re-recording the bind and re-marking
+            // the descriptors dirty is work the previous draw already did.
+            return;
+        }
         if (begun) recordPipelineBind();
         descriptorsDirty = true;
     }
@@ -421,6 +430,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         setUniform(name, buffer.slice());
     }
     @Override public void setUniform(String name, GpuBufferSlice buffer) {
+        // A slice carries value equality (buffer, offset, length), and the frontend re-sends the same
+        // uniform on every draw: re-marking the descriptors dirty for a write that would end up
+        // byte-identical turns every draw into a descriptor push.
+        if (Objects.equals(uniforms.get(name), buffer)) return;
         uniforms.put(name, buffer);
         descriptorsDirty = true;
     }
