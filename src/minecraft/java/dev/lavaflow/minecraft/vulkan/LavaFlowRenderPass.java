@@ -435,6 +435,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // byte-identical turns every draw into a descriptor push.
         if (Objects.equals(uniforms.get(name), buffer)) return;
         uniforms.put(name, buffer);
+        LavaFlowFrameStats.uniformChanged();
         descriptorsDirty = true;
     }
     @Override public void enableScissor(int x, int y, int width, int height) {
