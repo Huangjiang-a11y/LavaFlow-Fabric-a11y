@@ -331,7 +331,7 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 | 内容 | 独立渲染器跑满 600 帧，开验证层、零验证消息，退出码 0 |
 | 旁证 | CI 在 ubuntu-latest 上执行同一套命令并通过 |
 
-ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mali-G76 / Exynos 980，走全部回退路径）；本分支 README 暂无对应的真机记录。
+ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mali-G76 / Exynos 980，走全部回退路径；以及 vivo PD2284 / Mali-G610 MC6，它抓到了下面那个空顶点缓冲崩溃）；本分支 README 不重复真机细节。
 
 ### descriptor 写入结构体的高水位计数缺陷（已修）
 
@@ -344,6 +344,19 @@ ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mal
 `vkUpdateDescriptorSets` 原生崩溃的来源（真机记录见 26.3 的 README）。现在 `writes(count)` 把
 `remaining()` 钉到本次条数，`WriteScratchTest` 有 5 条用例，其中一条直接断言"驱动被告知读几条"。
 
+
+### 云渲染的空顶点缓冲（已修）
+
+26.3 侧在 vivo PD2284（Mali-G610 MC6，驱动 32.1.0）上抓到一次原生崩溃：进入世界约 1 秒后 SIGSEGV 死在
+`libGLES_mali.so` 里，崩点正是 `vkCmdBindVertexBuffers` 内部。成因是原版云渲染（`CloudRenderer.render`）对
+顶点槽位传 `null`——它的几何走 storage buffer——而 LavaFlow 把这个 `null` 转成了 `VK_NULL_HANDLE` 交给驱动。
+传 null 句柄本身合法（`VUID-vkCmdBindVertexBuffers-pBuffers-parameter` 允许 null 元素），但 Mali 在**录制**
+这条命令时就解引用了它。
+
+修复与 26.3 同步：`setVertexBuffer` 遇到 null 直接返回，不录任何命令，与 Minecraft 自带后端的语义一致（它自己
+的 Vulkan 后端 `if (buffer == null) return;`，GL 后端同样跳过）。两个分支各有一条
+`LavaFlowNullVertexBufferTest` 钉住这个行为：null slice 之后不得录顶点绑定，随后绑一个真 buffer 必须录一条
+（负面对照：把修复反转回旧行为后红在 `expected: <0> but was: <1>`）。完整栈与真机记录见 26.3 分支的 README。
 
 ## 致谢
 

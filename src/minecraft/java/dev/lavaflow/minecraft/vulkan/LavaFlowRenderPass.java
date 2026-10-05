@@ -183,6 +183,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             try (MemoryStack stack = stackPush()) {
                 for (int slot = 0; slot < pendingVertexBuffers.length; slot++) {
                     if ((pendingVertexMask & (1 << slot)) == 0) continue;
+                    LavaFlowFrameStats.vertexBufferBindRecorded();
                     vkCmdBindVertexBuffers(encoder.commandBuffer(), slot,
                             stack.longs(pendingVertexBuffers[slot]), stack.longs(pendingVertexOffsets[slot]));
                 }
@@ -453,10 +454,24 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         enableScissor(area.x(), area.y(), area.width(), area.height());
     }
     @Override public void setVertexBuffer(int slot, GpuBufferSlice buffer) {
-        long handle = buffer == null ? 0 : ((LavaFlowGpuBuffer) buffer.buffer()).handle();
-        long offset = buffer == null ? 0 : buffer.offset();
+        if (buffer == null) {
+            // The frontend means "leave this binding alone", not "bind nothing": Minecraft's own Vulkan and GL
+            // backends both return here without recording a thing. Passing VK_NULL_HANDLE through is legal by
+            // the letter of the spec (VUID-vkCmdBindVertexBuffers-pBuffers-parameter allows null elements, and
+            // an attribute bound to a null binding reads as zero), but a Vivo PD2284 (Mali-G610 MC6, driver
+            // 32.1.0) took SIGSEGV inside libGLES_mali.so+0x1664004 while recording exactly this call —
+            // si_addr=0x20 with R1=0, the driver dereferencing the null handle it was handed. The vanilla cloud
+            // renderer asks for it once per frame: CloudRenderer.render calls setVertexBuffer(0, null) and reads
+            // its geometry out of the CloudFaces/CloudInfo storage buffers, so without this the first clouds
+            // draw of a world kills the process on that GPU. Sodium replaces that path, which is why only the
+            // Sodium-free device hit it.
+            return;
+        }
+        long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
+        long offset = buffer.offset();
         if (begun) {
             try (MemoryStack stack = stackPush()) {
+                LavaFlowFrameStats.vertexBufferBindRecorded();
                 vkCmdBindVertexBuffers(encoder.commandBuffer(), slot, stack.longs(handle), stack.longs(offset));
             }
         } else {

@@ -57,6 +57,8 @@ public final class LavaFlowFrameStats {
     private static long pipelineBindsRecordedAtReport;
     private static long uniformChanges;
     private static long uniformChangesAtReport;
+    private static long vertexBufferBinds;
+    private static long vertexBufferBindsAtReport;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -125,6 +127,20 @@ public final class LavaFlowFrameStats {
         uniformChanges++;
     }
 
+    /**
+     * Counts one {@code vkCmdBindVertexBuffers} actually recorded into a command buffer.
+     *
+     * <p>The sibling of {@link #pipelineBindRecorded()}, and the answer to the same kind of question: the
+     * frontend asks for vertex buffers through {@code setVertexBuffer}, and a request that the backend
+     * correctly declines to record (the frontend's null slice means "leave this binding alone") must not
+     * show up here. A device log where this tracks the request rate one to one would mean the decline is
+     * gone — which is how the Mali crash below got in.
+     */
+    public static void vertexBufferBindRecorded() {
+        if (!ENABLED) return;
+        vertexBufferBinds++;
+    }
+
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
     public static void descriptorPushed() {
         if (!ENABLED) return;
@@ -160,6 +176,7 @@ public final class LavaFlowFrameStats {
     static long pipelineRebindsTotal() { return pipelineRebinds; }
     static long pipelineBindsRecordedTotal() { return pipelineBindsRecorded; }
     static long uniformChangesTotal() { return uniformChanges; }
+    static long vertexBufferBindsTotal() { return vertexBufferBinds; }
     static long descriptorPushesTotal() { return descriptorPushes; }
 
     /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
@@ -273,6 +290,8 @@ public final class LavaFlowFrameStats {
                 : (pipelineBindsRecorded - pipelineBindsRecordedAtReport) / (double) framesSince;
         double uniformChangesPerFrame = framesSince == 0 ? 0
                 : (uniformChanges - uniformChangesAtReport) / (double) framesSince;
+        double vertexBindsPerFrame = framesSince == 0 ? 0
+                : (vertexBufferBinds - vertexBufferBindsAtReport) / (double) framesSince;
         double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
@@ -294,14 +313,15 @@ public final class LavaFlowFrameStats {
         pipelineRebindsAtReport = pipelineRebinds;
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
         uniformChangesAtReport = uniformChanges;
+        vertexBufferBindsAtReport = vertexBufferBinds;
         descriptorPushesAtReport = descriptorPushes;
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
                         + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
-                        + " binds_per_frame={11} rebind_ratio={12} bind_records_per_frame={13} pushes_per_frame={14}"
-                        + " uniform_changes_per_frame={15}"
-                        + " retired_buffer={16} retired_view={17} retired_sampler={18} retired_texture={19}"
-                        + " partial_clears={20} top_retired_view={21}",
+                        + " binds_per_frame={11} rebind_ratio={12} bind_records_per_frame={13} vertex_binds_per_frame={14}"
+                        + " pushes_per_frame={15} uniform_changes_per_frame={16}"
+                        + " retired_buffer={17} retired_view={18} retired_sampler={19} retired_texture={20}"
+                        + " partial_clears={21} top_retired_view={22}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -316,6 +336,7 @@ public final class LavaFlowFrameStats {
                 String.format("%.1f", bindsPerFrame),
                 String.format("%.3f", rebindRatio),
                 String.format("%.1f", bindRecordsPerFrame),
+                String.format("%.1f", vertexBindsPerFrame),
                 String.format("%.1f", pushesPerFrame),
                 String.format("%.1f", uniformChangesPerFrame),
                 String.format("%.2f", buffersPerFrame),
