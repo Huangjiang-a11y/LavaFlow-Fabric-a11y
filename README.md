@@ -507,6 +507,18 @@ LavaFlow 是实验性软件。渲染正确性与性能已在有限的桌面与 A
 | 环境 | FCL 1.3.3.2，Java 25，Android 10（SDK 29） |
 | 模组 | Fabric Loader 0.19.5，Sodium 0.9.2+mc26.3 |
 
+第二台设备走的是**没有 Sodium** 的路径（`0.1.3-alpha (964c9f0)`），覆盖到的是原版云的绘制与 vanilla 的透明度阶段：
+
+| 项 | 值 |
+| --- | --- |
+| 设备 | vivo PD2284（天玑 8100 / MT6896Z） |
+| GPU | ARM Mali-G610 MC6，Vulkan 1.1.177，驱动 32.1.0 |
+| 环境 | FCL 1.3.3.7，Java 25，Android 15（SDK 35） |
+| 模组 | Fabric Loader 0.19.5，**无 Sodium**（只有 LavaFlow 一个模组） |
+| 结果 | 0.1.3-alpha 上进入世界约 1 秒后崩溃（已定位并修复，见下）；关闭云渲染即可进入世界 |
+
+它是目前**唯一**走到"原版云渲染 + 空顶点缓冲"那条路径的设备，也因此抓到了下面那个崩溃。
+
 该设备会走 LavaFlow 的**全部回退路径**（旧版渲染通道、descriptor-set 而非 push descriptor、逐条 `vkCmdDrawIndexed` 而非 multi-draw），因此这些路径已有真机覆盖。尚未覆盖的是桌面驱动，以及具备上述可选能力的设备。 资源重载（连续三轮）在该设备上跑通，管线关闭→描述符集失效的路径每轮都会走到。
 
 同一个 JAR（`0.1.0-alpha (64e8b68)`）后来在这台设备上又跑过一轮，JVM 参数带 `-Dlavaflow.validation=true`：
@@ -565,6 +577,56 @@ a push of 3 entries must tell the driver to read 3 ==> expected: <3> but was: <8
   一次干净运行不构成反证（当年同一构建就是先跑过一整场、之后才崩）。
 - 剩余可疑方向：Mali 驱动自身的问题；以及别的"已销毁句柄仍被写进 descriptor"的路径。后者正是验证层能抓的，
   但 `buildWrites` 这条路径本地的设备用例**仍未覆盖**（见「验证与诊断」）。
+
+### 云渲染的空顶点缓冲与 Mali-G610 的 SIGSEGV（0.1.3-alpha 崩溃，已定位并修复）
+
+**现象**：vivo PD2284（天玑 8100，Mali-G610 MC6，驱动 32.1.0，Android 15，FCL 1.3.3.7）在
+`0.1.3-alpha (964c9f0)` 上，进入世界约 1 秒后进程死亡，Java 层无异常。hs_err 的 `Problematic frame` 是
+`libGLES_mali.so+0x1664004`，`siginfo` 为 `SIGSEGV / SEGV_MAPERR`，`si_addr=0x20`，寄存器 `R1=0`。
+
+Java 栈把位置指得很准：
+
+```text
+GameRenderer.render
+→ LevelRenderer.executeClassicTransparency
+→ CloudRenderer.render
+→ FrontendRenderPass.drawIndexed → LavaFlowRenderPass.drawIndexed
+→ pushDescriptors → ensureBegun → vkCmdBindVertexBuffers
+```
+
+**成因不是"绑了已销毁的 buffer"，而是"绑了一个空句柄"。** `CloudRenderer.render` 的字节码里那一步是
+
+```text
+iconst_0            // slot = 0
+aconst_null         // buffer = null
+invokeinterface RenderPass.setVertexBuffer
+```
+
+云的几何走 `CloudFaces` / `CloudInfo` 两个 storage buffer，顶点槽位它从来不用，于是直接传 `null`。前端这个
+`null` 的语义是**"别碰这个 binding"**，不是"绑一个空句柄"：Minecraft 自带的 Vulkan 后端在 `setVertexBuffer`
+开头就 `if (buffer == null) return;`（字节码里 `ifnonnull` 之后紧跟 `return`），GL 后端同样跳过不绑。LavaFlow
+却把它转成了 `VK_NULL_HANDLE` 交给驱动。
+
+传 null 句柄本身**合法**——`VUID-vkCmdBindVertexBuffers-pBuffers-parameter` 的措辞就是 "valid or
+VK_NULL_HANDLE"，`nullDescriptor` 特性只决定着色器能否读到零值——但 Mali 在**录制**这条命令时就解引用了它，
+这与"崩在 `vkCmdBindVertexBuffers` 内部、根本还没走到 draw"完全吻合。
+
+**为什么只有这一台崩**：Sodium 会替换云的绘制路径。另一台已实测的 Mali-G76 设备装了 Sodium 0.9.2，从未走到
+这里；这台只装 LavaFlow，第一帧画云就撞上了。这也解释了"两台 Mali 设备只有一台崩"。
+
+**修复**：`LavaFlowRenderPass.setVertexBuffer` 遇到 null 直接返回——不往待绑定表里放句柄，也不录命令，与
+Minecraft 自带后端的语义一致（0.1.4-alpha 起）。同时新增 report 字段 `vertex_binds_per_frame`（真正录进命令
+缓冲的 `vkCmdBindVertexBuffers` 条数），它让"前端要绑、后端没录"这件事在设备日志里可见。
+
+**测试**：`LavaFlowNullVertexBufferTest` 直接驱动真实渲染通道——null slice 之后不得录任何顶点绑定，随后绑一个
+真 buffer 必须录一条。第二条是负面对照，否则"没录"对一个从不计数的计数器同样成立。把修复反转回旧行为后，
+该用例红在：
+
+```text
+null slice 的语义是别碰这个 binding，不是绑一个空句柄 ==> expected: <0> but was: <1>
+```
+
+**设备侧绕开**：关闭云渲染即可正常进入世界（已在该设备上确认，与"崩溃点在云的绘制里"一致）。
 
 ## 致谢
 
