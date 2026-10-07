@@ -183,6 +183,33 @@ jobs:
             || { echo "::error::the rebind elision test failed"; exit 1; }
           echo "rebind elision test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      # Both of these drive a real render pass, so they skip without a display server — and a skip is
+      # green. Each step names the method it expects, rather than counting tests, so a rename shows up
+      # here instead of quietly reducing coverage.
+      - name: Assert the pass split test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowPassSplitTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="onlyAFirstDrawThatCannotAvoidItSplitsThePass' "$report" \
+            || { echo "::error::onlyAFirstDrawThatCannotAvoidItSplitsThePass did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the pass split test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the pass split test failed"; exit 1; }
+          echo "pass split test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
+      - name: Assert the GPU timing test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowGpuTimingTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="aFinishedFrameIsTimedOnTheGpu' "$report" \
+            || { echo "::error::aFinishedFrameIsTimedOnTheGpu did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the GPU timing test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the GPU timing test failed"; exit 1; }
+          echo "GPU timing test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
       # that the layer answered: a switch that silently does nothing must not pass.
