@@ -326,9 +326,26 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 ### 资源 churn 的实测基线（`lavaflow.frameStats`）
 
 `-Dlavaflow.frameStats=true` 会让 `FrameStatsMixin` 周期输出一行计数器，用来看"有没有东西在每帧被创建/退役"——
-比只看帧率更能定位问题。字段：`sets_per_frame`、`hit_rate`、`invalidations_per_frame`、`barriers`、
-`binds_per_frame`、`rebind_ratio`、`pushes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、
-`retired_texture`、`partial_clears`、`top_retired_view`。
+比只看帧率更能定位问题。字段：`frames`、`fps_median`、`frame_ms`（median/mean/p99/min）、`gpu_ms`、
+`sets_per_frame`、`hit_rate`、`invalidations_per_frame`、`barriers_per_frame`、`submits_per_frame`、
+`binds_per_frame`、`rebind_ratio`、`bind_records_per_frame`、`vertex_binds_per_frame`、`pushes_per_frame`、
+`uniform_changes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、`retired_texture`、
+`partial_clears`、`pass_splits_per_frame`、`top_retired_view`。
+
+计数器分两类，改动时别弄混：**描述前端行为的一律只加不减**（`binds_per_frame`、`rebind_ratio`、
+`uniform_changes_per_frame`——藏掉重复调用等于把温度计砸了），**只有真录进命令缓冲的才允许变小**
+（`bind_records_per_frame`、`vertex_binds_per_frame`、`pushes_per_frame`）。
+
+`gpu_ms` 是唯一来自 GPU 一侧的数字，其余全是 CPU 录命令的次数。**这是判断"还有没有优化空间"的那把尺子**：
+帧的长度由较慢的一侧决定，所以"每帧少录了 N 条命令"在没有 `gpu_ms` 时只是关于帧的一半的陈述——一份
+全绿的 CPU 报告可以与纹丝不动的帧率共存。它由每个提交槽位两端的时间戳查询得到（帧真正结束后才回读，
+因此报的是一帧已完成的 GPU 时间）。设备若不能计时（图形队列不报告 timestamp 位数），报告里该字段是
+`-`，同时日志会有一条 INFO 说明——**不要**把缺失读成 0。
+
+`pass_splits_per_frame` 是"渲染通道被拆开重开"的次数：通道中途为采样纹理做布局转换时不得不拆（屏障不能
+录在通道内）。一趟通道的第一个 draw **不该**拆——`ensureBegun()` 在 begin 之前就把采样纹理转换好了，
+所以这个数只在"通道已开、又绑了一张没采样过的纹理"时才涨。在 tiled GPU 上一次拆开是一次 tile 回写加重载，
+它是这个后端为少量 draw 能录的最贵的东西，而在此之前它是不可见的。
 
 `top_retired_view` 在条目多于展示数时会附上 `(distinct=N)`，因为这里常见的分布是**平的**（每份资源各退役
 一次），只列前几名几乎说不出信息量——见下文第二轮实测。

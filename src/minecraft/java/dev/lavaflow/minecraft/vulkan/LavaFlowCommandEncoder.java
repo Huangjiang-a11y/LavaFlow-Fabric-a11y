@@ -24,6 +24,7 @@ import static org.lwjgl.vulkan.VK11.VK_ERROR_OUT_OF_POOL_MEMORY;
 
 final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private static final int SUBMIT_SLOTS = 3;
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowCommandEncoder.class.getName());
 
     private final LavaFlowVulkanContext context;
     private final LavaFlowDevice device;
@@ -41,6 +42,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean destroyed;
     private long readbackScratch;
     private int readbackScratchBytes;
+    // Two timestamp queries per submit slot: the start and the end of that slot's recording. They are read
+    // when the slot's fence signals — two frames later, since slots rotate — so the reported GPU time is a
+    // frame that has actually finished rather than the one being recorded. Zero when the device cannot time.
+    private long timestampPool;
 
     private static final class SubmitSlot {
         final VkCommandBuffer commandBuffer;
@@ -61,6 +66,22 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         this.device = device;
         this.context = device.context();
         createSlots();
+        if (context.timestampsSupported()) {
+            try (MemoryStack stack = stackPush()) {
+                VkQueryPoolCreateInfo info = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                        .queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(SUBMIT_SLOTS * 2);
+                LongBuffer out = stack.mallocLong(1);
+                int result = vkCreateQueryPool(context.device(), info, null, out);
+                if (result == VK_SUCCESS) timestampPool = out.get(0);
+                else LOGGER.log(System.Logger.Level.WARNING, "vkCreateQueryPool(timestamps) failed with "
+                        + "VkResult " + result + ", so the report will carry no gpu_ms");
+            }
+        } else {
+            // Said out loud rather than left as a silently missing field: an absent gpu_ms has to read as
+            // "this device cannot be timed", not as "the GPU finished instantly".
+            LOGGER.log(System.Logger.Level.INFO,
+                    "The graphics queue reports no timestamp bits, so the report will carry no gpu_ms");
+        }
         prepareSlot(0);
     }
 
@@ -97,6 +118,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             slot.inFlight = false;
             device.completeSubmit(slot.batch);
             slot.batch = null;
+            readGpuTime(index);
         }
         slot.transientMemory.recycle();
         check(vkResetCommandBuffer(slot.commandBuffer, 0), "vkResetCommandBuffer");
@@ -107,6 +129,31 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
+        if (timestampPool != 0) {
+            vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
+        }
+    }
+
+    /**
+     * Reads the timestamps written around one slot's recording, once that slot's fence has signalled. A frame
+     * whose queries are not ready contributes no sample rather than a wrong one, and a device that cannot time
+     * never gets here at all.
+     */
+    private void readGpuTime(int index) {
+        if (timestampPool == 0) return;
+        try (MemoryStack stack = stackPush()) {
+            LongBuffer values = stack.mallocLong(2);
+            // The stride is the byte step *between* results, not the size of the two together: passing the
+            // total writes the second result past the end of a two-long buffer and leaves the value this reads
+            // uninitialised.
+            int result = vkGetQueryPoolResults(context.device(), timestampPool, index * 2, 2, values,
+                    Long.BYTES, VK_QUERY_RESULT_64_BIT);
+            if (result != VK_SUCCESS) return;
+            long ticks = values.get(1) - values.get(0);
+            if (ticks <= 0) return;
+            LavaFlowFrameStats.gpuFrameCompleted(ticks * (double) context.timestampPeriod() / 1_000_000.0);
+        }
     }
 
     VkCommandBuffer commandBuffer() { return commandBuffer; }
@@ -126,6 +173,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen) submitRenderPass();
         try (MemoryStack stack = stackPush()) {
             memoryBarrier(stack);
+        }
+        if (timestampPool != 0) {
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool,
+                    slotIndex * 2 + 1);
         }
         check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
         transientMemory.flushMappedRanges();
@@ -192,6 +243,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (submitSlot != null) {
                 vkFreeCommandBuffers(context.device(), context.commandPool(), submitSlot.commandBuffer);
             }
+        }
+        if (timestampPool != 0) {
+            vkDestroyQueryPool(context.device(), timestampPool, null);
+            timestampPool = 0;
         }
         commandBuffer = null;
     }

@@ -51,6 +51,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private VkQueue presentQueue;
     private int graphicsFamily = -1;
     private int presentFamily = -1;
+    // Whether the graphics queue can time work at all, and the tick length the device reports for it. Both
+    // are read while the device is being selected: a graphics family that reports no timestamp bits cannot
+    // be timed, and the encoder has to know that before it creates a query pool it could never read.
+    private boolean timestampsSupported;
+    private float timestampPeriod;
     // Memory heaps and types are fixed for the device's lifetime, so they are read once and kept:
     // findMemoryType scans this table on every buffer and texture allocation, and it used to pay a driver
     // call plus a stack-allocated property struct for each one. Keyed on the device it was read from, so
@@ -362,6 +367,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     // These may be the same family or two; see findFamilies.
                     graphicsFamily = families[0];
                     presentFamily = families[1];
+                    timestampPeriod = candidateProperties.limits().timestampPeriod();
+                    timestampsSupported = families[2] > 0 && timestampPeriod > 0;
                     properties = candidateProperties; deviceName = properties.deviceNameString();
                     selectedCapabilities = candidateCapabilities;
                 } else candidateProperties.free();
@@ -487,12 +494,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             vkGetPhysicalDeviceQueueFamilyProperties(candidate, count, props);
             int graphics = -1;
             int present = -1;
+            int graphicsTimestampBits = 0;
             for (int i = 0; i < props.capacity(); i++) {
-                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) graphics = i;
+                if ((props.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                    graphics = i;
+                    graphicsTimestampBits = props.get(i).timestampValidBits();
+                }
                 if (SDLVulkan.SDL_Vulkan_GetPresentationSupport(instance, candidate, i)) present = i;
                 if (graphics >= 0 && present >= 0) break;
             }
-            return new int[] {graphics, present};
+            return new int[] {graphics, present, graphicsTimestampBits};
         }
     }
 
@@ -640,6 +651,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     public VkQueue presentQueue() { return presentQueue; }
     public int graphicsFamily() { return graphicsFamily; }
     public int presentFamily() { return presentFamily; }
+    /**
+     * Whether the selected device's graphics queue can write timestamp queries.
+     *
+     * <p>Reported as a plain yes/no rather than left to fail at query time, because the answer changes what
+     * the frame report can say: a device that cannot time work has no {@code gpu_ms}, and a report that
+     * quietly showed zero would read as "the GPU is doing nothing".
+     */
+    public boolean timestampsSupported() { return timestampsSupported; }
+    /** Nanoseconds per timestamp tick, as the selected device reports it. */
+    public float timestampPeriod() { return timestampPeriod; }
     public long commandPool() { return commandPool; }
     public String deviceName() { return deviceName; }
     public VkPhysicalDeviceProperties properties() { return properties; }
