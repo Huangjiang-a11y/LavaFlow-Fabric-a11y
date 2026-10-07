@@ -329,12 +329,14 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 比只看帧率更能定位问题。字段：`frames`、`fps_median`、`frame_ms`（median/mean/p99/min）、`gpu_ms`、
 `sets_per_frame`、`hit_rate`、`invalidations_per_frame`、`barriers_per_frame`、`submits_per_frame`、
 `binds_per_frame`、`rebind_ratio`、`bind_records_per_frame`、`vertex_binds_per_frame`、`pushes_per_frame`、
+`vertex_bind_calls_per_frame`、`vertex_rebind_ratio`、
 `uniform_changes_per_frame`、`retired_buffer`、`retired_view`、`retired_sampler`、`retired_texture`、
 `partial_clears`、`pass_splits_per_frame`、`top_retired_view`。
 
 计数器分两类，改动时别弄混：**描述前端行为的一律只加不减**（`binds_per_frame`、`rebind_ratio`、
-`uniform_changes_per_frame`——藏掉重复调用等于把温度计砸了），**只有真录进命令缓冲的才允许变小**
-（`bind_records_per_frame`、`vertex_binds_per_frame`、`pushes_per_frame`）。
+`uniform_changes_per_frame`、`vertex_bind_calls_per_frame`、`vertex_rebind_ratio`——藏掉重复调用等于把温度计
+砸了），**只有真录进命令缓冲的才允许变小**（`bind_records_per_frame`、`vertex_binds_per_frame`、
+`pushes_per_frame`）。
 
 `gpu_ms` 是唯一来自 GPU 一侧的数字，其余全是 CPU 录命令的次数。**这是判断"还有没有优化空间"的那把尺子**：
 帧的长度由较慢的一侧决定，所以"每帧少录了 N 条命令"在没有 `gpu_ms` 时只是关于帧的一半的陈述——一份
@@ -635,6 +637,23 @@ VK_NULL_HANDLE"，`nullDescriptor` 特性只决定着色器能否读到零值—
 Minecraft 自带后端的语义一致（0.1.4-alpha 起）。同时新增 report 字段 `vertex_binds_per_frame`（真正录进命令
 缓冲的 `vkCmdBindVertexBuffers` 条数），它让"前端要绑、后端没录"这件事在设备日志里可见。
 
+### 顶点绑定的去重（0.1.7-alpha）
+
+设备实测的 92.8 条/帧 `vkCmdBindVertexBuffers` 对应 92.8 次 draw：前端每画一次就把同样的槽位再绑一次。顶点
+绑定是**命令缓冲的状态**——通道边界不影响它，我们也不解绑——所以"已经是它了"的请求可以直接丢掉。这跟
+`setPipeline`/`setUniform` 是同一个问题，只是答案要问编码器而不是通道：绑定活过了录制它的那一趟，问通道就会
+在下一趟白录一次。
+
+计数器照老规矩分两侧：`vertex_bind_calls_per_frame` 记前端的每一次请求（一次不漏），`vertex_rebind_ratio` 是
+其中重复的比例，`vertex_binds_per_frame` 才是真录进命令缓冲的条数——只有最后一个允许变小。**注意**：这个去重
+对 GPU 受限的场景不产生帧率收益（设备实测 GPU 占帧 98.5%），它清掉的是 CPU 侧"万一哪天是 CPU 顶住"的那部分。
+
+**测试**：`LavaFlowVertexBindElisionTest`（需要设备；断言分两侧，所以既不能多省也不能少省）：
+
+· 对照 A（把去重关掉）：红在 `vertex_rebind_ratio` 的分子——重复请求数从 2 变 0。
+· 对照 B（把绑定状态退回"每通道一份"，等价于把状态挂在通道而不是编码器上）：同样红——那正是这个测试存在的
+  理由。两次对照都先撞上 repeats 那条断言（它排在最前），录制数的那条只是没走到。
+
 **测试**：`LavaFlowNullVertexBufferTest` 直接驱动真实渲染通道——null slice 之后不得录任何顶点绑定，随后绑一个
 真 buffer 必须录一条。第二条是负面对照，否则"没录"对一个从不计数的计数器同样成立。把修复反转回旧行为后，
 该用例红在：
@@ -645,16 +664,29 @@ null slice 的语义是别碰这个 binding，不是绑一个空句柄 ==> expec
 
 **设备侧绕开**：关闭云渲染即可正常进入世界（已在该设备上确认，与"崩溃点在云的绘制里"一致）。
 
-## 致谢
+### 采样纹理的布局：一个待真机验证的开关（`lavaflow.sampledReadOnlyLayout`）
 
-- 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。
-- Fabric 移植：[EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) —— 将后端移植到 Fabric Loader。
-- 本 a11y 分支：[Huangjiang-a11y/LavaFlow-Fabric-a11y](https://github.com/Huangjiang-a11y/LavaFlow-Fabric-a11y) —— 面向移动端 Mali GPU 与第三方模组的 Vulkan 兼容性修复。
-- 工具链：[Fabric Loader](https://fabricmc.net/)、[Fabric Loom](https://github.com/FabricMC/fabric-loom)、[LWJGL 3](https://www.lwjgl.org/)。
+这里的 GPU 侧只有"先量再说"，没有直接改渲染行为。`gpu_ms` 已经说明设备在重场景里是 GPU 受限（12.69 ms 对
+12.88 ms 的帧），而那样的帧里 CPU 侧的命令流只占百分之一点几——所以往下要动的是带宽/tile store 那一侧，而
+那一侧**没有哪个改动是能靠读代码定案的**。能做的、也应该做的，是把"采样纹理停在哪个布局"变成一个可以在真机
+上对照的变量。
 
-## 许可证
+· **关（默认，与 0.1.6 逐字同行为）**：采样纹理停在 `VK_IMAGE_LAYOUT_GENERAL`。任何访问都合法，纹理在
+  "被采样 → 被当附件写 → 再被采样"之间来回时不用额外转换，barrier 的作用域是 all-commands。
+· **开（`-Dlavaflow.sampledReadOnlyLayout=true`）**：停在 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Mali 的
+  建议是"着色器只读的纹理就该放这里"——tiler 可以把它保持压缩在显存里；顺带 barrier 的作用域从 all-commands
+  收窄到顶点/片元阶段（编码器里 `sourceStageForLayout`/`destinationStageForLayout` 的那两个 case 就是为此）。
 
-LavaFlow 依据 [MIT License](LICENSE) 分发。Copyright (c) 2026 BZLZHH。
+**为什么默认关**：这件事没在真机上验证过，而且**可能变坏**。前端会把刚渲染完的附件接着当纹理采样（后处理
+链），那种纹理在 READ_ONLY 下要多出往返转换，在 GENERAL 下则不用。所以它是个待测的变量，不是结论——**先造
+实验，别先下结论**。
+
+**怎么对照**（同一场景、同一位置、各跑一次）：
+1. 不加参数跑一次（默认布局），记下 report 里的 `gpu_ms`（锁 60fps 时不要用 fps 判断，用 `gpu_ms`）；
+2. 加上 `-Dlavaflow.sampledReadOnlyLayout=true` 再跑一次；
+3. 两次的 `gpu_ms`、以及 F3 上那行的占帧比例，发回来即可。
+
+CI 里两条布局各跑一次冒烟（都开着验证层），只保证结构上转得过去：性能上的答案只能来自设备。
 
 ### F3 上的 GPU 时间（`lavaflow.debug` 条目）
 
@@ -693,3 +725,14 @@ GPU (LavaFlow): 12.69 ms, 98% of a 12.88 ms frame
 `tools/check_mixin_targets.py <minecraft-merged-deobf.jar>` 按 javap 核对每个 Minecraft 目标的 `@Mixin`/
 `@Inject`/`@Shadow`/`@Accessor`/`@Invoker` 名字与静态形式，外部模组目标按名字跳过；CI 会在构建后跑它。
 mixin 目标漂移编译期无感、只有启动时才炸，这个脚本就是为这件事存在的。
+
+## 致谢
+
+- 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。
+- Fabric 移植：[EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) —— 将后端移植到 Fabric Loader。
+- 本 a11y 分支：[Huangjiang-a11y/LavaFlow-Fabric-a11y](https://github.com/Huangjiang-a11y/LavaFlow-Fabric-a11y) —— 面向移动端 Mali GPU 与第三方模组的 Vulkan 兼容性修复。
+- 工具链：[Fabric Loader](https://fabricmc.net/)、[Fabric Loom](https://github.com/FabricMC/fabric-loom)、[LWJGL 3](https://www.lwjgl.org/)。
+
+## 许可证
+
+LavaFlow 依据 [MIT License](LICENSE) 分发。Copyright (c) 2026 BZLZHH。

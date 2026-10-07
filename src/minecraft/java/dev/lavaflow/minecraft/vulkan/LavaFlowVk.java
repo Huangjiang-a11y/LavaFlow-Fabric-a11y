@@ -14,6 +14,26 @@ import com.mojang.renderpearl.api.textures.FilterMode;
 import static org.lwjgl.vulkan.VK10.*;
 
 final class LavaFlowVk {
+    /**
+     * The layout sampled textures are left in, chosen by {@code -Dlavaflow.sampledReadOnlyLayout=true}.
+     *
+     * <p>GENERAL is what this backend has always used. Every access is legal in it, and it costs nothing to stay
+     * in when a texture is sampled, written and sampled again — which is what the frontend's post-processing
+     * chains do. Mali's guidance is the other way: a texture the shader only reads belongs in
+     * SHADER_READ_ONLY_OPTIMAL, where a tiler can keep it compressed in memory, and the barriers around it narrow
+     * from "all commands" to the shader stages (see the two stage helpers in the encoder).
+     *
+     * <p>Off by default, deliberately: this is not verified on a device yet, and it is the kind of change that
+     * can go either way — a texture rendered to and sampled in the same frame would gain transitions rather than
+     * lose them. It exists so the two can be measured against each other on hardware. Build the experiment, do
+     * not ship the conclusion.
+     */
+    private static final boolean SAMPLED_READ_ONLY = Boolean.getBoolean("lavaflow.sampledReadOnlyLayout");
+
+    static int sampledLayout() {
+        return SAMPLED_READ_ONLY ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+    }
+
     private static final int[] FORMATS = {
             9, 10, 16, 17, 23, 24, 37, 38, 70, 71, 77, 78, 84, 85, 91, 92,
             13, 14, 20, 21, 27, 28, 41, 42, 74, 75, 81, 82, 88, 89, 95, 96,

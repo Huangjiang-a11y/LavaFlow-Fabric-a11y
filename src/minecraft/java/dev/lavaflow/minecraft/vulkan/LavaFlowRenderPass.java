@@ -155,8 +155,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (begun) return;
         begun = true;
         for (LavaFlowGpuTexture sampled : sampledTextures()) {
-            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
-                encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
+            int layout = LavaFlowVk.sampledLayout();
+            if (sampled.layout() != layout) {
+                encoder.transition(sampled, layout);
             }
         }
         for (LavaFlowGpuTextureView view : colorViews) {
@@ -180,6 +181,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     LavaFlowFrameStats.vertexBufferBindRecorded();
                     vkCmdBindVertexBuffers(encoder.commandBuffer(), slot,
                             stack.longs(pendingVertexBuffers[slot]), stack.longs(pendingVertexOffsets[slot]));
+                    encoder.recordVertexBound(slot, pendingVertexBuffers[slot], pendingVertexOffsets[slot]);
                 }
             }
             pendingVertexMask = 0;
@@ -317,8 +319,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
         for (LavaFlowGpuTexture sampled : sampledTextures()) {
-            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
-                encoder.transition(sampled, VK_IMAGE_LAYOUT_GENERAL);
+            int layout = LavaFlowVk.sampledLayout();
+            if (sampled.layout() != layout) {
+                encoder.transition(sampled, layout);
             }
         }
         try (MemoryStack stack = stackPush()) {
@@ -457,11 +460,20 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         long offset = buffer.offset();
+        // A device run measured 92.8 recorded vertex binds per frame against 92.8 draws: the frontend asks for
+        // the same slot over and over, and each request that matches what is already bound would change
+        // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
+        // command is dropped — but the question has to be asked against the encoder's record rather than the
+        // pass's, because a binding outlives the pass it was recorded in.
+        boolean repeated = encoder.vertexBound(slot, handle, offset);
+        LavaFlowFrameStats.vertexBufferBindCalled(repeated);
+        if (repeated) return;
         if (begun) {
             try (MemoryStack stack = stackPush()) {
                 LavaFlowFrameStats.vertexBufferBindRecorded();
                 vkCmdBindVertexBuffers(encoder.commandBuffer(), slot, stack.longs(handle), stack.longs(offset));
             }
+            encoder.recordVertexBound(slot, handle, offset);
         } else {
             pendingVertexBuffers[slot] = handle;
             pendingVertexOffsets[slot] = offset;
@@ -595,7 +607,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             return;
         }
         for (LavaFlowGpuTexture sampled : sampledTextures()) {
-            if (sampled.layout() != VK_IMAGE_LAYOUT_GENERAL) {
+            if (sampled.layout() != LavaFlowVk.sampledLayout()) {
                 splitForSampledTransitions();
                 break;
             }
@@ -708,12 +720,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
                     LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) binding.view();
                     LavaFlowGpuTexture sampledTexture = view.texture();
-                    if (sampledTexture.layout() != VK_IMAGE_LAYOUT_GENERAL) {
+                    if (sampledTexture.layout() != LavaFlowVk.sampledLayout()) {
                         throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
                     }
                     write.pImageInfo(scratch.imageInfo(i)
                             .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
-                            .imageLayout(VK_IMAGE_LAYOUT_GENERAL));
+                            .imageLayout(LavaFlowVk.sampledLayout()));
                 }
                 case TEXEL_BUFFER -> {
                     GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
