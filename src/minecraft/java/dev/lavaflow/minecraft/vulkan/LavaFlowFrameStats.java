@@ -17,6 +17,17 @@ public final class LavaFlowFrameStats {
     private static final boolean ENABLED = Boolean.getBoolean("lavaflow.frameStats");
     private static final System.Logger LOGGER = System.getLogger(LavaFlowFrameStats.class.getName());
     private static final int WINDOW = 600;
+    // A short rolling window for the F3 line, kept whether or not the periodic report is enabled: the overlay
+    // asks for the GPU time every frame it is shown, and a readout that only exists when a JVM flag was passed
+    // is exactly the kind of number that is missing when it is wanted.
+    private static final int DEBUG_WINDOW = 120;
+    private static final double[] debugGpuMillis = new double[DEBUG_WINDOW];
+    private static int debugGpuSamples;
+    private static int debugGpuHead;
+    private static final long[] debugFrameNanos = new long[DEBUG_WINDOW];
+    private static int debugFrameSamples;
+    private static int debugFrameHead;
+    private static long debugPreviousFrameNanos;
     private static final long REPORT_INTERVAL_NANOS = 5_000_000_000L;
 
     private static final long[] intervals = new long[WINDOW];
@@ -175,9 +186,42 @@ public final class LavaFlowFrameStats {
      * GPU sets, and a report can be all green while nothing gets faster.
      */
     public static void gpuFrameCompleted(double millis) {
+        synchronized (LavaFlowFrameStats.class) {
+            debugGpuMillis[debugGpuHead] = millis;
+            debugGpuHead = (debugGpuHead + 1) % DEBUG_WINDOW;
+            if (debugGpuSamples < DEBUG_WINDOW) debugGpuSamples++;
+        }
         if (!ENABLED) return;
         gpuFrames++;
         gpuMillis += millis;
+    }
+
+    /**
+     * The line LavaFlow contributes to the F3 overlay: the GPU time it measured for a finished frame, and what
+     * share of the frame that is. Null until a frame has been timed, so the entry adds nothing before then.
+     *
+     * <p>Minecraft's own GPU readout answers the same question from a timer query the frontend polls itself,
+     * and on Mali that number has been arriving negative — which makes it useless for the one decision it
+     * exists to inform. This is the same question answered from the timestamps LavaFlow writes around its own
+     * submissions and reads back once the slot's fence has signalled. The share is the number to read: near
+     * 100% means the GPU is what is holding the frame up, and no amount of command recording saved on the CPU
+     * side will show up in the frame rate.
+     */
+    public static String debugLine() {
+        double gpuMillis;
+        double frameMillis;
+        synchronized (LavaFlowFrameStats.class) {
+            if (debugGpuSamples == 0) return null;
+            double gpuSum = 0;
+            for (int i = 0; i < debugGpuSamples; i++) gpuSum += debugGpuMillis[i];
+            double frameSum = 0;
+            for (int i = 0; i < debugFrameSamples; i++) frameSum += debugFrameNanos[i];
+            gpuMillis = gpuSum / debugGpuSamples;
+            frameMillis = debugFrameSamples == 0 ? 0 : frameSum / debugFrameSamples / 1_000_000.0;
+        }
+        if (frameMillis <= 0) return String.format("GPU (LavaFlow): %.2f ms", gpuMillis);
+        return String.format("GPU (LavaFlow): %.2f ms, %.0f%% of a %.2f ms frame",
+                gpuMillis, 100.0 * gpuMillis / frameMillis, frameMillis);
     }
 
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
@@ -281,8 +325,16 @@ public final class LavaFlowFrameStats {
 
     /** Records one rendered frame. */
     public static void framePresented() {
-        if (!ENABLED) return;
-        record();
+        long now = System.nanoTime();
+        synchronized (LavaFlowFrameStats.class) {
+            if (debugPreviousFrameNanos != 0) {
+                debugFrameNanos[debugFrameHead] = now - debugPreviousFrameNanos;
+                debugFrameHead = (debugFrameHead + 1) % DEBUG_WINDOW;
+                if (debugFrameSamples < DEBUG_WINDOW) debugFrameSamples++;
+            }
+            debugPreviousFrameNanos = now;
+        }
+        if (ENABLED) record();
     }
 
     private static synchronized void record() {

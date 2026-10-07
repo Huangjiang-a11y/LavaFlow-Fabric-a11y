@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_25",
+  "package": "dev.lavaflow.minecraft.mixin",
+  "client": [
+    "DebugScreenEntryListMixin",
+    "DebugScreenEntriesInvoker"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
