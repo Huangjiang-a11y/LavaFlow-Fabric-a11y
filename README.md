@@ -358,16 +358,43 @@ ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mal
 `LavaFlowNullVertexBufferTest` 钉住这个行为：null slice 之后不得录顶点绑定，随后绑一个真 buffer 必须录一条
 （负面对照：把修复反转回旧行为后红在 `expected: <0> but was: <1>`）。完整栈与真机记录见 26.3 分支的 README。
 
-## 致谢
 
-- 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。
-- Fabric 移植：[EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) —— 将后端移植到 Fabric Loader。
-- 本 a11y 分支：[Huangjiang-a11y/LavaFlow-Fabric-a11y](https://github.com/Huangjiang-a11y/LavaFlow-Fabric-a11y) —— 面向移动端 Mali GPU 与第三方模组的 Vulkan 兼容性修复。
-- 工具链：[Fabric Loader](https://fabricmc.net/)、[Fabric Loom](https://github.com/FabricMC/fabric-loom)、[LWJGL 3](https://www.lwjgl.org/)。
+### 顶点绑定的去重（0.1.7-alpha（26.2））
 
-## 许可证
+与 26.3 同题：设备实测的 92.8 条/帧 `vkCmdBindVertexBuffers` 对应 92.8 次 draw，前端每画一次就把同样的槽位
+再绑一次。顶点绑定是**命令缓冲的状态**（通道边界不影响它，我们也不解绑），所以"已经是它了"的请求可以丢掉。
+这跟 `setPipeline`/`setUniform` 是同一个问题，只是答案要问编码器而不是通道：绑定活过了录制它的那一趟。
 
-LavaFlow 依据 [MIT License](LICENSE) 分发。Copyright (c) 2026 BZLZHH。
+计数器分两侧：`vertex_bind_calls_per_frame` 记前端的每一次请求，`vertex_rebind_ratio` 是其中重复的比例，
+`vertex_binds_per_frame` 才是真录进命令缓冲的条数——只有最后一个允许变小。对 GPU 受限的场景它不产生帧率
+收益（设备实测 GPU 占帧 98.5%），清掉的是"万一哪天是 CPU 顶住"的那部分。
+
+`LavaFlowVertexBindElisionTest` 钉住它，断言分两侧（既不能多省也不能少省）。对照：关掉去重、以及把绑定状态
+退回"每通道一份"（等价于挂在通道而不是编码器上），两次都会红。
+
+### 采样纹理的布局：一个待真机验证的开关（`lavaflow.sampledReadOnlyLayout`（26.2））
+
+这里的 GPU 侧只有"先量再说"，没有直接改渲染行为。`gpu_ms` 已经说明设备在重场景里是 GPU 受限（12.69 ms 对
+12.88 ms 的帧），而那样的帧里 CPU 侧的命令流只占百分之一点几——所以往下要动的是带宽/tile store 那一侧，而
+那一侧**没有哪个改动是能靠读代码定案的**。能做的、也应该做的，是把"采样纹理停在哪个布局"变成一个可以在真机
+上对照的变量。
+
+· **关（默认，与 0.1.6 逐字同行为）**：采样纹理停在 `VK_IMAGE_LAYOUT_GENERAL`。任何访问都合法，纹理在
+  "被采样 → 被当附件写 → 再被采样"之间来回时不用额外转换，barrier 的作用域是 all-commands。
+· **开（`-Dlavaflow.sampledReadOnlyLayout=true`）**：停在 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Mali 的
+  建议是"着色器只读的纹理就该放这里"——tiler 可以把它保持压缩在显存里；顺带 barrier 的作用域从 all-commands
+  收窄到顶点/片元阶段（编码器里 `sourceStageForLayout`/`destinationStageForLayout` 的那两个 case 就是为此）。
+
+**为什么默认关**：这件事没在真机上验证过，而且**可能变坏**。前端会把刚渲染完的附件接着当纹理采样（后处理
+链），那种纹理在 READ_ONLY 下要多出往返转换，在 GENERAL 下则不用。所以它是个待测的变量，不是结论——**先造
+实验，别先下结论**。
+
+**怎么对照**（同一场景、同一位置、各跑一次）：
+1. 不加参数跑一次（默认布局），记下 report 里的 `gpu_ms`（锁 60fps 时不要用 fps 判断，用 `gpu_ms`）；
+2. 加上 `-Dlavaflow.sampledReadOnlyLayout=true` 再跑一次；
+3. 两次的 `gpu_ms`、以及 F3 上那行的占帧比例，发回来即可。
+
+CI 里两条布局各跑一次冒烟（都开着验证层），只保证结构上转得过去：性能上的答案只能来自设备。
 
 ### F3 上的 GPU 时间（`lavaflow.debug` 条目）
 
@@ -406,3 +433,14 @@ GPU (LavaFlow): 12.69 ms, 98% of a 12.88 ms frame
 `tools/check_mixin_targets.py <minecraft-merged-deobf.jar>` 按 javap 核对每个 Minecraft 目标的 `@Mixin`/
 `@Inject`/`@Shadow`/`@Accessor`/`@Invoker` 名字与静态形式，外部模组目标按名字跳过；CI 会在构建后跑它。
 mixin 目标漂移编译期无感、只有启动时才炸，这个脚本就是为这件事存在的。
+
+## 致谢
+
+- 原始项目：[BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow) —— Vulkan 1.1 后端的设计与实现（NeoForge 版）。
+- Fabric 移植：[EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) —— 将后端移植到 Fabric Loader。
+- 本 a11y 分支：[Huangjiang-a11y/LavaFlow-Fabric-a11y](https://github.com/Huangjiang-a11y/LavaFlow-Fabric-a11y) —— 面向移动端 Mali GPU 与第三方模组的 Vulkan 兼容性修复。
+- 工具链：[Fabric Loader](https://fabricmc.net/)、[Fabric Loom](https://github.com/FabricMC/fabric-loom)、[LWJGL 3](https://www.lwjgl.org/)。
+
+## 许可证
+
+LavaFlow 依据 [MIT License](LICENSE) 分发。Copyright (c) 2026 BZLZHH。

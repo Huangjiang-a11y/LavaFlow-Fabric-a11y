@@ -128,6 +128,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
+        for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -153,6 +154,25 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (ticks <= 0) return;
             LavaFlowFrameStats.gpuFrameCompleted(ticks * (double) context.timestampPeriod() / 1_000_000.0);
         }
+    }
+
+    // Vertex bindings are command buffer state, not render pass state: one recorded by a pass stays in effect
+    // for the next pass recorded into the same command buffer, and nothing here ever unbinds one. So the record
+    // of what is currently bound belongs to the encoder, and starts empty with every new command buffer.
+    private final long[] boundVertexHandles = new long[RenderPass.MAX_VERTEX_BUFFERS];
+    private final long[] boundVertexOffsets = new long[RenderPass.MAX_VERTEX_BUFFERS];
+    private final boolean[] vertexSlotBound = new boolean[RenderPass.MAX_VERTEX_BUFFERS];
+
+    /** Whether recording this binding would change what the command buffer already has in that slot. */
+    boolean vertexBound(int slot, long handle, long offset) {
+        return vertexSlotBound[slot] && boundVertexHandles[slot] == handle
+                && boundVertexOffsets[slot] == offset;
+    }
+
+    void recordVertexBound(int slot, long handle, long offset) {
+        vertexSlotBound[slot] = true;
+        boundVertexHandles[slot] = handle;
+        boundVertexOffsets[slot] = offset;
     }
 
     VkCommandBuffer commandBuffer() { return commandBuffer; }
@@ -390,7 +410,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdCopyBufferToImage(commandBuffer, buffer(source).handle(), texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
         }
         if ((target.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, VK_IMAGE_LAYOUT_GENERAL);
+            transition(texture, LavaFlowVk.sampledLayout());
         }
     }
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, Runnable callback, int mip) {
@@ -465,7 +485,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     private void restoreSampledLayout(LavaFlowGpuTexture texture) {
         if ((texture.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, VK_IMAGE_LAYOUT_GENERAL);
+            transition(texture, LavaFlowVk.sampledLayout());
         }
     }
 
