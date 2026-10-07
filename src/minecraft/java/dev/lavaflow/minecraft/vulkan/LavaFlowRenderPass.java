@@ -319,6 +319,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
      * pipeline, and descriptor bindings are command-buffer state and survive the boundary untouched.
      */
     private void splitForSampledTransitions() {
+        LavaFlowFrameStats.passSplit();
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
         for (TextureBinding binding : textures.values()) {

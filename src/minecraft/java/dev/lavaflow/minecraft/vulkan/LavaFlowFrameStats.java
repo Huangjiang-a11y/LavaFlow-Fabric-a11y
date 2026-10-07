@@ -59,6 +59,15 @@ public final class LavaFlowFrameStats {
     private static long uniformChangesAtReport;
     private static long vertexBufferBinds;
     private static long vertexBufferBindsAtReport;
+    private static long passSplits;
+    private static long passSplitsAtReport;
+    // GPU execution time, sampled by the encoder's timestamp queries. Reported as an average over the same
+    // window as everything else, and only when the device can actually time work — gpuFramesAtReport is what
+    // tells a window with no samples from a frame whose GPU time was zero.
+    private static long gpuFrames;
+    private static double gpuMillis;
+    private static long gpuFramesAtReport;
+    private static double gpuMillisAtReport;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -141,6 +150,32 @@ public final class LavaFlowFrameStats {
         vertexBufferBinds++;
     }
 
+    /**
+     * Counts one render-pass split forced by a sampled-texture transition: the pass is ended, the textures
+     * are transitioned, and the pass is begun again. On a tiled GPU an end/begin pair is a tile flush and
+     * reload on top of the barrier, which makes it the most expensive per-frame command the backend can
+     * record for a handful of draws — and it was invisible until it had a counter.
+     */
+    public static void passSplit() {
+        if (!ENABLED) return;
+        passSplits++;
+    }
+
+    /**
+     * Records one finished frame's GPU execution time in milliseconds, as measured by the encoder's
+     * timestamp queries.
+     *
+     * <p>This is the number that says whether any of the per-frame counters around it are worth chasing. The
+     * others count commands the CPU records, and a frame can be limited by either side — so without it,
+     * "this change removed N commands per frame" is a claim about the CPU half of a frame whose length the
+     * GPU sets, and a report can be all green while nothing gets faster.
+     */
+    public static void gpuFrameCompleted(double millis) {
+        if (!ENABLED) return;
+        gpuFrames++;
+        gpuMillis += millis;
+    }
+
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
     public static void descriptorPushed() {
         if (!ENABLED) return;
@@ -177,6 +212,9 @@ public final class LavaFlowFrameStats {
     static long pipelineBindsRecordedTotal() { return pipelineBindsRecorded; }
     static long uniformChangesTotal() { return uniformChanges; }
     static long vertexBufferBindsTotal() { return vertexBufferBinds; }
+    static long passSplitsTotal() { return passSplits; }
+    static long gpuFramesTotal() { return gpuFrames; }
+    static double gpuMillisTotal() { return gpuMillis; }
     static long descriptorPushesTotal() { return descriptorPushes; }
 
     /** Counts one retired texture, so texture churn can be told apart from view-only churn. */
@@ -292,6 +330,11 @@ public final class LavaFlowFrameStats {
                 : (uniformChanges - uniformChangesAtReport) / (double) framesSince;
         double vertexBindsPerFrame = framesSince == 0 ? 0
                 : (vertexBufferBinds - vertexBufferBindsAtReport) / (double) framesSince;
+        double passSplitsPerFrame = framesSince == 0 ? 0
+                : (passSplits - passSplitsAtReport) / (double) framesSince;
+        long gpuSamplesSince = gpuFrames - gpuFramesAtReport;
+        double gpuMillisPerFrame = gpuSamplesSince == 0 ? 0
+                : (gpuMillis - gpuMillisAtReport) / gpuSamplesSince;
         double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
@@ -314,20 +357,25 @@ public final class LavaFlowFrameStats {
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
         uniformChangesAtReport = uniformChanges;
         vertexBufferBindsAtReport = vertexBufferBinds;
+        passSplitsAtReport = passSplits;
+        gpuFramesAtReport = gpuFrames;
+        gpuMillisAtReport = gpuMillis;
         descriptorPushesAtReport = descriptorPushes;
         LOGGER.log(System.Logger.Level.INFO,
-                "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} sets_per_frame={6}"
-                        + " hit_rate={7} invalidations_per_frame={8} barriers_per_frame={9} submits_per_frame={10}"
-                        + " binds_per_frame={11} rebind_ratio={12} bind_records_per_frame={13} vertex_binds_per_frame={14}"
-                        + " pushes_per_frame={15} uniform_changes_per_frame={16}"
-                        + " retired_buffer={17} retired_view={18} retired_sampler={19} retired_texture={20}"
-                        + " partial_clears={21} top_retired_view={22}",
+                "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} gpu_ms={6}"
+                        + " sets_per_frame={7}"
+                        + " hit_rate={8} invalidations_per_frame={9} barriers_per_frame={10} submits_per_frame={11}"
+                        + " binds_per_frame={12} rebind_ratio={13} bind_records_per_frame={14} vertex_binds_per_frame={15}"
+                        + " pushes_per_frame={16} uniform_changes_per_frame={17}"
+                        + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
+                        + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
                 String.format("%.3f", meanMillis),
                 String.format("%.3f", p99Millis),
                 String.format("%.3f", minMillis),
+                gpuSamplesSince == 0 ? "-" : String.format("%.2f", gpuMillisPerFrame),
                 String.format("%.1f", setsPerFrame),
                 String.format("%.3f", hitRate),
                 String.format("%.2f", invalidationsPerFrame),
@@ -344,6 +392,7 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", samplersPerFrame),
                 String.format("%.2f", texturesPerFrame),
                 String.format("%.1f", clearsPerFrame),
+                String.format("%.2f", passSplitsPerFrame),
                 topViewLabels);
     }
 }
