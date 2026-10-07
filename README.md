@@ -368,3 +368,41 @@ ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mal
 ## 许可证
 
 LavaFlow 依据 [MIT License](LICENSE) 分发。Copyright (c) 2026 BZLZHH。
+
+### F3 上的 GPU 时间（`lavaflow.debug` 条目）
+
+装了这个模组，F3 上会多出一行自己的 GPU 读数：
+
+```
+GPU (LavaFlow): 12.69 ms, 98% of a 12.88 ms frame
+```
+
+**比例才是要读的数**：接近 100% 说明 GPU 在顶着这一帧，那么 CPU 侧再省命令也换不来帧率；明显小于 100%
+（且帧率没被 60 上限锁住）才是 CPU 受限度。这是 0.1.5 起 `report` 里那个 `gpu_ms` 的同一份数据，只是搬到
+眼前——Minecraft 自己那栏 GPU% 来自前端自己 poll 的 timer query，在 Mali 上会算出负数，所以两栏并排放着，
+谁不可信一眼可见。
+
+它是一个**独立的调试条目**（`lavaflow:gpu_time`，分类 RENDERER），不是往 Minecraft 那行后面追加的一行：
+追加等于写进别人的集合，而那个集合可能已被别的模组换成拒绝写入的实现（固定长度列表在渲染期抛
+`UnsupportedOperationException` 是真实发生过的事故），也没法让使用者把这一行关掉。作为条目它出现在调试
+选项屏里，可以像其它条目一样开合。
+
+几个实现上的取舍：
+
+· 注册走的是 Minecraft 自己的私有 `register(Identifier, DebugScreenEntry)`（`@Invoker`），和它自己的条目
+  同一条路——没有官方口子：`fabric-debug-api-v1` 只管实体调试订阅，`allEntries()` 返回的是
+  `Map.copyOf` 副本，`PROFILES` 是 `Map.of` 不可变。
+· 默认状态用 `putIfAbsent(IN_OVERLAY)` 加在 `resetStatuses` 末尾：不在 profile 里的 id 状态默认是 NEVER，
+  只注册等于看不见；用 `putIfAbsent` 而不是 `put`，是为了不覆盖使用者自己保存的选择（`resetStatuses` 是
+  `clear` + `putAll`，保存过的自定义状态会覆盖 profile）。
+· 注册与状态写在同处，且**注册失败就不写状态**：重建启用列表时会拿每个启用 id 去 `getEntry()` 查，有状态
+  没条目等于在 Minecraft 自己的代码里空指针。这个功能不能把自己变成崩溃源。
+· 它单独占一个 `lavaflow-debug.mixins.json`，**`required: false`**：诊断功能不该有能力让游戏启动失败，配置
+  真出问题只在日志里留一条警告，那一行不出现而已。
+· 数据侧的滚动窗口（120 帧的 GPU 样本与帧间隔）**不看 `lavaflow.frameStats` 开关**：F3 打开时每帧都要有数，
+  只在传了 JVM 参数时才存在的读数是"要用的时候恰恰没有"的典型。采样本身是常开的（时间戳每帧本来就在写），
+  所以这一行不增加每帧开销。
+
+`tools/check_mixin_targets.py <minecraft-merged-deobf.jar>` 按 javap 核对每个 Minecraft 目标的 `@Mixin`/
+`@Inject`/`@Shadow`/`@Accessor`/`@Invoker` 名字与静态形式，外部模组目标按名字跳过；CI 会在构建后跑它。
+mixin 目标漂移编译期无感、只有启动时才炸，这个脚本就是为这件事存在的。
