@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "lavaflow",
-  "version": "0.1.4-alpha",
+  "version": "0.1.5-alpha",
   "name": "LavaFlow",
   "description": "LavaFlow 的 Fabric 移植分支，针对早期移动端GPU与第三方模组的兼容性修复：基于 EternityQwQ/LavaFlow-Fabric，最终源自 BZLZHH/LavaFlow 的 Blaze3D Vulkan 1.1 后端",
   "authors": ["BZLZHH", "EternityQwQ", "Huangjiang-a11y"],
