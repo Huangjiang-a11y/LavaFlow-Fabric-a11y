@@ -120,6 +120,15 @@ jobs:
       # test leaves the build green all the same. Without this step a reordered workflow would
       # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
       # failure this test exists to catch.
+      # A mixin whose target drifted compiles fine and fails when the game starts, so it is checked against the
+      # jar the build just resolved rather than left to the first run. Names and the static/instance form are
+      # checked; mixins aimed at other mods are skipped by name.
+      - name: Check that every Minecraft mixin target still resolves
+        run: |
+          jar="$(ls ~/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-merged-deobf/*/minecraft-merged-deobf-*.jar | head -1)"
+          test -n "$jar" || { echo "::error::the Minecraft jar is not in the loom cache"; exit 1; }
+          python3 tools/check_mixin_targets.py "$jar"
+
       - name: Assert the context test ran rather than skipped
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowVulkanContextTest.xml
