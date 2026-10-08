@@ -372,29 +372,25 @@ ARM64 Android 的真机实测记录在 26.3 分支的 README（vivo PD1962 / Mal
 `LavaFlowVertexBindElisionTest` 钉住它，断言分两侧（既不能多省也不能少省）。对照：关掉去重、以及把绑定状态
 退回"每通道一份"（等价于挂在通道而不是编码器上），两次都会红。
 
-### 采样纹理的布局：一个待真机验证的开关（`lavaflow.sampledReadOnlyLayout`（26.2））
+### 采样纹理的布局：默认只读，`-Dlavaflow.sampledReadOnlyLayout=false` 退回（26.2）
 
-这里的 GPU 侧只有"先量再说"，没有直接改渲染行为。`gpu_ms` 已经说明设备在重场景里是 GPU 受限（12.69 ms 对
-12.88 ms 的帧），而那样的帧里 CPU 侧的命令流只占百分之一点几——所以往下要动的是带宽/tile store 那一侧，而
-那一侧**没有哪个改动是能靠读代码定案的**。能做的、也应该做的，是把"采样纹理停在哪个布局"变成一个可以在真机
-上对照的变量。
+0.1.7-alpha 里这是个默认关的实验；**0.1.8-alpha 起它成了默认行为**，因为真机验证的结果支持它。
 
-· **关（默认，与 0.1.6 逐字同行为）**：采样纹理停在 `VK_IMAGE_LAYOUT_GENERAL`。任何访问都合法，纹理在
-  "被采样 → 被当附件写 → 再被采样"之间来回时不用额外转换，barrier 的作用域是 all-commands。
-· **开（`-Dlavaflow.sampledReadOnlyLayout=true`）**：停在 `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL`。Mali 的
-  建议是"着色器只读的纹理就该放这里"——tiler 可以把它保持压缩在显存里；顺带 barrier 的作用域从 all-commands
-  收窄到顶点/片元阶段（编码器里 `sourceStageForLayout`/`destinationStageForLayout` 的那两个 case 就是为此）。
+· **默认（`SHADER_READ_ONLY_OPTIMAL`）**：采样纹理停在只读布局。Mali 的建议就是"着色器只读的纹理放这里"
+  ——tiler 可以把它保持压缩在显存里；同时 barrier 的作用域从 all-commands 收窄到顶点/片元阶段（编码器里
+  `sourceStageForLayout`/`destinationStageForLayout` 的那两个 case）。
+· **退回（`-Dlavaflow.sampledReadOnlyLayout=false`）**：回到 `VK_IMAGE_LAYOUT_GENERAL`，即 0.1.6 的行为。
+  一个属性、不用重编。该属性**只有显式写 `false` 才生效**，写别的（或根本不写）都是默认的只读布局——这样打错
+  字不会悄悄换掉布局。
 
-**为什么默认关**：这件事没在真机上验证过，而且**可能变坏**。前端会把刚渲染完的附件接着当纹理采样（后处理
-链），那种纹理在 READ_ONLY 下要多出往返转换，在 GENERAL 下则不用。所以它是个待测的变量，不是结论——**先造
-实验，别先下结论**。
+**凭什么翻默认**：一次真机 Mali-G76 会话开着验证层跑下来，**0 条验证层报错、画面无异常**，而且
+`pass_splits_per_frame=0.00`、`barriers_per_frame≈17.4`（与旧日志的 18 相当）——**这个改动预期会坏的那个形态
+（纹理在同一帧里既被渲染又被采样，于是多出往返转换）没有出现**。CI 里两条布局也都过一遍冒烟，所以退回那条路
+不会变成没人走过的小路。
 
-**怎么对照**（同一场景、同一位置、各跑一次）：
-1. 不加参数跑一次（默认布局），记下 report 里的 `gpu_ms`（锁 60fps 时不要用 fps 判断，用 `gpu_ms`）；
-2. 加上 `-Dlavaflow.sampledReadOnlyLayout=true` 再跑一次；
-3. 两次的 `gpu_ms`、以及 F3 上那行的占帧比例，发回来即可。
-
-CI 里两条布局各跑一次冒烟（都开着验证层），只保证结构上转得过去：性能上的答案只能来自设备。
+**还没量到的**：同场景下两个布局的 `gpu_ms` 对照。0.1.7 那次的数字来自另一个世界、另一个分辨率，和 0.1.5 的
+基线不能相减。所以要定案就按这个来：**同一个场景、同一个位置各跑一次**（一次默认、一次加 `=false`），比
+`gpu_ms`——帧率被上限锁住时不要用 fps 判断。那个退回开关同时也是这个对照的控制组。
 
 ### F3 上的 GPU 时间（`lavaflow.debug` 条目）
 
