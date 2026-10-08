@@ -235,13 +235,14 @@ jobs:
             exit 1
           fi
 
-      # 采样纹理布局那条路默认是关的，所以 CI 里单独把它打开跑一遍：至少证明这条机制在真结构上是通的
-      # （布局转换、描述符里的 imageLayout、更窄的 barrier 作用域），而不是等到真机上才发现转不过去。
-      - name: Smoke-test the sampled-read-only layout under the validation layer
+      # 0.1.8 起采样纹理默认走 SHADER_READ_ONLY_OPTIMAL，所以这里反过来跑一遍"退回 GENERAL"那条路：
+      # 两条布局在 CI 里都过一遍验证层（布局转换、描述符里的 imageLayout、barrier 作用域），
+      # 免得退回开关变成没人走过的小路。
+      - name: Smoke-test the GENERAL sampled layout (the opt-out) under the validation layer
         run: |
           export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
           xvfb-run -a -s "-screen 0 1280x720x24" \
-            env JAVA_OPTS="-Dlavaflow.validation=true -Dlavaflow.sampledReadOnlyLayout=true" \
+            env JAVA_OPTS="-Dlavaflow.validation=true -Dlavaflow.sampledReadOnlyLayout=false" \
             build/install/lavaflow/bin/lavaflow --frames=600 > build/smoke-readonly.log 2>&1
           cat build/smoke-readonly.log
           grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke-readonly.log

@@ -14,6 +14,15 @@ import static org.lwjgl.vulkan.VK10.*;
 
 class LavaFlowVkTest {
 
+    // sampled layout: the default is the read-only layout, =false is the way back
+
+    @Test void sampledLayoutIsShaderReadOnlyByDefault() {
+        assertEquals(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, LavaFlowVk.sampledLayout(),
+                "采样纹理默认停在 SHADER_READ_ONLY_OPTIMAL（0.1.8-alpha 起），=false 才退回 GENERAL。"
+                        + "这条断言钉的是默认值本身——要改它，得带着同场景两个布局的 gpu_ms 对照来改。"
+                        + "（若本 JVM 设了这个属性，这条会红，那是故意的：开关被谁动过要看得见。）");
+    }
+
     // bufferUsage: bit-flag remapping, no GPU dependency
 
     @Test void bufferUsage_zeroBitsYieldsTransferSrc() {

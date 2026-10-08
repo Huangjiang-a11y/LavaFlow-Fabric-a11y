@@ -15,20 +15,26 @@ import static org.lwjgl.vulkan.VK10.*;
 
 final class LavaFlowVk {
     /**
-     * The layout sampled textures are left in, chosen by {@code -Dlavaflow.sampledReadOnlyLayout=true}.
+     * The layout sampled textures are left in: {@code SHADER_READ_ONLY_OPTIMAL}, unless
+     * {@code -Dlavaflow.sampledReadOnlyLayout=false} asks for {@code GENERAL} again.
      *
-     * <p>GENERAL is what this backend has always used. Every access is legal in it, and it costs nothing to stay
-     * in when a texture is sampled, written and sampled again — which is what the frontend's post-processing
-     * chains do. Mali's guidance is the other way: a texture the shader only reads belongs in
-     * SHADER_READ_ONLY_OPTIMAL, where a tiler can keep it compressed in memory, and the barriers around it narrow
-     * from "all commands" to the shader stages (see the two stage helpers in the encoder).
+     * <p>This was a default-off experiment in 0.1.7-alpha and became the default in 0.1.8-alpha, on the strength
+     * of a real Mali-G76 session with the validation layer on: no findings, nothing visibly wrong, and
+     * {@code pass_splits_per_frame=0.00} with {@code barriers_per_frame≈17.4} — the shape this change was expected
+     * to break (a texture rendered to and sampled in the same frame, needing transitions both ways) did not
+     * appear.
      *
-     * <p>Off by default, deliberately: this is not verified on a device yet, and it is the kind of change that
-     * can go either way — a texture rendered to and sampled in the same frame would gain transitions rather than
-     * lose them. It exists so the two can be measured against each other on hardware. Build the experiment, do
-     * not ship the conclusion.
+     * <p>What has still not been measured is the same scene on the other layout: the 0.1.7 numbers came from a
+     * different world at a different resolution than the 0.1.5 baseline, so the two cannot be subtracted. The
+     * opt-out is the way back — one property, no rebuild — and it is also the control for that comparison: run
+     * the same spot twice with {@code frameStats} on and compare {@code gpu_ms} (not fps while the framerate is
+     * capped).
+     *
+     * <p>Any value other than "false" (including none at all) means the read-only layout; only an explicit
+     * {@code false} turns it off, so a typo cannot silently change the layout.
      */
-    private static final boolean SAMPLED_READ_ONLY = Boolean.getBoolean("lavaflow.sampledReadOnlyLayout");
+    private static final boolean SAMPLED_READ_ONLY =
+            !"false".equalsIgnoreCase(System.getProperty("lavaflow.sampledReadOnlyLayout", "true"));
 
     static int sampledLayout() {
         return SAMPLED_READ_ONLY ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
