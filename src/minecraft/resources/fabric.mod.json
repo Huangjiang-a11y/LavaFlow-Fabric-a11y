@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "lavaflow",
-  "version": "0.1.7-alpha",
+  "version": "0.1.8-alpha",
   "name": "LavaFlow",
   "description": "LavaFlow \u7684 Fabric \u79fb\u690d\u5206\u652f\uff0c\u9488\u5bf9\u65e9\u671f\u79fb\u52a8\u7aefGPU\u4e0e\u7b2c\u4e09\u65b9\u6a21\u7ec4\u7684\u517c\u5bb9\u6027\u4fee\u590d\uff1a\u57fa\u4e8e EternityQwQ/LavaFlow-Fabric\uff0c\u6700\u7ec8\u6e90\u81ea BZLZHH/LavaFlow \u7684 Blaze3D Vulkan 1.1 \u540e\u7aef",
   "authors": [
