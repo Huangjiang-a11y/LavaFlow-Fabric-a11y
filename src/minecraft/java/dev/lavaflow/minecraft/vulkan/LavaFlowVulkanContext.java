@@ -73,6 +73,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean fillModeNonSolid;
     private boolean multiDrawIndirect;
     private boolean vertexAttributeDivisor;
+    private boolean drawIndirectFirstInstance;
+    private boolean shaderDrawParameters;
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
@@ -557,6 +559,58 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
     }
 
+    /**
+     * Formats the core features that decide which draw paths LavaFlow can advertise. Package-private and
+     * static so a test can pin the field list without a device: a probe that quietly stops reporting a
+     * flag is worse than no probe, because the next change reads it as "the device lacks it".
+     */
+    /**
+     * Formats a Vulkan {@code uint32} limit. Drivers report "no limit" as {@code 0xFFFFFFFF}, and the
+     * LWJGL struct maps that to an int, so a plain {@code +} prints -1 — a reading that means the
+     * opposite of the truth. lavapipe does exactly that for {@code maxDrawIndirectCount}.
+     */
+    static String unsigned(int value) {
+        return Integer.toUnsignedString(value);
+    }
+
+    static String describeCoreFeatures(VkPhysicalDeviceFeatures core, boolean shaderDrawParameters) {
+        return "multiDrawIndirect=" + core.multiDrawIndirect()
+                + ", drawIndirectFirstInstance=" + core.drawIndirectFirstInstance()
+                + ", shaderDrawParameters=" + shaderDrawParameters
+                + ", samplerAnisotropy=" + core.samplerAnisotropy()
+                + ", depthClamp=" + core.depthClamp()
+                + ", independentBlend=" + core.independentBlend()
+                + ", wideLines=" + core.wideLines()
+                + ", largePoints=" + core.largePoints()
+                + ", fillModeNonSolid=" + core.fillModeNonSolid()
+                + ", fragmentStoresAndAtomics=" + core.fragmentStoresAndAtomics()
+                + ", vertexPipelineStoresAndAtomics=" + core.vertexPipelineStoresAndAtomics()
+                + ", shaderStorageImageMultisample=" + core.shaderStorageImageMultisample()
+                + ", fullDrawIndexUint32=" + core.fullDrawIndexUint32()
+                + ", geometryShader=" + core.geometryShader()
+                + ", tessellationShader=" + core.tessellationShader()
+                + ", sparseBinding=" + core.sparseBinding()
+                + ", occlusionQueryPrecise=" + core.occlusionQueryPrecise()
+                + ", pipelineStatisticsQuery=" + core.pipelineStatisticsQuery()
+                + ", textureCompressionETC2=" + core.textureCompressionETC2()
+                + ", textureCompressionASTC_LDR=" + core.textureCompressionASTC_LDR()
+                + ", robustBufferAccess=" + core.robustBufferAccess();
+    }
+
+    /** Formats the limits the draw paths are bounded by, same reasoning as {@link #describeCoreFeatures}. */
+    static String describeLimits(VkPhysicalDeviceLimits limits) {
+        return "maxDrawIndirectCount=" + unsigned(limits.maxDrawIndirectCount())
+                + ", maxVertexInputAttributes=" + limits.maxVertexInputAttributes()
+                + ", maxVertexInputBindings=" + limits.maxVertexInputBindings()
+                + ", maxVertexOutputComponents=" + limits.maxVertexOutputComponents()
+                + ", maxStorageBufferRange=" + limits.maxStorageBufferRange()
+                + ", maxComputeWorkGroupInvocations=" + limits.maxComputeWorkGroupInvocations()
+                + ", minUniformBufferOffsetAlignment=" + limits.minUniformBufferOffsetAlignment()
+                + ", maxColorAttachments=" + limits.maxColorAttachments()
+                + ", maxImageDimension2D=" + limits.maxImageDimension2D()
+                + ", timestampPeriod=" + limits.timestampPeriod();
+    }
+
     private void createDevice() {
         try (MemoryStack stack = stackPush()) {
             int queueCount = graphicsFamily == presentFamily ? 1 : 2;
@@ -567,6 +621,24 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             }
             VkPhysicalDeviceFeatures supported = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(physicalDevice, supported);
+            // Read-only capability probe, added because the flags that decide whether Minecraft's own
+            // GPU-side draw paths are reachable were hardcoded rather than measured: DeviceFeatures gets
+            // nonZeroFirstInstance=false and shaderDrawParameters=false whatever the device can do, and
+            // LevelRenderer refuses its multi-draw-indirect terrain path and GlslCompiler omits
+            // RENDERPEARL_INSTANCE_INDEX_INCLUDES_BASE_INSTANCE as a result. Nothing acts on these two
+            // values yet -- one device run should say which of them the hardware really lacks, instead of
+            // which ones LavaFlow never asked for. shaderDrawParameters is core Vulkan 1.1, hence the
+            // Vulkan11 struct rather than the EXT one.
+            VkPhysicalDeviceVulkan11Features vulkan11 =
+                    VkPhysicalDeviceVulkan11Features.calloc(stack).sType$Default();
+            VkPhysicalDeviceFeatures2 probe = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default()
+                    .pNext(vulkan11.address());
+            org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, probe);
+            drawIndirectFirstInstance = supported.drawIndirectFirstInstance();
+            shaderDrawParameters = vulkan11.shaderDrawParameters();
+            LOGGER.log(System.Logger.Level.INFO,
+                    "Vulkan core features: " + describeCoreFeatures(supported, shaderDrawParameters));
+            LOGGER.log(System.Logger.Level.INFO, "Vulkan limits: " + describeLimits(properties.limits()));
             VkPhysicalDeviceFeatures enabled = VkPhysicalDeviceFeatures.calloc(stack)
                     .samplerAnisotropy(supported.samplerAnisotropy())
                     .fillModeNonSolid(fillModeNonSolid)
@@ -704,6 +776,17 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
+
+    /**
+     * Whether this device accepts a non-zero {@code firstInstance} in an <em>indirect</em> draw command.
+     * Probed but not acted on yet: it is what {@code DeviceFeatures.nonZeroFirstInstance} would have to
+     * report, and {@code LevelRenderer} drops its whole multi-draw-indirect terrain path without it.
+     * Direct draws carry any {@code firstInstance} in core Vulkan, which is the escape hatch.
+     */
+    boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
+
+    /** Whether shaders may use the draw-parameter builtins ({@code gl_BaseInstance} et al). Probed, unused. */
+    boolean shaderDrawParameters() { return shaderDrawParameters; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
     synchronized long legacyRenderPass(int[] colorFormats, int[] colorLoadOps, int depthFormat, int depthLoadOp) {
