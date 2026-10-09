@@ -49,6 +49,9 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private static final int INDEXED_INFO_FIRST_INDEX = VkMultiDrawIndexedInfoEXT.FIRSTINDEX / Integer.BYTES;
     private static final int INDEXED_INFO_INDEX_COUNT = VkMultiDrawIndexedInfoEXT.INDEXCOUNT / Integer.BYTES;
     private static final int INDEXED_INFO_VERTEX_OFFSET = VkMultiDrawIndexedInfoEXT.VERTEXOFFSET / Integer.BYTES;
+    private static final int DRAW_INFO_INTS = VkMultiDrawInfoEXT.SIZEOF / Integer.BYTES;
+    private static final int DRAW_INFO_FIRST_VERTEX = VkMultiDrawInfoEXT.FIRSTVERTEX / Integer.BYTES;
+    private static final int DRAW_INFO_VERTEX_COUNT = VkMultiDrawInfoEXT.VERTEXCOUNT / Integer.BYTES;
 
     private final LavaFlowCommandEncoder encoder;
     private final LavaFlowVulkanContext context;
@@ -503,6 +506,18 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             pendingIndexType = vkType;
         }
     }
+    /**
+     * Whether a draw command asks for nothing at all.
+     *
+     * <p>{@code vkCmdDraw*} with no vertices or no instances is a legal no-op, and every CPU-readable batch
+     * (an indirect parameter buffer that is currently mapped, or a plain multi-draw array) has its parameters
+     * read here anyway — so dropping these costs nothing and shortens the command stream. Sodium culls by
+     * writing zeroes into its draw lists, and so does Minecraft's own terrain batching.
+     */
+    static boolean drawsNothing(int count, int instanceCount) {
+        return count <= 0 || instanceCount <= 0;
+    }
+
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         pushDescriptors();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
@@ -527,12 +542,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             }
             long record = MemoryUtil.memAddress(indexInfo);
             for (int draw = 0; draw < drawCount; draw++) {
-                vkCmdDrawIndexed(commandBuffer,
-                        MemoryUtil.memGetInt(record + VkMultiDrawIndexedInfoEXT.INDEXCOUNT),
-                        instanceCount,
+                int indexCount = MemoryUtil.memGetInt(record + VkMultiDrawIndexedInfoEXT.INDEXCOUNT);
+                if (drawsNothing(indexCount, instanceCount)) {
+                    LavaFlowFrameStats.indirectSkipped(1);
+                    record += VkMultiDrawIndexedInfoEXT.SIZEOF;
+                    continue;
+                }
+                vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount,
                         MemoryUtil.memGetInt(record + VkMultiDrawIndexedInfoEXT.FIRSTINDEX),
                         MemoryUtil.memGetInt(record + VkMultiDrawIndexedInfoEXT.VERTEXOFFSET),
                         firstInstance);
+                LavaFlowFrameStats.indirectExpanded(1);
                 record += VkMultiDrawIndexedInfoEXT.SIZEOF;
             }
             return;
@@ -543,16 +563,26 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             int firstIndex = indexInfo.get(record + INDEXED_INFO_FIRST_INDEX);
             int indexCount = indexInfo.get(record + INDEXED_INFO_INDEX_COUNT);
             int vertexOffset = indexInfo.get(record + INDEXED_INFO_VERTEX_OFFSET);
+            if (drawsNothing(indexCount, instanceCount)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
             vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+            LavaFlowFrameStats.indirectExpanded(1);
         }
     }
-    @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
+    // Reached only if a caller batches with separate arrays, which DeviceFeatures.multiDrawDirectSeparate
+    // advertises as unavailable: without that promise Minecraft would need one buffer binding per draw here.
+    @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) {
+        unsupported("multiDrawIndexed with separate vertex buffers");
+    }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
             vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(), buffer.offset(), count,
                     VkDrawIndexedIndirectCommand.SIZEOF);
+            LavaFlowFrameStats.indirectNative(count);
             return;
         }
         // Without multiDrawIndirect the batch has to be split. Issuing one indirect command per draw
@@ -566,6 +596,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
                         1, VkDrawIndexedIndirectCommand.SIZEOF);
             }
+            LavaFlowFrameStats.indirectSplit(count);
             return;
         }
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
@@ -577,12 +608,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         MemoryUtil.memCopy(hostBase + buffer.offset(), base, bytes);
         for (int draw = 0; draw < count; draw++) {
             long command = base + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF;
-            vkCmdDrawIndexed(commandBuffer,
-                    MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INDEXCOUNT),
-                    MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INSTANCECOUNT),
+            int indexCount = MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INDEXCOUNT);
+            int instances = MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INSTANCECOUNT);
+            if (drawsNothing(indexCount, instances)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
+            vkCmdDrawIndexed(commandBuffer, indexCount, instances,
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINDEX),
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.VERTEXOFFSET),
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINSTANCE));
+            LavaFlowFrameStats.indirectExpanded(1);
         }
     }
     @Override public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, GpuBuffer buffer, IndexType type, Collection<String> uniformNames, T value) {
@@ -600,19 +636,104 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
     }
-    @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
-    @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
+    /**
+     * Records interleaved draws packed as {@code VkMultiDrawInfoEXT} records, one {@code vkCmdDraw} per record.
+     *
+     * <p>This used to be an {@code unsupported()} stub while {@code DeviceFeatures.multiDrawDirectInterleaved}
+     * was advertised as available — an inconsistency that only held because nothing had called it yet: the
+     * frontend rejects a non-zero {@code firstInstance} itself unless {@code nonZeroFirstInstance} is reported,
+     * so every caller it allowed was passing zero. The stub would have thrown the moment that changed.
+     *
+     * <p>The parameter order is the one Minecraft's frontend and its own Vulkan backend agree on —
+     * {@code (records, instanceCount, firstInstance, drawCount)} — and not the order the names in the old stub
+     * suggested: the frontend tests its third int for {@code firstInstance}, and the stock backend passes the
+     * second as {@code instanceCount} and the fourth as the draw count. Minecraft's own backend records this
+     * with {@code vkCmdDrawMultiEXT}, which needs {@code VK_EXT_multi_draw}; Vulkan 1.1 devices do not have it,
+     * hence the loop.
+     */
+    @Override public void multiDraw(IntBuffer counts, int instanceCount, int firstInstance, int drawCount) {
+        if (drawCount <= 0) return;
+        pushDescriptors();
+        VkCommandBuffer commandBuffer = encoder.commandBuffer();
+        if (counts.isDirect()) {
+            int requiredInts = drawCount * DRAW_INFO_INTS;
+            if (requiredInts > counts.remaining()) {
+                throw new IllegalArgumentException("drawCount " + drawCount + " requires " + requiredInts
+                        + " ints but counts has only " + counts.remaining() + " remaining");
+            }
+            long record = MemoryUtil.memAddress(counts);
+            for (int draw = 0; draw < drawCount; draw++) {
+                int vertexCount = MemoryUtil.memGetInt(record + VkMultiDrawInfoEXT.VERTEXCOUNT);
+                int firstVertex = MemoryUtil.memGetInt(record + VkMultiDrawInfoEXT.FIRSTVERTEX);
+                record += VkMultiDrawInfoEXT.SIZEOF;
+                if (drawsNothing(vertexCount, instanceCount)) {
+                    LavaFlowFrameStats.indirectSkipped(1);
+                    continue;
+                }
+                vkCmdDraw(commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+                LavaFlowFrameStats.indirectExpanded(1);
+            }
+            return;
+        }
+        int base = counts.position();
+        for (int draw = 0; draw < drawCount; draw++) {
+            int record = base + draw * DRAW_INFO_INTS;
+            int vertexCount = counts.get(record + DRAW_INFO_VERTEX_COUNT);
+            int firstVertex = counts.get(record + DRAW_INFO_FIRST_VERTEX);
+            if (drawsNothing(vertexCount, instanceCount)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
+            vkCmdDraw(commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+            LavaFlowFrameStats.indirectExpanded(1);
+        }
+    }
+
+    // The separate-first-vertices variant belongs to DeviceFeatures.multiDrawDirectSeparate, which is
+    // advertised as unavailable, so a caller that reaches this is asking for something it was told it could
+    // not have; saying which call it was beats the generic message.
+    @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) {
+        unsupported("multiDraw with separate first vertices");
+    }
+
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
         pushDescriptors();
-        long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
+        LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
-            vkCmdDrawIndirect(encoder.commandBuffer(), handle, buffer.offset(), count, VkDrawIndirectCommand.SIZEOF);
-        } else {
-            for (int i = 0; i < count; i++) {
-                vkCmdDrawIndirect(encoder.commandBuffer(), handle,
-                        buffer.offset() + (long) i * VkDrawIndirectCommand.SIZEOF,
+            vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(), buffer.offset(), count,
+                    VkDrawIndirectCommand.SIZEOF);
+            LavaFlowFrameStats.indirectNative(count);
+            return;
+        }
+        // The same three-way choice as the indexed form, for the same reason. This variant used to only split,
+        // which made it the one path that paid the driver's per-call parameter re-validation even when the
+        // parameters were sitting in host memory.
+        long hostBase = parameters.mappedPhysicalBase;
+        if (hostBase == 0) {
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,
                         1, VkDrawIndirectCommand.SIZEOF);
             }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
+        VkCommandBuffer commandBuffer = encoder.commandBuffer();
+        int bytes = count * VkDrawIndirectCommand.SIZEOF;
+        long base = encoder.readbackScratch(bytes);
+        MemoryUtil.memCopy(hostBase + buffer.offset(), base, bytes);
+        for (int draw = 0; draw < count; draw++) {
+            long command = base + (long) draw * VkDrawIndirectCommand.SIZEOF;
+            int vertexCount = MemoryUtil.memGetInt(command + VkDrawIndirectCommand.VERTEXCOUNT);
+            int instances = MemoryUtil.memGetInt(command + VkDrawIndirectCommand.INSTANCECOUNT);
+            if (drawsNothing(vertexCount, instances)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
+            vkCmdDraw(commandBuffer, vertexCount, instances,
+                    MemoryUtil.memGetInt(command + VkDrawIndirectCommand.FIRSTVERTEX),
+                    MemoryUtil.memGetInt(command + VkDrawIndirectCommand.FIRSTINSTANCE));
+            LavaFlowFrameStats.indirectExpanded(1);
         }
     }
     @Override public void writeTimestamp(GpuQueryPool pool, int index) { encoder.writeTimestamp(pool, index); }
@@ -772,5 +893,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         return slice;
     }
 
-    private static void unsupported() { throw new UnsupportedOperationException("LavaFlow graphics pipeline binding is not initialized"); }
+    private static void unsupported(String what) {
+        throw new UnsupportedOperationException("LavaFlow's render pass does not implement " + what
+                + "; the advertised DeviceFeatures must not make Minecraft call it");
+    }
 }

@@ -219,6 +219,16 @@ jobs:
             || { echo "::error::the GPU timing test failed"; exit 1; }
           echo "GPU timing test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      - name: Assert the indirect path test ran
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowIndirectPathTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="aCommandThatDrawsNothingIsRecognised' "$report" \
+            || { echo "::error::the indirect path test did not run"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the indirect path test failed"; exit 1; }
+          echo "indirect path test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       - name: Assert the capability probe test ran
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowCapabilityProbeTest.xml

@@ -73,7 +73,21 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // draws into a plain CPU array instead of an indirect-parameter buffer, which on tile-based GPUs
         // is host-visible memory the GPU has to read back once per draw.
         boolean multiDrawDirectInterleaved = !Boolean.getBoolean("lavaflow.forceNoMultiDrawDirect");
-        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true, false, true);
+        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true,
+                context.nonZeroFirstInstance(), true);
+        // What Minecraft was actually told, next to the "Vulkan capabilities" line that says what the device
+        // has. The two differing is the point of both lines: a hardcoded false here is indistinguishable from
+        // an unsupported device until they are printed together.
+        // What Minecraft was actually told, next to the "Vulkan capabilities" line that says what the device
+        // has. The two differing is the point of both lines: a hardcoded false here is indistinguishable from
+        // an unsupported device until they are printed together.
+        LOGGER.log(System.Logger.Level.INFO,
+                "Blaze3D features advertised: shaderDrawParameters={0}, multiDrawDirectInterleaved={1}, "
+                        + "multiDrawDirectSeparate={2}, multiDrawIndirect={3}, drawIndirect={4}, "
+                        + "nonZeroFirstInstance={5}, persistentMapping={6}",
+                features.shaderDrawParameters(), features.multiDrawDirectInterleaved(),
+                features.multiDrawDirectSeparate(), features.multiDrawIndirect(), features.drawIndirect(),
+                features.nonZeroFirstInstance(), features.persistentMapping());
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;

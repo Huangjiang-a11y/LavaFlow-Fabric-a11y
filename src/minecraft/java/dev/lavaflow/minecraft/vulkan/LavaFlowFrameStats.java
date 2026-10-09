@@ -56,6 +56,14 @@ public final class LavaFlowFrameStats {
     private static long partialClears;
     private static long retiredTexturesAtReport;
     private static long partialClearsAtReport;
+    private static long indirectNative;
+    private static long indirectExpanded;
+    private static long indirectSplit;
+    private static long indirectSkipped;
+    private static long indirectNativeAtReport;
+    private static long indirectExpandedAtReport;
+    private static long indirectSplitAtReport;
+    private static long indirectSkippedAtReport;
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -176,6 +184,48 @@ public final class LavaFlowFrameStats {
     public static void vertexBufferBindRecorded() {
         if (!ENABLED) return;
         vertexBufferBinds++;
+    }
+
+    /**
+     * Counts one batch handed to the driver unchanged: either the device batches indirect draws itself, or the
+     * batch was a single command to begin with. Measured in draw commands, like the three below, so the four
+     * add up to what the frontend asked for.
+     */
+    public static void indirectNative(int commands) {
+        if (!ENABLED) return;
+        indirectNative += commands;
+    }
+
+    /**
+     * Counts commands the backend re-recorded as plain draws after reading their parameters on the CPU.
+     *
+     * <p>Covers both shapes of a CPU-readable batch: an indirect parameter buffer that is currently mapped, and
+     * a plain multi-draw array. This is the counter that says whether the emulation is doing anything at all —
+     * with no reading of it, "LavaFlow expands indirect draws on the CPU" was a claim about code that might
+     * never have run.
+     */
+    public static void indirectExpanded(int commands) {
+        if (!ENABLED) return;
+        indirectExpanded += commands;
+    }
+
+    /**
+     * Counts commands issued as one single-command indirect call each, the fallback when the parameters are
+     * not in host memory and the device cannot batch: the driver re-validates the parameter buffer per call,
+     * which is the cost the CPU expansion avoids. A high number here is the reason to go looking for a mapping.
+     */
+    public static void indirectSplit(int commands) {
+        if (!ENABLED) return;
+        indirectSplit += commands;
+    }
+
+    /**
+     * Counts commands dropped because they draw nothing ({@code count <= 0} or {@code instanceCount <= 0}).
+     * Legal no-ops either way, but a tiler still pays to walk them, so this is free win or free information.
+     */
+    public static void indirectSkipped(int commands) {
+        if (!ENABLED) return;
+        indirectSkipped += commands;
     }
 
     /**
@@ -410,6 +460,14 @@ public final class LavaFlowFrameStats {
                         / (double) (vertexBufferBindCalls - vertexBufferBindCallsAtReport);
         double passSplitsPerFrame = framesSince == 0 ? 0
                 : (passSplits - passSplitsAtReport) / (double) framesSince;
+        double indirectNativePerFrame = framesSince == 0 ? 0
+                : (indirectNative - indirectNativeAtReport) / (double) framesSince;
+        double indirectExpandedPerFrame = framesSince == 0 ? 0
+                : (indirectExpanded - indirectExpandedAtReport) / (double) framesSince;
+        double indirectSplitPerFrame = framesSince == 0 ? 0
+                : (indirectSplit - indirectSplitAtReport) / (double) framesSince;
+        double indirectSkippedPerFrame = framesSince == 0 ? 0
+                : (indirectSkipped - indirectSkippedAtReport) / (double) framesSince;
         long gpuSamplesSince = gpuFrames - gpuFramesAtReport;
         double gpuMillisPerFrame = gpuSamplesSince == 0 ? 0
                 : (gpuMillis - gpuMillisAtReport) / gpuSamplesSince;
@@ -430,6 +488,10 @@ public final class LavaFlowFrameStats {
         retiredSamplersAtReport = retiredSamplers;
         retiredTexturesAtReport = retiredTextures;
         partialClearsAtReport = partialClears;
+        indirectNativeAtReport = indirectNative;
+        indirectExpandedAtReport = indirectExpanded;
+        indirectSplitAtReport = indirectSplit;
+        indirectSkippedAtReport = indirectSkipped;
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
@@ -449,7 +511,9 @@ public final class LavaFlowFrameStats {
                         + " pushes_per_frame={16} uniform_changes_per_frame={17}"
                         + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
                         + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
-                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}",
+                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
+                        + " indirect_native_per_frame={27} indirect_expanded_per_frame={28}"
+                        + " indirect_split_per_frame={29} indirect_skipped_per_frame={30}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -476,6 +540,10 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", passSplitsPerFrame),
                 topViewLabels,
                 String.format("%.1f", vertexBindCallsPerFrame),
-                String.format("%.3f", vertexRebindRatio));
+                String.format("%.3f", vertexRebindRatio),
+                String.format("%.1f", indirectNativePerFrame),
+                String.format("%.1f", indirectExpandedPerFrame),
+                String.format("%.1f", indirectSplitPerFrame),
+                String.format("%.1f", indirectSkippedPerFrame));
     }
 }
