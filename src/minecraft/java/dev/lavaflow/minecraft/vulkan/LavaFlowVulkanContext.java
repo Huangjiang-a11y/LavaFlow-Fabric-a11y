@@ -75,6 +75,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean vertexAttributeDivisor;
     private boolean drawIndirectFirstInstance;
     private boolean shaderDrawParameters;
+    private boolean nonZeroFirstInstance;
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
@@ -636,6 +637,13 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, probe);
             drawIndirectFirstInstance = supported.drawIndirectFirstInstance();
             shaderDrawParameters = vulkan11.shaderDrawParameters();
+            // Unlike the two above, this one is acted on: it is what DeviceFeatures.nonZeroFirstInstance
+            // reports, and LevelRenderer will not touch its packed multi-draw-indirect terrain path without it.
+            // The probe read true on the 2026-10-09 Mali run, so the hardcoded false it replaces was refusing a
+            // path the device had all along. lavaflow.forceNoNonZeroFirstInstance (and lavaflow.baselineDevice)
+            // put the old value back without a rebuild.
+            nonZeroFirstInstance = advertisedNonZeroFirstInstance(drawIndirectFirstInstance,
+                    forceNoNonZeroFirstInstance());
             LOGGER.log(System.Logger.Level.INFO,
                     "Vulkan core features: " + describeCoreFeatures(supported, shaderDrawParameters));
             LOGGER.log(System.Logger.Level.INFO, "Vulkan limits: " + describeLimits(properties.limits()));
@@ -787,6 +795,27 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
     /** Whether shaders may use the draw-parameter builtins ({@code gl_BaseInstance} et al). Probed, unused. */
     boolean shaderDrawParameters() { return shaderDrawParameters; }
+
+    /**
+     * What {@code DeviceFeatures.nonZeroFirstInstance} reports: whether a caller may put a non-zero
+     * {@code firstInstance} into a draw, which for Minecraft's terrain renderer means packed indirect commands.
+     *
+     * <p>The gating device feature is {@code drawIndirectFirstInstance} — a non-zero {@code firstInstance} in an
+     * <em>indirect</em> draw command. Direct draws carry any {@code firstInstance} in core Vulkan, so LavaFlow's
+     * own indirect emulation is legal either way; what the flag decides is whether the commands themselves may
+     * contain one. The 2026-10-09 device run read it true, alongside shaderDrawParameters=false — so the
+     * hardcoded false that preceded this was right about one flag and wrong about the other.
+     */
+    static boolean advertisedNonZeroFirstInstance(boolean drawIndirectFirstInstance, boolean forcedOff) {
+        return drawIndirectFirstInstance && !forcedOff;
+    }
+
+    boolean nonZeroFirstInstance() { return nonZeroFirstInstance; }
+
+    private static boolean forceNoNonZeroFirstInstance() {
+        return Boolean.getBoolean("lavaflow.baselineDevice")
+                || Boolean.getBoolean("lavaflow.forceNoNonZeroFirstInstance");
+    }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
     synchronized long legacyRenderPass(int[] colorFormats, int[] colorLoadOps, int depthFormat, int depthLoadOp) {

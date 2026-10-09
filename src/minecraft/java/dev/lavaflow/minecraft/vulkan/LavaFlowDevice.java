@@ -75,7 +75,18 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // meaning and values. wireframeFillMode reports the Vulkan fillModeNonSolid capability, which
         // is what actually gates PolygonMode.LINE pipelines in LavaFlowRenderPipeline.
         DeviceFeatures features = new DeviceFeatures(context.fillModeNonSolid(), false, multiDrawDirectInterleaved,
-                false, true, true, false, true);
+                false, true, true, context.nonZeroFirstInstance(), true);
+        // What Minecraft was actually told, next to the "Vulkan capabilities" line that says what the device
+        // has. The two differing is the point of both lines: a hardcoded false here is indistinguishable from
+        // an unsupported device until they are printed together.
+        LOGGER.log(System.Logger.Level.INFO,
+                "Blaze3D features advertised: wireframeFillMode={0}, shaderDrawParameters={1}, "
+                        + "multiDrawDirectInterleaved={2}, multiDrawDirectSeparate={3}, multiDrawIndirect={4}, "
+                        + "drawIndirect={5}, nonZeroFirstInstance={6}, persistentMapping={7}",
+                features.wireframeFillMode(), features.shaderDrawParameters(),
+                features.multiDrawDirectInterleaved(), features.multiDrawDirectSeparate(),
+                features.multiDrawIndirect(), features.drawIndirect(), features.nonZeroFirstInstance(),
+                features.persistentMapping());
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;

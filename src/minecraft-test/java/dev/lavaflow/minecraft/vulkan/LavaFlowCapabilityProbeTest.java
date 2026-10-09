@@ -38,6 +38,14 @@ class LavaFlowCapabilityProbeTest {
         }
     }
 
+    @Test void nonZeroFirstInstanceFollowsTheDeviceAndCanStillBeForcedOff() {
+        assertTrue(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, false));
+        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(false, false),
+                "设备没有 drawIndirectFirstInstance 时不能报 true");
+        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, true),
+                "退回开关必须压过设备能力");
+    }
+
     @Test void anUnlimitedUint32LimitIsNotPrintedAsMinusOne() {
         assertEquals("4294967295", LavaFlowVulkanContext.unsigned(-1),
                 "0xFFFFFFFF 是\"无上限\"，打成 -1 意思正好相反");
