@@ -219,6 +219,16 @@ jobs:
             || { echo "::error::the GPU timing test failed"; exit 1; }
           echo "GPU timing test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      - name: Assert the capability probe test ran
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowCapabilityProbeTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="theProbeNamesTheFlagsThatGateMinecraftsGpuDrawPaths' "$report" \
+            || { echo "::error::the capability probe test did not run"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the capability probe test failed"; exit 1; }
+          echo "capability probe test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
       # that the layer answered: a switch that silently does nothing must not pass.
