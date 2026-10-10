@@ -15,8 +15,8 @@ class LavaFlowIndirectPathTest {
 
     @Test void parametersAreReadableWhenMappedOrWhenTheBufferIsReadable() {
         assertTrue(LavaFlowGpuBuffer.canReadParameters(0x1000L, false), "已经映射着 → 直接读");
-        assertTrue(LavaFlowGpuBuffer.canReadParameters(0L, true), "缓冲可读 → 我们临时映射一下再读");
-        assertFalse(LavaFlowGpuBuffer.canReadParameters(0L, false), "既没映射又不可读 → 只能退回逐条间接");
+        assertTrue(LavaFlowGpuBuffer.canReadParameters(0L, true), "分配是 host-visible → 我们自己映射一下再读");
+        assertFalse(LavaFlowGpuBuffer.canReadParameters(0L, false), "既没映射又不是 host-visible → 只能退回逐条间接");
     }
 
     @Test void aCommandThatDrawsNothingIsRecognised() {

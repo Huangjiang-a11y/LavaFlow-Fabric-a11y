@@ -38,12 +38,16 @@ class LavaFlowCapabilityProbeTest {
         }
     }
 
-    @Test void nonZeroFirstInstanceFollowsTheDeviceAndCanStillBeForcedOff() {
-        assertTrue(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, false));
-        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(false, false),
-                "设备没有 drawIndirectFirstInstance 时不能报 true");
-        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, true),
-                "退回开关必须压过设备能力");
+    @Test void nonZeroFirstInstanceIsOptInAndNeverExceedsTheDevice() {
+        // 默认关：它唯一打开的是 MC 自己的地形路，而 Sodium 把那条路整个换掉了（玩家都在用 Sodium）
+        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, false, false),
+                "默认必须关，哪怕设备支持");
+        assertTrue(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, true, false),
+                "显式打开且设备支持 → 可以报 true");
+        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(false, true, false),
+                "设备没有 drawIndirectFirstInstance 时，开关也不能凭空造出能力");
+        assertFalse(LavaFlowVulkanContext.advertisedNonZeroFirstInstance(true, true, true),
+                "退回开关必须压过显式打开");
     }
 
     @Test void anUnlimitedUint32LimitIsNotPrintedAsMinusOne() {

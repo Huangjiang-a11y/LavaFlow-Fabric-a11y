@@ -20,6 +20,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
 final class LavaFlowGpuBuffer implements GpuBuffer {
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowGpuBuffer.class.getName());
     private final LavaFlowDevice device;
     private final LavaFlowVulkanContext context;
     // 26.3 turned GpuBuffer into an interface; these two were the former abstract base class fields.
@@ -32,6 +33,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     // Zero when the buffer is not mapped. Volatile so the render-thread draw path can read it without
     // a lock: map() and unmap() are synchronized but drawIndexedIndirect runs on the same thread.
     volatile long mappedPhysicalBase;
+    private boolean unreadableReported;
     private boolean closed;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
@@ -132,8 +134,36 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
      * commands per frame against 0 expanded ones, exactly the driver-re-validates-the-parameters-per-call pattern
      * the expansion exists to avoid.
      */
-    static boolean canReadParameters(long mappedPhysicalBase, boolean readableUsage) {
-        return mappedPhysicalBase != 0 || readableUsage;
+    static boolean canReadParameters(long mappedPhysicalBase, boolean hostVisible) {
+        return mappedPhysicalBase != 0 || hostVisible;
+    }
+
+    /**
+     * Whether the allocation behind this buffer is host-visible, which is what the memory-type choice in
+     * {@code allocate} rests on and the only thing that decides whether the CPU can read its contents.
+     *
+     * <p>Deliberately not {@code USAGE_MAP_READ}. Minecraft's usage bits are an abstraction we implement, not a
+     * Vulkan rule: {@code vkMapMemory} has no per-buffer usage restriction at all, so a buffer that Minecraft
+     * only ever maps for writing ({@code USAGE_MAP_WRITE}, memory allocated HOST_VISIBLE|HOST_COHERENT) is
+     * perfectly readable here. Requiring the read bit is what kept the CPU expansion at zero expanded commands
+     * in the 2026-10-09 device log even after the mapping-it-ourselves fix.
+     */
+    boolean hostVisible() {
+        return (usage() & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
+    }
+
+    /**
+     * Explains once per buffer why a batch cannot be read on the CPU and is therefore issued as one indirect
+     * command per draw. The alternative is a silent slowdown, and which buffer it is and why is not something a
+     * counter can say.
+     */
+    synchronized void reportUnreadableOnce(long offset, long length) {
+        if (unreadableReported) return;
+        unreadableReported = true;
+        LOGGER.log(System.Logger.Level.INFO,
+                "Indirect parameters are not CPU-readable: buffer=" + Long.toHexString(buffer)
+                        + " size=" + size() + " read=" + offset + "+" + length + " usage=" + usage()
+                        + " hostVisible=false; issuing one indirect command per draw");
     }
 
     /**
@@ -151,7 +181,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
             MemoryUtil.memCopy(mappedPhysicalBase + offset, destination, length);
             return true;
         }
-        if ((usage() & GpuBuffer.USAGE_MAP_READ) == 0) return false;
+        if (!hostVisible()) return false;
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pointer = stack.mallocPointer(1);
             if (vkMapMemory(context.device(), memory, offset, length, 0, pointer) != VK_SUCCESS) return false;
