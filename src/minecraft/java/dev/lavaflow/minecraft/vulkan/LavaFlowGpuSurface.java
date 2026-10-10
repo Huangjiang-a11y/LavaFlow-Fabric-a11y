@@ -261,6 +261,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             blit.dstOffsets(1).set(blitWidth, 0, 1);
             vkCmdBlitImage(encoder.commandBuffer(), source.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blit, VK_FILTER_NEAREST);
+            LavaFlowFrameStats.swapchainBlitted((long) blitWidth * blitHeight
+                    * LavaFlowVk.bytesPerPixelVk(LavaFlowVk.format(source.getFormat())));
 
             VkImageMemoryBarrier.Buffer toPresent = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)

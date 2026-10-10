@@ -64,6 +64,17 @@ public final class LavaFlowFrameStats {
     private static long indirectExpandedAtReport;
     private static long indirectSplitAtReport;
     private static long indirectSkippedAtReport;
+    private static long passes;
+    private static long attachmentStoreBytes;
+    private static long depthSampled;
+    private static long swapchainBlitBytes;
+    private static long sampledTransitions;
+    private static long passesAtReport;
+    private static long attachmentStoreBytesAtReport;
+    private static long depthSampledAtReport;
+    private static long swapchainBlitBytesAtReport;
+    private static long sampledTransitionsAtReport;
+    private static final Map<String, Integer> splitTextureLabels = new HashMap<>();
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -208,6 +219,72 @@ public final class LavaFlowFrameStats {
      * with no reading of it, "LavaFlow expands indirect draws on the CPU" was a claim about code that might
      * never have run.
      */
+    /**
+     * Counts one render pass begun, including the pass a split resumes with.
+     *
+     * <p>On a tiled GPU every pass boundary is a tile flush and reload, so this is the denominator for the
+     * attachment traffic below: the same scene drawn in three passes costs tile memory three times over.
+     */
+    public static void passBegin() {
+        if (!ENABLED) return;
+        passes++;
+    }
+
+    /**
+     * Records what a pass writes back to memory as it ends, and whether the depth attachment was also bound for
+     * sampling during it.
+     *
+     * <p>Both attachments store unconditionally today, so every end of a pass pays for the whole pass area —
+     * which is why a split is worth counting in bytes and not only in count: the split ends the pass once more
+     * and stores everything a second time. The depth flag is the guard for the store-elision and
+     * {@code LAZILY_ALLOCATED} ideas: neither is legal while something samples what the pass wrote.
+     */
+    public static void passEnded(long attachmentBytes, boolean depthSampledThisPass) {
+        if (!ENABLED) return;
+        attachmentStoreBytes += attachmentBytes;
+        if (depthSampledThisPass) depthSampled++;
+    }
+
+    /**
+     * Counts bytes of the full-screen copy Minecraft performs every frame from the main render target into the
+     * acquired swapchain image (its own {@code swapchainBlit} profiler section). Destination bytes: the source
+     * read is the same amount again.
+     */
+    public static void swapchainBlitted(long bytes) {
+        if (!ENABLED) return;
+        swapchainBlitBytes += bytes;
+    }
+
+    /**
+     * Counts one texture transitioned by the end/begin pair of a pass split, and remembers its label.
+     *
+     * <p>The label is the whole point: a split is at least a tile flush and reload per frame, and "which texture
+     * forced it" is not something a count can answer.
+     */
+    public static void sampledTransition(String label) {
+        if (!ENABLED) return;
+        sampledTransitions++;
+        splitTextureLabels.merge(label == null ? "unnamed" : label, 1, Integer::sum);
+    }
+
+    /** Same shape as {@link #topRetiredViewLabels}: top three plus how many distinct ones there were. */
+    private static String topSplitTextureLabels() {
+        if (splitTextureLabels.isEmpty()) return "-";
+        List<Map.Entry<String, Integer>> top = new ArrayList<>(splitTextureLabels.entrySet());
+        top.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+        StringBuilder out = new StringBuilder();
+        int shown = Math.min(3, top.size());
+        for (int i = 0; i < shown; i++) {
+            if (i > 0) out.append(", ");
+            out.append(top.get(i).getKey()).append('=').append(top.get(i).getValue());
+        }
+        if (splitTextureLabels.size() > shown) {
+            out.append(" (distinct=").append(splitTextureLabels.size()).append(')');
+        }
+        splitTextureLabels.clear();
+        return out.toString();
+    }
+
     public static void indirectExpanded(int commands) {
         if (!ENABLED) return;
         indirectExpanded += commands;
@@ -472,6 +549,15 @@ public final class LavaFlowFrameStats {
                 : (indirectSplit - indirectSplitAtReport) / (double) framesSince;
         double indirectSkippedPerFrame = framesSince == 0 ? 0
                 : (indirectSkipped - indirectSkippedAtReport) / (double) framesSince;
+        double passesPerFrame = framesSince == 0 ? 0 : (passes - passesAtReport) / (double) framesSince;
+        double attachmentStoreBytesPerFrame = framesSince == 0 ? 0
+                : (attachmentStoreBytes - attachmentStoreBytesAtReport) / (double) framesSince;
+        double depthSampledPerFrame = framesSince == 0 ? 0
+                : (depthSampled - depthSampledAtReport) / (double) framesSince;
+        double swapchainBlitBytesPerFrame = framesSince == 0 ? 0
+                : (swapchainBlitBytes - swapchainBlitBytesAtReport) / (double) framesSince;
+        double sampledTransitionsPerFrame = framesSince == 0 ? 0
+                : (sampledTransitions - sampledTransitionsAtReport) / (double) framesSince;
         long gpuSamplesSince = gpuFrames - gpuFramesAtReport;
         double gpuMillisPerFrame = gpuSamplesSince == 0 ? 0
                 : (gpuMillis - gpuMillisAtReport) / gpuSamplesSince;
@@ -481,6 +567,7 @@ public final class LavaFlowFrameStats {
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
         double clearsPerFrame = framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
+        String topSplitTexture = topSplitTextureLabels();
         framesAtReport = totalFrames;
         descriptorSetsAtReport = descriptorSets;
         descriptorHitsAtReport = descriptorHits;
@@ -496,6 +583,11 @@ public final class LavaFlowFrameStats {
         indirectExpandedAtReport = indirectExpanded;
         indirectSplitAtReport = indirectSplit;
         indirectSkippedAtReport = indirectSkipped;
+        passesAtReport = passes;
+        attachmentStoreBytesAtReport = attachmentStoreBytes;
+        depthSampledAtReport = depthSampled;
+        swapchainBlitBytesAtReport = swapchainBlitBytes;
+        sampledTransitionsAtReport = sampledTransitions;
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
@@ -517,7 +609,10 @@ public final class LavaFlowFrameStats {
                         + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
                         + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
                         + " indirect_native_per_frame={27} indirect_expanded_per_frame={28}"
-                        + " indirect_split_per_frame={29} indirect_skipped_per_frame={30}",
+                        + " indirect_split_per_frame={29} indirect_skipped_per_frame={30}"
+                        + " passes_per_frame={31} attachment_store_bytes_per_frame={32}"
+                        + " depth_sampled_per_frame={33} swapchain_blit_bytes_per_frame={34}"
+                        + " sampled_transitions_per_frame={35} top_split_texture={36}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -548,6 +643,12 @@ public final class LavaFlowFrameStats {
                 String.format("%.1f", indirectNativePerFrame),
                 String.format("%.1f", indirectExpandedPerFrame),
                 String.format("%.1f", indirectSplitPerFrame),
-                String.format("%.1f", indirectSkippedPerFrame));
+                String.format("%.1f", indirectSkippedPerFrame),
+                String.format("%.2f", passesPerFrame),
+                String.format("%.0f", attachmentStoreBytesPerFrame),
+                String.format("%.2f", depthSampledPerFrame),
+                String.format("%.0f", swapchainBlitBytesPerFrame),
+                String.format("%.2f", sampledTransitionsPerFrame),
+                topSplitTexture);
     }
 }

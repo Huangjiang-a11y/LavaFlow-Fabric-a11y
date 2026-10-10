@@ -49,6 +49,26 @@ final class LavaFlowVk {
 
     private LavaFlowVk() {}
 
+    /**
+     * Bytes per pixel of a mapped Vulkan format, for the attachment-traffic counters.
+     *
+     * <p>Only the formats LavaFlow actually attaches are spelled out; anything else counts as 4. The counter's
+     * job is the order of magnitude of what a pass writes back to memory, not exactness for formats nothing
+     * allocates. One spelling per Vulkan enum value: the RGBA8/BGRA8 aliases would be duplicate case labels.
+     */
+    static int bytesPerPixelVk(int vkFormat) {
+        return switch (vkFormat) {
+            case VK_FORMAT_R8_UNORM, VK_FORMAT_R8_SNORM -> 1;
+            case VK_FORMAT_R16_UNORM, VK_FORMAT_R16_SFLOAT, VK_FORMAT_D16_UNORM -> 2;
+            case VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                 VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_X8_D24_UNORM_PACK32,
+                 VK_FORMAT_R16G16_UNORM -> 4;
+            case VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT -> 8;
+            case VK_FORMAT_R32G32B32A32_SFLOAT -> 16;
+            default -> 4;
+        };
+    }
+
     static int format(GpuFormat format) {
         return FORMATS[format.ordinal()];
     }

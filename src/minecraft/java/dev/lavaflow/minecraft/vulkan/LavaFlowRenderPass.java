@@ -208,9 +208,36 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
+        recordAttachmentStore();
+    }
+
+    /**
+     * Records the bytes this pass writes back to memory as it ends, plus whether its depth attachment was also
+     * bound for sampling while it ran.
+     *
+     * <p>Both attachments store unconditionally today, so this is the whole pass area every time — and a split
+     * ends the pass a second time and pays it again, which is exactly why the split is worth counting in bytes.
+     * The depth flag is the guard for the store-elision and {@code LAZILY_ALLOCATED} ideas: neither is legal
+     * while something samples what the pass wrote.
+     */
+    private void recordAttachmentStore() {
+        long bytes = 0;
+        for (LavaFlowGpuTextureView view : colorViews) {
+            if (view == null) continue;
+            bytes += (long) outputWidth * outputHeight * LavaFlowVk.bytesPerPixelVk(
+                    LavaFlowVk.format(view.texture().getFormat()));
+        }
+        boolean depthSampled = false;
+        if (depthView != null) {
+            bytes += (long) outputWidth * outputHeight
+                    * LavaFlowVk.bytesPerPixelVk(LavaFlowVk.format(depthView.texture().getFormat()));
+            depthSampled = sampledTextures().contains(depthView.texture());
+        }
+        LavaFlowFrameStats.passEnded(bytes, depthSampled);
     }
 
     private void beginDynamic(MemoryStack stack, boolean resume) {
+        LavaFlowFrameStats.passBegin();
         List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
         RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
         VkRenderingAttachmentInfo.Buffer colorAttachments = VkRenderingAttachmentInfo.calloc(colors.size(), stack);
@@ -253,6 +280,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     private void beginLegacy(MemoryStack stack, boolean resume) {
+        LavaFlowFrameStats.passBegin();
         List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
         RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
         int attachmentCount = depthView == null ? 0 : 1;
@@ -325,6 +353,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int layout = LavaFlowVk.sampledLayout();
             if (sampled.layout() != layout) {
                 encoder.transition(sampled, layout);
+                LavaFlowFrameStats.sampledTransition(sampled.getLabel());
             }
         }
         try (MemoryStack stack = stackPush()) {

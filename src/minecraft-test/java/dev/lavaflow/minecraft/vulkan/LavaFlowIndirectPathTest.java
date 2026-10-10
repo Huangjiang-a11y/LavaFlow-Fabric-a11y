@@ -2,6 +2,9 @@ package dev.lavaflow.minecraft.vulkan;
 
 import org.junit.jupiter.api.Test;
 
+import static org.lwjgl.vulkan.VK10.*;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,6 +20,15 @@ class LavaFlowIndirectPathTest {
         assertTrue(LavaFlowGpuBuffer.canReadParameters(0x1000L, false), "已经映射着 → 直接读");
         assertTrue(LavaFlowGpuBuffer.canReadParameters(0L, true), "分配是 host-visible → 我们自己映射一下再读");
         assertFalse(LavaFlowGpuBuffer.canReadParameters(0L, false), "既没映射又不是 host-visible → 只能退回逐条间接");
+    }
+
+    @Test void attachmentBytesFollowTheFormat() {
+        assertEquals(4, LavaFlowVk.bytesPerPixelVk(VK_FORMAT_R8G8B8A8_UNORM));
+        assertEquals(4, LavaFlowVk.bytesPerPixelVk(VK_FORMAT_D32_SFLOAT));
+        assertEquals(8, LavaFlowVk.bytesPerPixelVk(VK_FORMAT_R16G16B16A16_SFLOAT));
+        assertEquals(2, LavaFlowVk.bytesPerPixelVk(VK_FORMAT_D16_UNORM));
+        // 负面对照：没列出的格式按 4 计，不能变成 0（0 会让读数看起来"没有流量"）
+        assertEquals(4, LavaFlowVk.bytesPerPixelVk(0));
     }
 
     @Test void aCommandThatDrawsNothingIsRecognised() {
