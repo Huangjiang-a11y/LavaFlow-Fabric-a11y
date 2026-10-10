@@ -590,8 +590,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // draw itself. When the parameters can be read from host memory, read them here and record plain
         // indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
-        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase,
-                (parameters.usage() & GpuBuffer.USAGE_MAP_READ) != 0)) {
+        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible())) {
+            if (!forceIndirectSplit()) {
+                parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndexedIndirectCommand.SIZEOF);
+            }
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
@@ -718,8 +720,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // which made it the one path that paid the driver's per-call parameter re-validation even when the
         // parameters were sitting in host memory.
         long hostBase = parameters.mappedPhysicalBase;
-        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase,
-                (parameters.usage() & GpuBuffer.USAGE_MAP_READ) != 0)) {
+        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible())) {
+            if (!forceIndirectSplit()) {
+                parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndirectCommand.SIZEOF);
+            }
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,

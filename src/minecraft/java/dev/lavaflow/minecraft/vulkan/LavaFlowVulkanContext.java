@@ -586,7 +586,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             // path the device had all along. lavaflow.forceNoNonZeroFirstInstance (and lavaflow.baselineDevice)
             // put the old value back without a rebuild.
             nonZeroFirstInstance = advertisedNonZeroFirstInstance(drawIndirectFirstInstance,
-                    forceNoNonZeroFirstInstance());
+                    nonZeroFirstInstanceEnabled(), forceNoNonZeroFirstInstance());
             LOGGER.log(System.Logger.Level.INFO,
                     "Vulkan core features: " + describeCoreFeatures(supported, shaderDrawParameters));
             LOGGER.log(System.Logger.Level.INFO, "Vulkan limits: " + describeLimits(properties.limits()));
@@ -727,11 +727,24 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * contain one. The 2026-10-09 device run read it true, alongside shaderDrawParameters=false — so the
      * hardcoded false that preceded this was right about one flag and wrong about the other.
      */
-    static boolean advertisedNonZeroFirstInstance(boolean drawIndirectFirstInstance, boolean forcedOff) {
-        return drawIndirectFirstInstance && !forcedOff;
+    static boolean advertisedNonZeroFirstInstance(boolean drawIndirectFirstInstance, boolean enabled,
+            boolean forcedOff) {
+        return enabled && drawIndirectFirstInstance && !forcedOff;
     }
 
     boolean nonZeroFirstInstance() { return nonZeroFirstInstance; }
+
+    /**
+     * Off by default, deliberately. The only path this flag opens is {@code LevelRenderer}'s packed
+     * multi-draw-indirect terrain rendering, and Sodium replaces that outright — and Sodium is what players
+     * run, to the point that the mods here declare it. Enabling it for a device that supports it therefore buys
+     * that audience nothing, while requiring LavaFlow to issue each such batch as one indirect command per draw,
+     * because the parameter buffer is device-local and the CPU expansion cannot read it.
+     * {@code -Dlavaflow.nonZeroFirstInstance=true} enables it for anyone testing the vanilla renderer.
+     */
+    private static boolean nonZeroFirstInstanceEnabled() {
+        return Boolean.getBoolean("lavaflow.nonZeroFirstInstance");
+    }
 
     private static boolean forceNoNonZeroFirstInstance() {
         return Boolean.getBoolean("lavaflow.baselineDevice")
