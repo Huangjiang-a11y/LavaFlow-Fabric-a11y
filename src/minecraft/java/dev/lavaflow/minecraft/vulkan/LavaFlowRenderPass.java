@@ -587,10 +587,11 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
         // Without multiDrawIndirect the batch has to be split. Issuing one indirect command per draw
         // makes the driver re-validate the parameter buffer every time, which costs far more than the
-        // draw itself. When the parameters are in host memory that is currently mapped, read them here
-        // and record plain indexed draws instead, which is the same command count on a cheaper path.
+        // draw itself. When the parameters can be read from host memory, read them here and record plain
+        // indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
-        if (hostBase == 0) {
+        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase,
+                (parameters.usage() & GpuBuffer.USAGE_MAP_READ) != 0)) {
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
@@ -605,7 +606,15 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // memory this keeps the cost of reading it to one streaming copy instead of many narrow reads.
         int bytes = count * VkDrawIndexedIndirectCommand.SIZEOF;
         long base = encoder.readbackScratch(bytes);
-        MemoryUtil.memCopy(hostBase + buffer.offset(), base, bytes);
+        if (!parameters.tryReadBack(buffer.offset(), bytes, base)) {
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
+                        1, VkDrawIndexedIndirectCommand.SIZEOF);
+            }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
         for (int draw = 0; draw < count; draw++) {
             long command = base + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF;
             int indexCount = MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INDEXCOUNT);
@@ -709,7 +718,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // which made it the one path that paid the driver's per-call parameter re-validation even when the
         // parameters were sitting in host memory.
         long hostBase = parameters.mappedPhysicalBase;
-        if (hostBase == 0) {
+        if (forceIndirectSplit() || !LavaFlowGpuBuffer.canReadParameters(hostBase,
+                (parameters.usage() & GpuBuffer.USAGE_MAP_READ) != 0)) {
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,
@@ -721,7 +731,15 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
         int bytes = count * VkDrawIndirectCommand.SIZEOF;
         long base = encoder.readbackScratch(bytes);
-        MemoryUtil.memCopy(hostBase + buffer.offset(), base, bytes);
+        if (!parameters.tryReadBack(buffer.offset(), bytes, base)) {
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,
+                        1, VkDrawIndirectCommand.SIZEOF);
+            }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
         for (int draw = 0; draw < count; draw++) {
             long command = base + (long) draw * VkDrawIndirectCommand.SIZEOF;
             int vertexCount = MemoryUtil.memGetInt(command + VkDrawIndirectCommand.VERTEXCOUNT);
@@ -891,6 +909,15 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         if (slice == null) throw new IllegalStateException("Missing uniform " + name);
         if (slice.buffer().isClosed()) throw new IllegalStateException("Uniform buffer is closed: " + name);
         return slice;
+    }
+
+    /**
+     * Forces the one-indirect-command-per-draw path, for A/B on a device: the CPU expansion re-reads parameters
+     * that the driver would otherwise fetch itself, and only a measurement on the target GPU can say which one
+     * is cheaper there.
+     */
+    private static boolean forceIndirectSplit() {
+        return Boolean.getBoolean("lavaflow.forceIndirectSplit");
     }
 
     private static void unsupported(String what) {
