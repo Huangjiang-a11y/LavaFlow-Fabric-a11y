@@ -121,6 +121,49 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         }
     }
 
+    /**
+     * Whether indirect parameters in this buffer can be read on the CPU: either a mapping is already open, or the
+     * buffer was created readable, in which case a mapping is opened on demand.
+     *
+     * <p>Minecraft's dynamic buffers are {@code MappableRingBuffer}s: the render thread opens a mapped view,
+     * writes the frame's commands, and closes it again — the release callback unmaps, so {@code mappedPhysicalBase}
+     * is back to zero by the time the same buffer reaches {@code drawIndexedIndirect}. Requiring an open mapping
+     * therefore meant the CPU expansion could never run in practice: the 2026-10-10 device log shows 1149 split
+     * commands per frame against 0 expanded ones, exactly the driver-re-validates-the-parameters-per-call pattern
+     * the expansion exists to avoid.
+     */
+    static boolean canReadParameters(long mappedPhysicalBase, boolean readableUsage) {
+        return mappedPhysicalBase != 0 || readableUsage;
+    }
+
+    /**
+     * Copies {@code length} bytes at {@code offset} into host memory for the CPU expansion paths.
+     *
+     * <p>Prefers the mapping the caller already opened, and otherwise opens one for the duration of the copy.
+     * Returns false rather than throwing when the buffer cannot be read from the CPU at all, because the caller
+     * has a correct fallback (one indirect command per draw) and a buffer that is device-local is not an error.
+     *
+     * <p>No invalidation is needed after mapping: host-visible allocations here require
+     * {@code HOST_COHERENT}, so the copy sees whatever the render thread wrote.
+     */
+    synchronized boolean tryReadBack(long offset, long length, long destination) {
+        if (mappedPhysicalBase != 0) {
+            MemoryUtil.memCopy(mappedPhysicalBase + offset, destination, length);
+            return true;
+        }
+        if ((usage() & GpuBuffer.USAGE_MAP_READ) == 0) return false;
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            if (vkMapMemory(context.device(), memory, offset, length, 0, pointer) != VK_SUCCESS) return false;
+            try {
+                MemoryUtil.memCopy(pointer.get(0), destination, length);
+            } finally {
+                vkUnmapMemory(context.device(), memory);
+            }
+            return true;
+        }
+    }
+
     private synchronized void unmap() {
         if (mappingCount == 0) return;
         mappedPhysicalBase = 0;
