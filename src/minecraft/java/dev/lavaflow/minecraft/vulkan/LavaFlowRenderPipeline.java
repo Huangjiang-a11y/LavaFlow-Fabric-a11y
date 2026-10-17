@@ -4,6 +4,8 @@ import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout.UniformDescription;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.SpvModule;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import org.lwjgl.system.MemoryStack;
@@ -25,7 +27,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /**
  * LavaFlow-owned shader modules, descriptor layout, pipeline layout, and compatible graphics pipelines.
  *
- * <p>26.3 hands the backend a fully resolved {@link BackendRenderPipeline.CreateInfo}. The frontend has
+ * <p>26.3 hands the backend a fully resolved {@link CompiledRenderPipeline.CreateInfo}. The frontend has
  * already compiled and reflected the SPIR-V, rewritten the shader interfaces and assigned the descriptor
  * slots, so this class only turns that description into Vulkan objects. In particular nothing here may
  * reorder the uniforms: slot {@code i} in the descriptor set layout — and therefore the index handed to
@@ -44,7 +46,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * consumed while building the shader modules below, and the frontend closes those modules as soon as
      * compilation finishes, so it must never be touched again.
      */
-    private final BackendRenderPipeline.CreateInfo info;
+    private final CompiledRenderPipeline.CreateInfo info;
     private final List<Entry> entries;
     private final long[] shaderModules;
     private final int[] shaderStages;
@@ -67,7 +69,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     private final boolean dynamicUniforms;
     private boolean closed;
 
-    private LavaFlowRenderPipeline(LavaFlowDevice device, BackendRenderPipeline.CreateInfo createInfo) {
+    private LavaFlowRenderPipeline(LavaFlowDevice device, CompiledRenderPipeline.CreateInfo createInfo) {
         this.device = device;
         this.info = createInfo;
         this.entries = buildEntries(createInfo);
@@ -87,10 +89,12 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         int createdModules = 0;
         try {
             for (int i = 0; i < shaderModules.length; i++) {
-                BackendRenderPipeline.CreateInfo.Shader shader = createInfo.shaders().get(i);
-                shaderModules[i] = createShaderModule(shader.module().spv());
+                // 26.4 removed the CreateInfo.Shader wrapper: the list holds SpvModule directly, which
+                // already carries the entry point alongside the SPIR-V.
+                SpvModule shader = createInfo.shaders().get(i);
+                shaderModules[i] = createShaderModule(shader.spv());
                 createdModules = i + 1;
-                shaderStages[i] = LavaFlowVk.stage(shader.module().type());
+                shaderStages[i] = LavaFlowVk.stage(shader.type());
                 shaderEntryPoints[i] = shader.entryPoint();
             }
             createdSetLayout = createDescriptorSetLayout(entries);
@@ -113,7 +117,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * {@code Pending} contract expects the work: the SPIR-V in {@code createInfo.shaders()} is still valid
      * at this point and is released by the frontend once compilation returns.
      */
-    static LavaFlowRenderPipeline compile(LavaFlowDevice device, BackendRenderPipeline.CreateInfo createInfo) {
+    static LavaFlowRenderPipeline compile(LavaFlowDevice device, CompiledRenderPipeline.CreateInfo createInfo) {
         return new LavaFlowRenderPipeline(device, createInfo);
     }
 
@@ -124,8 +128,12 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * reflection and uses the same indices to address uniforms, so a different order here would bind
      * descriptors to the wrong slots.
      */
-    private static List<Entry> buildEntries(BackendRenderPipeline.CreateInfo createInfo) {
-        List<UniformDescription> uniforms = createInfo.uniforms();
+    private static List<Entry> buildEntries(CompiledRenderPipeline.CreateInfo createInfo) {
+        // 26.4's uniforms carry an explicit binding; LavaFlow addresses uniforms by position, so the
+        // order is kept and only the extra field is dropped. See the class note on why nothing reorders.
+        List<UniformDescription> uniforms = createInfo.uniforms().stream()
+                .map(uniform -> new UniformDescription(uniform.name(), uniform.type(), uniform.gpuFormat()))
+                .toList();
         List<Entry> result = new ArrayList<>(uniforms.size());
         for (UniformDescription uniform : uniforms) {
             EntryType type = switch (uniform.type()) {
@@ -264,8 +272,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      */
     private long createGraphicsPipeline(int depthVkFormat, long renderPass) {
         try (MemoryStack stack = stackPush()) {
-            List<BackendRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
-            List<BackendRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
+            List<CompiledRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
+            List<CompiledRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(shaderModules.length, stack);
             for (int i = 0; i < shaderModules.length; i++) {
                 stages.get(i).sType$Default().stage(shaderStages[i]).module(shaderModules[i])
@@ -274,7 +282,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             VkVertexInputBindingDescription.Buffer bindings = VkVertexInputBindingDescription.calloc(vertexBufferDescs.size(), stack);
             int divisorCount = 0;
             if (device.context().vertexAttributeDivisor()) {
-                for (BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer : vertexBufferDescs) {
+                for (CompiledRenderPipeline.CreateInfo.VertexBuffer vertexBuffer : vertexBufferDescs) {
                     if (vertexBuffer.stepRate() > 1) divisorCount++;
                 }
             }
@@ -282,7 +290,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                     VkVertexInputBindingDivisorDescriptionEXT.calloc(divisorCount, stack);
             int divisorPosition = 0;
             for (int i = 0; i < vertexBufferDescs.size(); i++) {
-                BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer = vertexBufferDescs.get(i);
+                CompiledRenderPipeline.CreateInfo.VertexBuffer vertexBuffer = vertexBufferDescs.get(i);
                 bindings.get(i).binding(vertexBuffer.bufferSlot()).stride(vertexBuffer.stride())
                         .inputRate(vertexBuffer.stepRate() > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX);
                 // A step rate of 1 is the instancing default, so only a larger rate needs a divisor.
@@ -292,7 +300,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             }
             VkVertexInputAttributeDescription.Buffer attributes = VkVertexInputAttributeDescription.calloc(attribDescs.size(), stack);
             for (int i = 0; i < attribDescs.size(); i++) {
-                BackendRenderPipeline.CreateInfo.AttribBinding attrib = attribDescs.get(i);
+                CompiledRenderPipeline.CreateInfo.AttribBinding attrib = attribDescs.get(i);
                 attributes.get(i).location(attrib.location()).binding(attrib.bufferSlot())
                         .format(LavaFlowVk.format(attrib.format())).offset(attrib.offset());
             }

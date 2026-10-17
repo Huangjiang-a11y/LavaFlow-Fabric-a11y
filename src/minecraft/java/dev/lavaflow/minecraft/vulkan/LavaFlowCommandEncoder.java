@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.commands.*;
 import com.mojang.renderpearl.backend.api.*;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import org.joml.Vector4fc;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -160,9 +161,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // Vertex bindings are command buffer state, not render pass state: one recorded by a pass stays in effect
     // for the next pass recorded into the same command buffer, and nothing here ever unbinds one. So the record
     // of what is currently bound belongs to the encoder, and starts empty with every new command buffer.
-    private final long[] boundVertexHandles = new long[RenderPass.MAX_VERTEX_BUFFERS];
-    private final long[] boundVertexOffsets = new long[RenderPass.MAX_VERTEX_BUFFERS];
-    private final boolean[] vertexSlotBound = new boolean[RenderPass.MAX_VERTEX_BUFFERS];
+    private final long[] boundVertexHandles = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
+    private final long[] boundVertexOffsets = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
+    private final boolean[] vertexSlotBound = new boolean[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
 
     /** Whether recording this binding would change what the command buffer already has in that slot. */
     boolean vertexBound(int slot, long handle, long offset) {
@@ -321,47 +322,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue) {
         clearColorTexture(color, value); clearDepthTexture(depth, depthValue);
     }
-    // 26.3 adds a mipLevel: the clear applies to one mip of both textures, so the attachment views,
-    // the render area and the bounds check are all expressed in that mip's dimensions (as vanilla does).
-    @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue, int x, int y, int width, int height, int mipLevel) {
-        LavaFlowGpuTexture colorTexture = texture(color);
-        LavaFlowGpuTexture depthTexture = texture(depth);
-        if (width <= 0 || height <= 0) return;
-        if (x < 0 || y < 0 || x + width > color.getWidth(mipLevel) || y + height > color.getHeight(mipLevel)) {
-            throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
-        }
-        LavaFlowFrameStats.partialClear();
-        // The two attachment views are reused, not created here and destroyed on the way out. This is the
-        // only view churn LavaFlow manufactured itself, and a device run showed it was all of it: retired
-        // views were exactly twice the partial clears, all of them labeled "UI items atlas" and
-        // "UI items atlas depth". See LavaFlowGpuTexture.cachedClearView for the lifetime rule.
-        GpuTextureView colorView = colorTexture.cachedClearView(mipLevel);
-        GpuTextureView depthView = depthTexture.cachedClearView(mipLevel);
-        RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "LavaFlow partial color/depth clear")
-                .withColorAttachment(colorView)
-                .withDepthAttachment(depthView)
-                .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(mipLevel), color.getHeight(mipLevel)))
-                .build();
-        createRenderPass(descriptor);
-        // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
-        // to be begun explicitly.
-        activeRenderPass.ensureBegun();
-        try (MemoryStack stack = stackPush()) {
-            VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
-            rect.rect().offset().set(x, y);
-            rect.rect().extent().set(width, height);
-
-            VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(2, stack);
-            attachments.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).colorAttachment(0);
-            attachments.get(0).clearValue().color()
-                    .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
-            attachments.get(1).aspectMask(LavaFlowVk.aspect(depthTexture.getFormat()));
-            attachments.get(1).clearValue().depthStencil().depth((float) depthValue).stencil(0);
-            vkCmdClearAttachments(commandBuffer, attachments, rect);
-        } finally {
-            submitRenderPass();
-        }
-    }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
@@ -417,10 +377,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             transition(texture, LavaFlowVk.sampledLayout());
         }
     }
-    @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, Runnable callback, int mip) {
-        copyTextureToBuffer(source, target, offset, callback, mip, 0, 0, source.getWidth(mip), source.getHeight(mip));
-    }
-    @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, Runnable callback, int mip, int x, int y, int width, int height) {
+    // 26.4 dropped both the Runnable callback and the whole-texture overload from CommandEncoderBackend:
+    // a readback that needs to be waited on now goes through GpuFence (createFence), so there is nothing
+    // left for the backend to notify. Only the rectangle form is still abstract.
+    @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, int mip, int x, int y, int width, int height) {
         LavaFlowGpuTexture texture = texture(source); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack).bufferOffset(offset);
@@ -430,7 +390,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     ((LavaFlowGpuBuffer)target).handle(), copy);
         }
         restoreSampledLayout(texture);
-        if (callback != null) device.afterSubmit(callback);
     }
     @Override public void copyTextureToTexture(GpuTexture source, GpuTexture target, int mip, int targetX, int targetY, int sourceX, int sourceY, int width, int height) {
         LavaFlowGpuTexture src = texture(source), dst = texture(target);

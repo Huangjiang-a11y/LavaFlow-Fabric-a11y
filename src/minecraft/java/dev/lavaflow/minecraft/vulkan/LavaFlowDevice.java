@@ -1,6 +1,7 @@
 package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.device.*;
 import com.mojang.renderpearl.api.commands.*;
@@ -101,10 +102,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
                 "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
-                // The two new 26.3 fields stay false: LavaFlow's legacy render-pass path accepts a
-                // pass with no depth attachment, and its indirect-draw emulation is exercised by the
-                // baselineDevice switch rather than being a known-bad path.
-                new HintsAndWorkarounds(false, false, false, false), type);
+                // All five hints stay false. The fifth is 26.4's isExplicitDepthRequired: LavaFlow's
+                // legacy render-pass path accepts a pass with no depth attachment, which is exactly the
+                // case that hint exists to flag. The indirect-draw hint stays false too, because that
+                // emulation is exercised by the baselineDevice switch rather than being a known-bad path.
+                new HintsAndWorkarounds(false, false, false, false, false), type);
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
@@ -230,7 +232,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
      * also owns pipeline caching (its {@code PipelineCache}, keyed by {@code RenderPipeline}), so no
      * cache lives here -- a backend pipeline exists exactly as long as the frontend keeps it.
      */
-    @Override public BackendRenderPipeline.Pending compilePipeline(BackendRenderPipeline.CreateInfo pipelineCreateInfo) {
+    @Override public BackendRenderPipeline.Pending compilePipeline(CompiledRenderPipeline.CreateInfo pipelineCreateInfo) {
         // Compiled here rather than inside the returned lambda, matching the vanilla Vulkan backend: the
         // frontend calls this from its shader-compilation executor, and its "complete compile" step is then
         // only bookkeeping. Deferring the work to finishCompile() would instead do it on whichever thread

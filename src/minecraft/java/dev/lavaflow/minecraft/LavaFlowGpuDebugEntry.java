@@ -29,7 +29,7 @@ public final class LavaFlowGpuDebugEntry implements DebugScreenEntry {
     @Override public void display(DebugScreenDisplayer displayer, Level level, LevelChunk chunk,
                                   LevelChunk adjacentChunk) {
         String line = LavaFlowFrameStats.debugLine();
-        if (line != null) displayer.addLine(line);
+        if (line != null) displayer.addPriorityLine(line);
     }
 
     @Override public DebugEntryCategory category() { return DebugEntryCategory.RENDERER; }

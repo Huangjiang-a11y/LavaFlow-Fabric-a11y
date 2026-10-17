@@ -16,7 +16,8 @@ import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
-import com.mojang.renderpearl.backend.api.SpvModule;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.SpvModule;
 import com.mojang.renderpearl.util.ShaderCompileException;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
@@ -160,25 +161,24 @@ class LavaFlowRebindElisionTest {
         }
     }
 
-    private static BackendRenderPipeline.CreateInfo createInfo() {
-        return new BackendRenderPipeline.CreateInfo(
+    private static CompiledRenderPipeline.CreateInfo createInfo() {
+        return new CompiledRenderPipeline.CreateInfo(
                 "rebind elision test",
                 List.of(
-                        new BackendRenderPipeline.CreateInfo.Shader("vertex", "main",
-                                new CompiledShader(
+                        new CompiledShader("vertex", "main", 
                                         LavaFlowShaderc.compile(VERTEX_SOURCE,
                                                 shaderc_glsl_vertex_shader, "rebind-vertex"),
-                                        ShaderType.VERTEX)),
-                        new BackendRenderPipeline.CreateInfo.Shader("fragment", "main",
-                                new CompiledShader(
+                                        ShaderType.VERTEX),
+                        new CompiledShader("fragment", "main", 
                                         LavaFlowShaderc.compile(FRAGMENT_SOURCE,
                                                 shaderc_glsl_fragment_shader, "rebind-fragment"),
-                                        ShaderType.FRAGMENT))),
+                                        ShaderType.FRAGMENT)),
                 List.of(),   // no vertex buffers: the shaders read no attributes
                 List.of(),   // no attribute bindings
-                List.of(new UniformDescription("u", UniformType.UNIFORM_BUFFER)),
+                List.of(new CompiledRenderPipeline.CreateInfo.Uniform("u", 0, UniformType.UNIFORM_BUFFER, null)),
                 0,           // push constants size
                 DepthStencilState.DEFAULT,
+                null,        // depthStencilFormat: this test pipelines draw without a depth attachment
                 PolygonMode.FILL,
                 false,       // cull
                 List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
@@ -191,11 +191,11 @@ class LavaFlowRebindElisionTest {
      * that owns the module (here: this test, standing in for the frontend) releases it
      * once {@code finishCompile()} returns, so closing is a no-op.
      */
-    private record CompiledShader(ByteBuffer spv, ShaderType type) implements SpvModule {
+    private record CompiledShader(String name, String entryPoint, ByteBuffer spv, ShaderType type) implements SpvModule {
         @Override public void close() {}
-        @Override public Reflection reflect() throws ShaderCompileException {
+        @Override public SpvModule.Reflection reflect() throws ShaderCompileException {
             throw new UnsupportedOperationException("reflection is the frontend's job");
         }
-        @Override public Reflection getReflectionInfoIfAvailable() { return null; }
+        @Override public SpvModule.Reflection getReflectionInfoIfAvailable() { return null; }
     }
 }

@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.api.pipeline.IndexType;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
@@ -76,8 +77,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int scissorY;
     private int scissorWidth;
     private int scissorHeight;
-    private final long[] pendingVertexBuffers = new long[RenderPass.MAX_VERTEX_BUFFERS];
-    private final long[] pendingVertexOffsets = new long[RenderPass.MAX_VERTEX_BUFFERS];
+    private final long[] pendingVertexBuffers = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
+    private final long[] pendingVertexOffsets = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
     // Scratch arrays for the descriptor-set path. That path runs on every descriptor change rather than
     // once per set — a set is only allocated when a binding combination has not been seen before — so the
     // garbage it used to produce was worth removing. They are sized exactly to the binding count because

@@ -45,48 +45,9 @@ class LavaFlowPartialClearChurnTest {
             GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING;
     private static final Vector4f CLEAR_COLOR = new Vector4f(0.1f, 0.2f, 0.3f, 1.0f);
 
-    @Test
-    void repeatedPartialClearsRetireNoViews() throws Exception {
-        assumeTrue(displayAvailable(), "需要显示服务器才能初始化 SDL 视频子系统（本地可用 xvfb-run）");
-        assertTrue(LavaFlowFrameStats.enabled(),
-                "退役计数由 -Dlavaflow.frameStats=true 门控，关着时它恒为 0，这条断言会空过；"
-                        + "属性只能设在 minecraftTest 任务上（见 build.gradle.kts）");
-        Map<String, String> saved = setSwitches(Map.of("lavaflow.validation", "true"));
-        LavaFlowDevice device = null;
-        LavaFlowGpuTexture color = null;
-        LavaFlowGpuTexture depth = null;
-        try {
-            assumeTrue(SDL_Init(SDL_INIT_VIDEO), "SDL 视频子系统初始化失败");
-            exposeVulkanLoaderToLwjgl();
-            device = new LavaFlowDevice();
-            CommandEncoderBackend encoder = device.createCommandEncoder();
-            color = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "churn test color",
-                    GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
-            depth = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "churn test depth",
-                    GpuFormat.D32_FLOAT, SIZE, SIZE, 1, 1);
-
-            long handle = color.cachedClearView(0).handle();
-            long retiredBefore = LavaFlowFrameStats.retiredViewTotal();
-            for (int i = 0; i < CLEARS; i++) {
-                encoder.clearColorAndDepthTextures(color, CLEAR_COLOR, depth, 1.0,
-                        i % 16, i % 16, 16, 16, 0);
-            }
-
-            assertEquals(0L, LavaFlowFrameStats.retiredViewTotal() - retiredBefore,
-                    CLEARS + " 次局部清屏不该退役任何 view：退役数曾恰好是清屏次数的两倍");
-            assertEquals(handle, color.cachedClearView(0).handle(),
-                    "清屏要复用同一个 view 句柄，而不是每次现造一个");
-        } finally {
-            if (color != null) color.close();
-            if (depth != null) depth.close();
-            if (device != null) {
-                device.completePending();
-                device.close();
-            }
-            restore(saved);
-            SDL_Quit();
-        }
-    }
+    // The partial-clear test is gone with 26.4: CommandEncoderBackend no longer has the mip-aware
+    // clearColorAndDepthTextures overload the churn was measured through, so there is nothing left in
+    // the API for it to exercise. The view-lifecycle half below never depended on that call and stays.
 
     @Test
     void cachedClearViewsAreReleasedWithTheirTexture() throws Exception {

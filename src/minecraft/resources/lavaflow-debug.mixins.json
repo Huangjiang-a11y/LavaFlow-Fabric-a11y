@@ -5,7 +5,7 @@
   "package": "dev.lavaflow.minecraft.mixin",
   "client": [
     "DebugScreenEntryListMixin",
-    "DebugScreenEntriesInvoker"
+    "DebugScreenEntriesMixin"
   ],
   "injectors": {
     "defaultRequire": 1

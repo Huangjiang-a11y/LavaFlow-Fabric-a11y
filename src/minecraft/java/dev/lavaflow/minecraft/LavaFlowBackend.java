@@ -1,6 +1,5 @@
 package dev.lavaflow.minecraft;
 
-import com.mojang.blaze3d.platform.NativeLibrariesBootstrap;
 import com.mojang.renderpearl.api.device.BackendCreationException;
 import com.mojang.renderpearl.api.device.GpuBackend;
 import com.mojang.renderpearl.api.device.GpuDebugOptions;
@@ -55,12 +54,19 @@ public final class LavaFlowBackend implements GpuBackend {
     public void loadLibrary() throws BackendCreationException {
         if (libraryLoaded) return;
         if (libraryLoadFailure != null) throw libraryLoadFailure;
-        if (!NativeLibrariesBootstrap.isVulkanLoaderAvailable()) {
-            libraryLoadFailure = new BackendCreationException("Vulkan loader library is missing",
+        // 26.4 dropped NativeLibrariesBootstrap.isVulkanLoaderAvailable(), so the load itself is the
+        // check now. LWJGL resolves the Vulkan loader lazily, so touching the function provider is what
+        // actually reports a missing libvulkan -- done here rather than later so the failure keeps its
+        // VULKAN_LOADER_MISSING identity instead of surfacing as a surface that cannot be created.
+        String loaderPath;
+        try {
+            loaderPath = ((SharedLibrary)VK.getFunctionProvider()).getPath();
+        } catch (Throwable missing) {
+            libraryLoadFailure = new BackendCreationException("Vulkan loader library is missing: " + missing,
                     BackendCreationException.Reason.VULKAN_LOADER_MISSING);
             throw libraryLoadFailure;
         }
-        if (!SDLVulkan.SDL_Vulkan_LoadLibrary(((SharedLibrary)VK.getFunctionProvider()).getPath())) {
+        if (!SDLVulkan.SDL_Vulkan_LoadLibrary(loaderPath)) {
             libraryLoadFailure = new BackendCreationException(
                     "Vulkan is not supported: " + Objects.requireNonNullElse(SDLError.SDL_GetError(), "<no error>"),
                     BackendCreationException.Reason.PLATFORM_ERROR);
@@ -96,7 +102,8 @@ public final class LavaFlowBackend implements GpuBackend {
     }
 
     @Override
-    public GpuDevice createDevice(GpuDebugOptions debugOptions) throws BackendCreationException {
+    public GpuDevice createDevice(String deviceName, int deviceIndex, GpuDebugOptions debugOptions)
+            throws BackendCreationException {
         // Logged before anything can fail: the point of a build identity is to be in the log that
         // reports the failure, and the first line of device setup is the earliest LavaFlow can be.
         LOGGER.log(System.Logger.Level.INFO, "LavaFlow build {0} ({1})",
@@ -107,9 +114,10 @@ public final class LavaFlowBackend implements GpuBackend {
             LavaFlowDevice device = new LavaFlowDevice();
             LOGGER.log(System.Logger.Level.INFO, "Using LavaFlow Vulkan 1.1 backend on {0}",
                     device.getDeviceInfo().name());
-            // 26.3 splits the device in two: LavaFlowDevice is the backend, and callers only ever see
-            // this frontend facade. Returning the backend directly would not type-check.
-            return new FrontendGpuDevice(device);
+            // The device is split in two: LavaFlowDevice is the backend, and callers only ever see this
+            // frontend facade. Returning the backend directly would not type-check. 26.4 also hands the
+            // facade the debug options it was created with.
+            return new FrontendGpuDevice(device, debugOptions);
         } catch (RuntimeException failure) {
             throw new BackendCreationException(
                     "Failed to create LavaFlow Vulkan device: " + failure.getMessage(),
