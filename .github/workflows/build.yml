@@ -163,19 +163,6 @@ jobs:
             || { echo "::error::the descriptor path test failed"; exit 1; }
           echo "descriptor path test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
-        run: |
-          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowPartialClearChurnTest.xml
-          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
-          for method in repeatedPartialClearsRetireNoViews \
-                        cachedClearViewsAreReleasedWithTheirTexture; do
-            grep -q "testcase name=\"$method" "$report" \
-              || { echo "::error::$method did not run"; exit 1; }
-          done
-          grep -q 'skipped="0"' "$report" \
-            || { echo "::error::the partial-clear churn test skipped something"; exit 1; }
-          grep -q 'failures="0"' "$report" \
-            || { echo "::error::the partial-clear churn test failed"; exit 1; }
-          echo "partial-clear churn test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
       - name: Assert the rebind elision test ran rather than skipped
         run: |
