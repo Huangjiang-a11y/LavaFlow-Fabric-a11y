@@ -197,6 +197,32 @@ jobs:
             || { echo "::error::the pass split test failed"; exit 1; }
           echo "pass split test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      # 这两条和上面三条一样需要显示服务器，而且它们的回收断言还需要验证层在场（层缺席时
+      # 那条 assumeTrue 会让用例跳过）。跳过也是绿的，所以同样指名断言方法跑过。
+      - name: Assert the vertex bind elision test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowVertexBindElisionTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="repeatVertexBindsAreElidedWithinAndAcrossPasses' "$report" \
+            || { echo "::error::repeatVertexBindsAreElidedWithinAndAcrossPasses did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the vertex bind elision test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the vertex bind elision test failed"; exit 1; }
+          echo "vertex bind elision test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
+      - name: Assert the null vertex buffer test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowNullVertexBufferTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="nullVertexBufferSliceRecordsNoBind' "$report" \
+            || { echo "::error::nullVertexBufferSliceRecordsNoBind did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the null vertex buffer test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the null vertex buffer test failed"; exit 1; }
+          echo "null vertex buffer test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       - name: Assert the GPU timing test ran rather than skipped
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowGpuTimingTest.xml
