@@ -33,7 +33,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.5.1"
+          gradle-version: "9.7.1"
 
       # The runner has no GPU and no display. Parts of the build do not need either, but the context
       # test in the minecraft-test source set really creates a window and a Vulkan device, and the
@@ -218,6 +218,20 @@ jobs:
           grep -q 'failures="0"' "$report" \
             || { echo "::error::the GPU timing test failed"; exit 1; }
           echo "GPU timing test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
+      # legacy framebuffer 的退役路径原先靠整表扫描，这条用例是它唯一的覆盖，而且同样在无显示
+      # 服务器时跳过——跳过也是绿的，所以这里指名断言它跑过。
+      - name: Assert the legacy framebuffer index test ran rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowLegacyFramebufferIndexTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="releasingOneViewRetiresOnlyTheFramebuffersThatNameIt' "$report" \
+            || { echo "::error::releasingOneViewRetiresOnlyTheFramebuffersThatNameIt did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the legacy framebuffer index test skipped something"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the legacy framebuffer index test failed"; exit 1; }
+          echo "legacy framebuffer index test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
