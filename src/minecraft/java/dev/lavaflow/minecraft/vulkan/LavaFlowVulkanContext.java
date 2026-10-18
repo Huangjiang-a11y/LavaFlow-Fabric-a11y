@@ -75,6 +75,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
+    // Reverse index from an attachment view to the cached framebuffers naming it. Releasing a view
+    // then touches only the entries that mention it; this used to walk the whole table, once per
+    // destroyed view, while the lookup side next to it has always been a plain get().
+    private final Map<Long, List<LegacyFramebufferKey>> framebuffersByView = new HashMap<>();
     private boolean closed;
     // Whether the validation layer really answered for this instance, and every message it reported.
     // Both are kept so a test can assert on them: "the run exited 0" is also true of a run that
@@ -703,18 +707,27 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateFramebuffer(device, info, null, out), "vkCreateFramebuffer(fallback)");
             long framebuffer = out.get(0);
-            legacyFramebuffers.put(key.copy(), framebuffer);
+            LegacyFramebufferKey stored = key.copy();
+            legacyFramebuffers.put(stored, framebuffer);
+            // Registered under every view it names: an entry has to be findable from each of them.
+            for (long attachment : stored.views) {
+                framebuffersByView.computeIfAbsent(attachment, ignored -> new ArrayList<>(4)).add(stored);
+            }
             return framebuffer;
         }
     }
 
     synchronized void releaseLegacyFramebuffers(long view) {
-        var iterator = legacyFramebuffers.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<LegacyFramebufferKey, Long> entry = iterator.next();
-            if (entry.getKey().contains(view)) {
-                vkDestroyFramebuffer(device, entry.getValue(), null);
-                iterator.remove();
+        List<LegacyFramebufferKey> keys = framebuffersByView.remove(view);
+        if (keys == null) return;
+        for (LegacyFramebufferKey key : keys) {
+            Long framebuffer = legacyFramebuffers.remove(key);
+            if (framebuffer != null) vkDestroyFramebuffer(device, framebuffer, null);
+            // Unlinked from the table, so unlink it from the buckets of the views it also named. The
+            // one being released is already gone from the index, which is why a miss is expected here.
+            for (long attachment : key.views) {
+                List<LegacyFramebufferKey> bucket = framebuffersByView.get(attachment);
+                if (bucket != null) bucket.remove(key);
             }
         }
     }
@@ -725,6 +738,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         if (device != null) {
             for (long framebuffer : legacyFramebuffers.values()) vkDestroyFramebuffer(device, framebuffer, null);
             legacyFramebuffers.clear();
+            framebuffersByView.clear();
             for (long renderPass : legacyRenderPasses.values()) vkDestroyRenderPass(device, renderPass, null);
             legacyRenderPasses.clear();
         }
