@@ -127,6 +127,17 @@ class LavaFlowDescriptorPathTest {
             second.close();
             device.completePending();
 
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对 set layout/descriptor pool 的归还是瞎的。这里把 finally
+            // 干的收尾原样搬到体里，关完设备再断言，finally 仍作为失败路径的兜底。
+            if (layout != 0L) device.descriptorCache().invalidate(layout);
+            device.completePending();
+            if (layout != 0L) vkDestroyDescriptorSetLayout(vkDevice, layout, null);
+            layout = 0L;
+            device.completePending();
+            device.close();
+            device = null;
+
             assertNoValidationFindings(context);
         } finally {
             if (device != null) {
@@ -178,6 +189,17 @@ class LavaFlowDescriptorPathTest {
             buffer.close();
             assertEquals(0L, cache.lookup(key), "buffer 销毁后，写有它 view 的 set 不得再被交出");
             device.completePending();
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对 set layout/descriptor pool 的归还是瞎的。这里把 finally
+            // 干的收尾原样搬到体里，关完设备再断言，finally 仍作为失败路径的兜底。
+            if (layout != 0L) device.descriptorCache().invalidate(layout);
+            device.completePending();
+            if (layout != 0L) vkDestroyDescriptorSetLayout(vkDevice, layout, null);
+            layout = 0L;
+            device.completePending();
+            device.close();
+            device = null;
 
             assertNoValidationFindings(context);
         } finally {
@@ -253,6 +275,17 @@ class LavaFlowDescriptorPathTest {
             secondView.close();
             texture.close();
             device.completePending();
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对 set layout/descriptor pool 的归还是瞎的。这里把 finally
+            // 干的收尾原样搬到体里，关完设备再断言，finally 仍作为失败路径的兜底。
+            if (layout != 0L) device.descriptorCache().invalidate(layout);
+            device.completePending();
+            if (layout != 0L) vkDestroyDescriptorSetLayout(vkDevice, layout, null);
+            layout = 0L;
+            device.completePending();
+            device.close();
+            device = null;
 
             assertNoValidationFindings(context);
         } finally {
