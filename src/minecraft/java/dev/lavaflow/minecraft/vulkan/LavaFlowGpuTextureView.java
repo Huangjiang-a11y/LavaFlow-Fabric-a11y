@@ -47,7 +47,10 @@ final class LavaFlowGpuTextureView extends GpuTextureView {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
-        LavaFlowFrameStats.viewRetired(texture.identity());
+        // Ask first: identity() builds a string for a texture that has no label, and viewRetired()
+        // throws its argument away when the counters are off — which is the default configuration,
+        // so the name was being built on every view destruction for nobody to read.
+        if (LavaFlowFrameStats.enabled()) LavaFlowFrameStats.viewRetired(texture.identity());
         device.invalidateDescriptorCache(view);
         device.defer(() -> {
             context.releaseLegacyFramebuffers(view);
