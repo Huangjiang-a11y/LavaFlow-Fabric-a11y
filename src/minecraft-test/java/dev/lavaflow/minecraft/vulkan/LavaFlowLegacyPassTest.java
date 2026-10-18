@@ -45,7 +45,7 @@ import static org.lwjgl.util.shaderc.Shaderc.shaderc_glsl_vertex_shader;
  * {@code LavaFlowRenderPass} 走的是建 render pass + framebuffer 的那一支。查下来 CI 里原先没有
  * 任何一条用例覆盖它——两条冒烟跑的是 {@code src/main} 那个独立 renderer（它自己
  * {@code vkCreateRenderPass}，跟 MC 后端无关），而驱动 {@code LavaFlowRenderPass} 的四个用例都
- * 没开这个开关，走的全是动态渲染。SSD 的隔离没有被验证层看过，正是那条
+ * 没开这个开关，走的全是动态渲染。这条支路从来没有被验证层看过，正是那条
  * VUID-VkRenderPassCreateInfo-pDependencies-00838 能潜伏下来的原因——它每次建 render pass 都会
  * 被报出来，只是从来没人建过。
  *
