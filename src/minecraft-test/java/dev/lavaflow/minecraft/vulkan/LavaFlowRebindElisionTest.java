@@ -16,6 +16,7 @@ import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.textures.GpuTexture;
+import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.ShaderDefines;
 import net.minecraft.resources.Identifier;
@@ -106,6 +107,7 @@ class LavaFlowRebindElisionTest {
         Map<String, String> saved = setSwitches(Map.of("lavaflow.validation", "true"));
         LavaFlowDevice device = null;
         LavaFlowGpuTexture color = null;
+        GpuTextureView colorView = null;
         GpuBuffer uniform = null;
         long window = NULL;
         try {
@@ -117,6 +119,7 @@ class LavaFlowRebindElisionTest {
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice(window, (id, type) ->
                     type == ShaderType.FRAGMENT ? FRAGMENT_SOURCE : VERTEX_SOURCE);
+            LavaFlowVulkanContext context = device.context();
             CommandEncoderBackend encoder = device.createCommandEncoder();
             color = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "rebind test color",
                     GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
@@ -124,7 +127,7 @@ class LavaFlowRebindElisionTest {
 
             RenderPipeline pipeline = pipeline();
             RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "rebind test pass")
-                    .withColorAttachment(device.createTextureView(color, 0, 1),
+                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1),
                             Optional.of(new Vector4f(0, 0, 0, 1)))
                     .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
@@ -165,6 +168,23 @@ class LavaFlowRebindElisionTest {
             assertEquals(2, LavaFlowFrameStats.descriptorPushesTotal() - pushesBefore,
                     "首次脏了推一次、重复值那次不推、换值后又脏了再推一次；"
                             + "负面对照：把换值那步去掉，这条会红在 1");
+
+            device.completePending();
+            colorView.close(); colorView = null;
+            uniform.close(); uniform = null;
+            color.close(); color = null;
+            device.completePending();
+            device.close(); device = null;
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对后面的归还全是瞎的。验证层缺席时这条守卫让用例跳过，
+            // 由 CI 的"跑了而非跳过"步骤揪出来（那一步在层装齐的环境里断言 skipped=0）。
+            assumeTrue(context.validationEnabled(),
+                    "验证层没装上：回收阶段没人看，这条断言没有意义，跳过（CI 指名断言会揪出跳过）");
+            assertTrue(context.validationMessages().isEmpty(),
+                    () -> "重复绑定合并路径（含回收全程）产生了验证层告警： "
+                            + context.validationMessages());
+
         } finally {
             if (uniform != null) uniform.close();
             if (color != null) color.close();

@@ -15,6 +15,7 @@ import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuTexture;
+import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.ShaderDefines;
 import net.minecraft.resources.Identifier;
@@ -99,6 +100,9 @@ class LavaFlowPassSplitTest {
         Map<String, String> saved = setSwitches(Map.of("lavaflow.validation", "true"));
         LavaFlowDevice device = null;
         LavaFlowGpuTexture color = null;
+        GpuTextureView colorView = null;
+        GpuTextureView firstSampledView = null;
+        GpuTextureView secondSampledView = null;
         LavaFlowGpuTexture firstSampled = null;
         LavaFlowGpuTexture secondSampled = null;
         LavaFlowGpuSampler sampler = null;
@@ -112,6 +116,7 @@ class LavaFlowPassSplitTest {
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice(window, (id, type) ->
                     type == ShaderType.FRAGMENT ? FRAGMENT_SOURCE : VERTEX_SOURCE);
+            LavaFlowVulkanContext context = device.context();
             CommandEncoderBackend encoder = device.createCommandEncoder();
             color = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "pass split test color",
                     GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
@@ -127,7 +132,7 @@ class LavaFlowPassSplitTest {
 
             RenderPipeline pipeline = pipeline();
             RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "pass split test pass")
-                    .withColorAttachment(device.createTextureView(color, 0, 1),
+                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1),
                             Optional.of(new Vector4f(0, 0, 0, 1)))
                     .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
@@ -137,18 +142,41 @@ class LavaFlowPassSplitTest {
             // First draw of the pass, sampling a texture that is not in the sampled layout yet. The pass has
             // not begun, so the transition goes in before it starts and the pass never has to be split.
             pass.setPipeline(pipeline);
-            pass.bindTexture("tex", device.createTextureView(firstSampled, 0, 1), sampler);
+            firstSampledView = device.createTextureView(firstSampled, 0, 1);
+            pass.bindTexture("tex", firstSampledView, sampler);
             pass.draw(3, 1, 0, 0);
             assertEquals(0, LavaFlowFrameStats.passSplitsTotal() - splitsBefore,
                     "本趟的第一个 draw 不必拆通道：通道还没开，采样纹理的布局转换录在 begin 之前就行");
 
             // Second draw, now sampling a texture the pass has not seen. The pass is already open, so this one
             // really does have to be split — and that keeps the assertion above from passing vacuously.
-            pass.bindTexture("tex", device.createTextureView(secondSampled, 0, 1), sampler);
+            secondSampledView = device.createTextureView(secondSampled, 0, 1);
+            pass.bindTexture("tex", secondSampledView, sampler);
             pass.draw(3, 1, 0, 0);
             assertEquals(1, LavaFlowFrameStats.passSplitsTotal() - splitsBefore,
                     "通道已开、又绑了一张没采样过的纹理，这一趟只能拆：负面对照，说明上面那条不是恒真");
             encoder.submitRenderPass();
+
+            device.completePending();
+            colorView.close(); colorView = null;
+            firstSampledView.close(); firstSampledView = null;
+            secondSampledView.close(); secondSampledView = null;
+            firstSampled.close(); firstSampled = null;
+            secondSampled.close(); secondSampled = null;
+            sampler.close(); sampler = null;
+            color.close(); color = null;
+            device.completePending();
+            device.close(); device = null;
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对后面的归还全是瞎的。验证层缺席时这条守卫让用例跳过，
+            // 由 CI 的"跑了而非跳过"步骤揪出来（那一步在层装齐的环境里断言 skipped=0）。
+            assumeTrue(context.validationEnabled(),
+                    "验证层没装上：回收阶段没人看，这条断言没有意义，跳过（CI 指名断言会揪出跳过）");
+            assertTrue(context.validationMessages().isEmpty(),
+                    () -> "采样贴图分割通道路径（含回收全程）产生了验证层告警： "
+                            + context.validationMessages());
+
         } finally {
             if (sampler != null) sampler.close();
             if (firstSampled != null) firstSampled.close();

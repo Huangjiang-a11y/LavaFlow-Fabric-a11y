@@ -15,6 +15,7 @@ import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.textures.GpuTexture;
+import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.ShaderDefines;
 import net.minecraft.resources.Identifier;
@@ -99,6 +100,7 @@ class LavaFlowNullVertexBufferTest {
         Map<String, String> saved = setSwitches(Map.of("lavaflow.validation", "true"));
         LavaFlowDevice device = null;
         LavaFlowGpuTexture color = null;
+        GpuTextureView colorView = null;
         GpuBuffer vertex = null;
         long window = NULL;
         try {
@@ -110,6 +112,7 @@ class LavaFlowNullVertexBufferTest {
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice(window, (id, type) ->
                     type == ShaderType.FRAGMENT ? FRAGMENT_SOURCE : VERTEX_SOURCE);
+            LavaFlowVulkanContext context = device.context();
             CommandEncoderBackend encoder = device.createCommandEncoder();
             color = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "null vertex test color",
                     GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
@@ -118,7 +121,7 @@ class LavaFlowNullVertexBufferTest {
 
             RenderPipeline pipeline = pipeline();
             RenderPassDescriptor descriptor = RenderPassDescriptor.create(() -> "null vertex test pass")
-                    .withColorAttachment(device.createTextureView(color, 0, 1),
+                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1),
                             Optional.of(new Vector4f(0, 0, 0, 1)))
                     .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
@@ -141,6 +144,23 @@ class LavaFlowNullVertexBufferTest {
             assertEquals(1, LavaFlowFrameStats.vertexBufferBindsTotal() - vertexBindsBefore,
                     "真 buffer 仍然要录一条 vkCmdBindVertexBuffers；这条是上面那条的负面对照");
             encoder.submitRenderPass();
+
+            device.completePending();
+            colorView.close(); colorView = null;
+            vertex.close(); vertex = null;
+            color.close(); color = null;
+            device.completePending();
+            device.close(); device = null;
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对后面的归还全是瞎的。验证层缺席时这条守卫让用例跳过，
+            // 由 CI 的"跑了而非跳过"步骤揪出来（那一步在层装齐的环境里断言 skipped=0）。
+            assumeTrue(context.validationEnabled(),
+                    "验证层没装上：回收阶段没人看，这条断言没有意义，跳过（CI 指名断言会揪出跳过）");
+            assertTrue(context.validationMessages().isEmpty(),
+                    () -> "null 顶点缓冲拒绝路径（含回收全程）产生了验证层告警： "
+                            + context.validationMessages());
+
         } finally {
             if (vertex != null) vertex.close();
             if (color != null) color.close();
