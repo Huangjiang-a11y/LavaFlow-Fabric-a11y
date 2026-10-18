@@ -27,6 +27,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private final LavaFlowCommandEncoder commandEncoder;
     private List<AutoCloseable> deferred = new ArrayList<>();
     private List<Runnable> callbacks = new ArrayList<>();
+    // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
+    // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
+    // something used to pay for these, and now they do not — see detachSubmitBatch.
+    private final Deque<List<AutoCloseable>> freeResourceLists = new ArrayDeque<>();
+    private final Deque<List<Runnable>> freeCallbackLists = new ArrayDeque<>();
     private SubmitBatch completingBatch;
     private final Map<RenderPipeline, LavaFlowRenderPipeline> pipelines = new IdentityHashMap<>();
     private final Map<ShaderKey, String> shaderSources = new HashMap<>();
@@ -147,8 +152,8 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (transientResources != null) deferred.add(transientResources);
         if (deferred.isEmpty() && callbacks.isEmpty()) return null;
         SubmitBatch batch = new SubmitBatch(deferred, callbacks);
-        deferred = new ArrayList<>();
-        callbacks = new ArrayList<>();
+        deferred = freeResourceLists.isEmpty() ? new ArrayList<>() : freeResourceLists.pop();
+        callbacks = freeCallbackLists.isEmpty() ? new ArrayList<>() : freeCallbackLists.pop();
         return batch;
     }
     synchronized void completeSubmit(SubmitBatch batch) {
@@ -168,6 +173,13 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         }
         for (Runnable callback : batch.callbacks) callback.run();
         completingBatch = null;
+        // The only holder of a batch is the submit slot, and it drops its reference the moment this
+        // returns, so the lists are free to hand out again. Clearing is part of that: a recycled list
+        // must not carry the previous batch's contents.
+        batch.resources.clear();
+        batch.callbacks.clear();
+        freeResourceLists.push(batch.resources);
+        freeCallbackLists.push(batch.callbacks);
         if (failure != null) throw failure;
     }
     synchronized void completePending() { completeSubmit(detachSubmitBatch(null)); }
