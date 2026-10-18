@@ -80,6 +80,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     // overwrite on return — the cache copies the key it retains (see LavaFlowDescriptorCache.allocateAndStore).
     private long[] keyScratch = new long[0];
     private long[] resourceScratch = new long[0];
+    // The legacy path rebuilds its attachment list on every pass begin. That array is read once on the
+    // way into legacyFramebuffer, which copies the key it retains, so one array can serve every call and
+    // is grown only when the attachment count changes — the same shape as the two above.
+    private long[] attachmentScratch = new long[0];
     private int pendingVertexMask;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
@@ -260,7 +264,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
         int attachmentCount = depthView == null ? 0 : 1;
         for (LavaFlowGpuTextureView view : colorViews) if (view != null) attachmentCount++;
-        long[] views = new long[attachmentCount];
+        if (attachmentScratch.length != attachmentCount) attachmentScratch = new long[attachmentCount];
+        long[] views = attachmentScratch;
         VkClearValue.Buffer clearValues = VkClearValue.calloc(attachmentCount, stack);
         int attachmentIndex = 0;
         for (int i = 0; i < colorViews.length; i++) {
