@@ -128,8 +128,14 @@ jobs:
       # checked; mixins aimed at other mods are skipped by name.
       - name: Check that every Minecraft mixin target still resolves
         run: |
-          jar="$(ls ~/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-merged-deobf/*/minecraft-merged-deobf-*.jar | head -1)"
-          test -n "$jar" || { echo "::error::the Minecraft jar is not in the loom cache"; exit 1; }
+          # 缓存按版本分目录，26.2/26.3/26.4 会同时躺在里面，而 mixin 是对着工程声明的那个版本写的。
+          # 原先用 ls|head -1 挑：挑到哪个全看缓存里先有谁，于是 26.4 才有的
+          # DebugScreenEntries.bootstrap 会被拿 26.3 的 jar 判成“找不到”。这里精确取版本，
+          # 取不到就红，不退回“随便挑一个”。
+          version="$(awk -F'=' '$1=="minecraft_version"{print $2}' g*.prop*)"
+          test -n "$version" || { echo "::error::no minecraft version in g*.prop*"; exit 1; }
+          jar="$HOME/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-merged-deobf/$version/minecraft-merged-deobf-$version.jar"
+          test -f "$jar" || { echo "::error::the Minecraft $version jar is not in the loom cache"; exit 1; }
           python3 tools/check_mixin_targets.py "$jar"
 
       - name: Assert the context test ran rather than skipped
