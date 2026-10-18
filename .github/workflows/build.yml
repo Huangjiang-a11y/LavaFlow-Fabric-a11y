@@ -218,6 +218,23 @@ jobs:
             || { echo "::error::the legacy framebuffer index test failed"; exit 1; }
           echo "legacy framebuffer index test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
 
+      # 真机（Mali-G76 报 dynamicRendering=false）走的是 legacy render pass 那一支，而这一支在
+      # 加这条用例之前 CI 里没人建过：两条冒烟跑的是 src/main 的独立 renderer（它自己
+      # vkCreateRenderPass，不经过 MC 后端），四个驱动 LavaFlowRenderPass 的用例都没开
+      # forceLegacyRenderPass。用例本身开 lavaflow.validation 并断言动态渲染已关，跳过也是绿的，
+      # 所以这里同样指名断言它跑过。
+      - name: Assert the legacy-path test ran under the validation layer rather than skipped
+        run: |
+          report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowLegacyPassTest.xml
+          test -f "$report" || { echo "::error::$report is missing"; exit 1; }
+          grep -q 'testcase name="aFallbackRenderPassDrawsWithoutValidationFindings' "$report" \
+            || { echo "::error::aFallbackRenderPassDrawsWithoutValidationFindings did not run"; exit 1; }
+          grep -q 'skipped="0"' "$report" \
+            || { echo "::error::the legacy-path test skipped: is the validation layer installed?"; exit 1; }
+          grep -q 'failures="0"' "$report" \
+            || { echo "::error::the legacy-path test failed"; exit 1; }
+          echo "legacy-path test ran: $(grep -oE 'tests="[0-9]+" skipped="[0-9]+" failures="[0-9]+" errors="[0-9]+"' "$report")"
+
       # The renderer prints nothing on a successful run, so "exited 0" alone would also be true of a
       # build where the renderer never started. The run is therefore validated, and the step asserts
       # that the layer answered: a switch that silently does nothing must not pass.
