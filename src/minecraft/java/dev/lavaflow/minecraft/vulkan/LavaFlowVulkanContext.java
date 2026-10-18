@@ -752,7 +752,13 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             dependency.srcSubpass(VK_SUBPASS_EXTERNAL);
             dependency.dstSubpass(0);
             dependency.srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-            dependency.dstStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            // NOT ALL_COMMANDS here: the dependency targets subpass 0, and for a non-EXTERNAL
+            // dstSubpass every bit of dstStageMask has to be a stage the graphics pipeline supports
+            // (VUID-VkRenderPassCreateInfo-pDependencies-00838). The validation layer flagged it the
+            // moment a test drove this path for the first time. ALL_GRAPHICS keeps the intent: every
+            // graphics stage in the subpass waits for what came before, and this backend issues its
+            // transfers outside render passes, so no transfer stage is left uncovered.
+            dependency.dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
             dependency.srcAccessMask(0);
             dependency.dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
