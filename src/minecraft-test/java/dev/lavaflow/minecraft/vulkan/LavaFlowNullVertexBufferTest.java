@@ -11,6 +11,7 @@ import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.ShaderType;
 import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
@@ -84,10 +85,13 @@ class LavaFlowNullVertexBufferTest {
         LavaFlowGpuTexture depth = null;
         GpuBuffer vertex = null;
         LavaFlowRenderPipeline pipeline = null;
+        GpuTextureView colorView = null;
+        GpuTextureView depthView = null;
         try {
             assumeTrue(SDL_Init(SDL_INIT_VIDEO), "SDL 视频子系统初始化失败");
             exposeVulkanLoaderToLwjgl();
             device = new LavaFlowDevice();
+            LavaFlowVulkanContext context = device.context();
             CommandEncoderBackend encoder = device.createCommandEncoder();
             color = new LavaFlowGpuTexture(device, ATTACHMENT_USAGE, "null vertex test color",
                     GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
@@ -100,8 +104,8 @@ class LavaFlowNullVertexBufferTest {
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
             RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "null vertex test pass")
-                    .withColorAttachment(device.createTextureView(color, 0, 1), Optional.of(new Vector4f(0, 0, 0, 1)))
-                    .withDepthAttachment(device.createTextureView(depth, 0, 1), OptionalDouble.of(1.0))
+                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1), Optional.of(new Vector4f(0, 0, 0, 1)))
+                    .withDepthAttachment(depthView = device.createTextureView(depth, 0, 1), OptionalDouble.of(1.0))
                     .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
                     .build();
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
@@ -124,6 +128,26 @@ class LavaFlowNullVertexBufferTest {
             assertEquals(1, LavaFlowFrameStats.vertexBufferBindsTotal() - vertexBindsBefore,
                     "真 buffer 仍然要录一条 vkCmdBindVertexBuffers；这条是上面那条的负面对照");
             encoder.submitRenderPass();
+
+            device.completePending();
+            pipeline.close(); pipeline = null;
+            vertex.close(); vertex = null;
+            colorView.close(); colorView = null;
+            depthView.close(); depthView = null;
+            color.close(); color = null;
+            depth.close(); depth = null;
+            device.completePending();
+            device.close(); device = null;
+
+            // 断言放在设备销毁之后：Object Tracking 的泄漏消息只在 vkDestroyDevice 那一刻冒出来，
+            // 写在整个回收阶段之前的话，对后面的归还全是瞎的。验证层缺席时这条守卫让用例跳过，
+            // 由 CI 的"跑了而非跳过"步骤揪出来（那一步在层装齐的环境里断言 skipped=0）。
+            assumeTrue(context.validationEnabled(),
+                    "验证层没装上：回收阶段没人看，这条断言没有意义，跳过（CI 指名断言会揪出跳过）");
+            assertTrue(context.validationMessages().isEmpty(),
+                    () -> "null 顶点缓冲拒绝路径（含回收全程）产生了验证层告警： "
+                            + context.validationMessages());
+
         } finally {
             if (pipeline != null) pipeline.close();
             if (vertex != null) vertex.close();
