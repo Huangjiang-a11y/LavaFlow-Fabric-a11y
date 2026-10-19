@@ -11,3 +11,4 @@ refs/
 run/
 .trae/
 build.log
+.lwjgl/
