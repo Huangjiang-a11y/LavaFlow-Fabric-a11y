@@ -84,6 +84,12 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     // way into legacyFramebuffer, which copies the key it retains, so one array can serve every call and
     // is grown only when the attachment count changes — the same shape as the two above.
     private long[] attachmentScratch = new long[0];
+    // The legacy path builds its format/load-op arrays once, at construction; the all-load variant used
+    // when the pass is split is built once too. Both are keyed by the render pass cache, which copies
+    // what it retains, so reusing one pair of arrays is safe.
+    private int[] colorFormats;
+    private int[] colorLoadOps;
+    private long resumeRenderPass;
     private int pendingVertexMask;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
@@ -128,8 +134,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         if (context.dynamicRendering()) {
             renderPass = 0;
         } else {
-            int[] colorFormats = new int[colors.size()];
-            int[] colorLoadOps = new int[colors.size()];
+            colorFormats = new int[colors.size()];
+            colorLoadOps = new int[colors.size()];
             for (int i = 0; i < colors.size(); i++) {
                 if (colorViews[i] == null) {
                     colorFormats[i] = VK_FORMAT_UNDEFINED;
@@ -300,21 +306,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
      * do not affect render-pass compatibility, so pipelines built against the original stay valid.
      */
     private long resumeRenderPass() {
-        List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
-        int[] colorFormats = new int[colorViews.length];
-        int[] colorLoadOps = new int[colorViews.length];
-        for (int i = 0; i < colorViews.length; i++) {
-            if (colorViews[i] == null) {
-                colorFormats[i] = VK_FORMAT_UNDEFINED;
-                colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            } else {
-                colorFormats[i] = LavaFlowVk.format(colorViews[i].texture().getFormat());
-                colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_LOAD;
-            }
+        if (resumeRenderPass != 0) return resumeRenderPass;
+        // Formats are the ones built at construction; only the load ops differ (all LOAD so the split
+        // does not lose the first half of the pass).
+        for (int i = 0; i < colorLoadOps.length; i++) {
+            if (colorViews[i] != null) colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_LOAD;
         }
         int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
-        return context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD);
+        resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat,
+                VK_ATTACHMENT_LOAD_OP_LOAD);
+        return resumeRenderPass;
     }
 
     /**
