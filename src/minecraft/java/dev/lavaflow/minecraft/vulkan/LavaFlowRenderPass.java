@@ -91,6 +91,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private int[] colorLoadOps;
     private long resumeRenderPass;
     private int pendingVertexMask;
+    // The slot-local index of this pass's start timestamp, or -1 when per-pass timing is off.
+    private int timedPass = -1;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
 
@@ -183,6 +185,9 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         }
         if (!LAYOUT_DEBUG.isEmpty()) debugValidateLayouts();
+        // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
+        // would put pipeline work between the tile load and the tile store this is meant to measure.
+        timedPass = encoder.beginTimedPass(passLabel());
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, false);
             else beginLegacy(stack, false);
@@ -221,6 +226,15 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
+        encoder.endTimedPass(timedPass);
+        timedPass = -1;
+    }
+
+    /** The frontend's name for this pass, used as the key of the per-pass GPU breakdown. */
+    private String passLabel() {
+        var label = descriptor.label();
+        String value = label == null ? null : label.get();
+        return value == null || value.isEmpty() ? "unnamed" : value;
     }
 
     private void beginDynamic(MemoryStack stack, boolean resume) {

@@ -83,6 +83,13 @@ public final class LavaFlowFrameStats {
     private static double gpuMillis;
     private static long gpuFramesAtReport;
     private static double gpuMillisAtReport;
+    // Per-pass GPU time, keyed by the label the frontend gave the pass. Totals are lifetime; the report
+    // subtracts the baseline taken at its previous run, so one line describes one window the same way every
+    // other counter here does — and the lifetime totals stay readable by tests between reports.
+    private static final Map<String, double[]> passGpuMillis = new HashMap<>();
+    private static final Map<String, double[]> passGpuMillisAtReport = new HashMap<>();
+    private static long timedPasses;
+    private static long timedPassesAtReport;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -235,6 +242,30 @@ public final class LavaFlowFrameStats {
         if (frameMillis <= 0) return String.format("GPU (LavaFlow): %.2f ms", gpuMillis);
         return String.format("GPU (LavaFlow): %.2f ms, %.0f%% of a %.2f ms frame",
                 gpuMillis, 100.0 * gpuMillis / frameMillis, frameMillis);
+    }
+
+    /**
+     * Records one finished pass's GPU time in milliseconds under the label the frontend gave it.
+     *
+     * <p>This is the per-pass breakdown behind {@code gpu_ms}: that number says how much of the frame the
+     * GPU took, this one says which pass took it. It only ever has values when the encoder's per-pass
+     * timestamp queries are on (see {@code lavaflow.passGpuTiming}).
+     */
+    public static void passGpuCompleted(String label, double millis) {
+        if (!ENABLED) return;
+        double[] total = passGpuMillis.computeIfAbsent(label, key -> new double[2]);
+        total[0] += millis;
+        total[1] += 1;
+        timedPasses++;
+    }
+
+    /** Number of pass samples recorded so far; 0 when per-pass timing is off or nothing has finished. */
+    static long timedPassSamples() { return timedPasses; }
+
+    /** Average GPU time in milliseconds for one pass label over the whole run, or 0 when never sampled. */
+    static double passGpuMillis(String label) {
+        double[] total = passGpuMillis.get(label);
+        return total == null || total[1] == 0 ? 0 : total[0] / total[1];
     }
 
     /** Counts one descriptor write push, whether through push descriptors or a cached set. */
@@ -413,6 +444,8 @@ public final class LavaFlowFrameStats {
         long gpuSamplesSince = gpuFrames - gpuFramesAtReport;
         double gpuMillisPerFrame = gpuSamplesSince == 0 ? 0
                 : (gpuMillis - gpuMillisAtReport) / gpuSamplesSince;
+        double passesPerFrame = framesSince == 0 ? 0
+                : (timedPasses - timedPassesAtReport) / (double) framesSince;
         double buffersPerFrame = framesSince == 0 ? 0 : (retiredBuffers - retiredBuffersAtReport) / (double) framesSince;
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
@@ -477,5 +510,60 @@ public final class LavaFlowFrameStats {
                 topViewLabels,
                 String.format("%.1f", vertexBindCallsPerFrame),
                 String.format("%.3f", vertexRebindRatio));
+        if (timedPasses != timedPassesAtReport) {
+            LOGGER.log(System.Logger.Level.INFO, passGpuLine(passesPerFrame));
+        }
+        passGpuMillisAtReport.clear();
+        for (Map.Entry<String, double[]> entry : passGpuMillis.entrySet()) {
+            passGpuMillisAtReport.put(entry.getKey(), entry.getValue().clone());
+        }
+        timedPassesAtReport = timedPasses;
+    }
+
+    /**
+     * The per-pass GPU breakdown for this window, largest average first; the tail is folded into
+     * {@code other} so the line stays one readable screen. Labels are the frontend's own pass names, with
+     * spaces turned into underscores so the line stays tokenisable.
+     */
+    private static String passGpuLine(double passesPerFrame) {
+        List<Map.Entry<String, double[]>> entries = new ArrayList<>(passGpuMillis.entrySet());
+        entries.sort((a, b) -> Double.compare(windowAverage(b), windowAverage(a)));
+        StringBuilder line = new StringBuilder("pass_gpu_ms=[");
+        double otherSum = 0;
+        double otherSamples = 0;
+        int shown = 0;
+        for (Map.Entry<String, double[]> entry : entries) {
+            double samples = windowSamples(entry);
+            if (samples <= 0) continue;
+            if (shown < 6) {
+                if (shown > 0) line.append(' ');
+                line.append(entry.getKey().replace(' ', '_'))
+                        .append('=').append(String.format("%.2f", windowAverage(entry)));
+                shown++;
+            } else {
+                otherSum += windowSum(entry);
+                otherSamples += samples;
+            }
+        }
+        if (otherSamples > 0) {
+            line.append(" other=").append(String.format("%.2f", otherSum / otherSamples));
+        }
+        line.append("] passes_per_frame=").append(String.format("%.1f", passesPerFrame));
+        return line.toString();
+    }
+
+    private static double windowSum(Map.Entry<String, double[]> entry) {
+        double[] baseline = passGpuMillisAtReport.get(entry.getKey());
+        return entry.getValue()[0] - (baseline == null ? 0 : baseline[0]);
+    }
+
+    private static double windowSamples(Map.Entry<String, double[]> entry) {
+        double[] baseline = passGpuMillisAtReport.get(entry.getKey());
+        return entry.getValue()[1] - (baseline == null ? 0 : baseline[1]);
+    }
+
+    private static double windowAverage(Map.Entry<String, double[]> entry) {
+        double samples = windowSamples(entry);
+        return samples <= 0 ? 0 : windowSum(entry) / samples;
     }
 }
