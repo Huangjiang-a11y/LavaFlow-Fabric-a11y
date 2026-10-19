@@ -90,6 +90,11 @@ public final class LavaFlowFrameStats {
     private static final Map<String, double[]> passGpuMillisAtReport = new HashMap<>();
     private static long timedPasses;
     private static long timedPassesAtReport;
+    // Sum of all pass durations in one frame, in milliseconds. gpu_ms minus this is the share that sits
+    // outside any render pass — the present blit and the pre-pass transitions — which is the number to
+    // read before deciding whether the blit is worth attacking.
+    private static double passGpuFrameMillis;
+    private static double passGpuFrameMillisAtReport;
     private static long descriptorPushes;
     private static long descriptorPushesAtReport;
 
@@ -263,8 +268,17 @@ public final class LavaFlowFrameStats {
         timedPasses++;
     }
 
+    /** Records the sum of all pass durations of one finished frame, in milliseconds. */
+    public static void passGpuFrameCompleted(double millis) {
+        if (!ENABLED) return;
+        passGpuFrameMillis += millis;
+    }
+
     /** Number of pass samples recorded so far; 0 when per-pass timing is off or nothing has finished. */
     static long timedPassSamples() { return timedPasses; }
+
+    /** Lifetime sum of per-frame pass durations in milliseconds; 0 when pass timing is off. */
+    static double passGpuFrameTotal() { return passGpuFrameMillis; }
 
     /** Average GPU time in milliseconds for one pass label over the whole run, or 0 when never sampled. */
     static double passGpuMillis(String label) {
@@ -515,7 +529,11 @@ public final class LavaFlowFrameStats {
                 String.format("%.1f", vertexBindCallsPerFrame),
                 String.format("%.3f", vertexRebindRatio));
         if (timedPasses != timedPassesAtReport) {
-            LOGGER.log(System.Logger.Level.INFO, passGpuLine(passesPerFrame));
+            double passMillisPerFrame = gpuSamplesSince == 0 ? 0
+                    : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
+            double outsideMillisPerFrame = gpuMillisPerFrame - passMillisPerFrame;
+            LOGGER.log(System.Logger.Level.INFO, passGpuLine(passesPerFrame, outsideMillisPerFrame));
+            passGpuFrameMillisAtReport = passGpuFrameMillis;
         }
         passGpuMillisAtReport.clear();
         for (Map.Entry<String, double[]> entry : passGpuMillis.entrySet()) {
@@ -529,7 +547,7 @@ public final class LavaFlowFrameStats {
      * {@code other} so the line stays one readable screen. Labels are the frontend's own pass names, with
      * spaces turned into underscores so the line stays tokenisable.
      */
-    private static String passGpuLine(double passesPerFrame) {
+    private static String passGpuLine(double passesPerFrame, double outsideMillisPerFrame) {
         List<Map.Entry<String, double[]>> entries = new ArrayList<>(passGpuMillis.entrySet());
         entries.sort((a, b) -> Double.compare(windowAverage(b), windowAverage(a)));
         StringBuilder line = new StringBuilder("pass_gpu_ms=[");
@@ -552,7 +570,8 @@ public final class LavaFlowFrameStats {
         if (otherSamples > 0) {
             line.append(" other=").append(String.format("%.2f", otherSum / otherSamples));
         }
-        line.append("] passes_per_frame=").append(String.format("%.1f", passesPerFrame));
+        line.append("] passes_per_frame=").append(String.format("%.1f", passesPerFrame))
+                .append(" outside=").append(String.format("%.2f", outsideMillisPerFrame));
         return line.toString();
     }
 

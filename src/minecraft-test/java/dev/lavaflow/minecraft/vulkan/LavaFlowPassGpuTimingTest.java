@@ -43,6 +43,9 @@ class LavaFlowPassGpuTimingTest {
         assertTrue(LavaFlowFrameStats.enabled(),
                 "逐通道计时搭在帧统计上，-Dlavaflow.frameStats=true 关着时不会有样本；"
                         + "属性只能设在 minecraftTest 任务上（见 build.gradle.kts）");
+        // Per-pass timing is opt-in: it costs a few percent of GPU time, so the test has to ask for it the
+        // same way a device run does.
+        Map<String, String> saved = setSwitches(Map.of("lavaflow.passGpuTiming", "true"));
         LavaFlowDevice device = null;
         LavaFlowGpuTexture target = null;
         GpuTextureView view = null;
@@ -78,6 +81,8 @@ class LavaFlowPassGpuTimingTest {
             assertTrue(millis > 0 && millis < 1000,
                     "标签为 \"" + LABEL + "\" 的通道平均 GPU 时间应在 (0, 1000) ms 之间，实际 " + millis
                             + "：荒唐的大值通常意味着读回步长或标志位写错，读到的是别的内存");
+            assertTrue(LavaFlowFrameStats.passGpuFrameTotal() > 0,
+                    "每帧通道总时长也应当有值：它是 outside 的分母，缺失时 outside 会显示成整个 gpu_ms");
         } finally {
             if (view != null) view.close();
             if (target != null) target.close();
@@ -85,15 +90,15 @@ class LavaFlowPassGpuTimingTest {
                 device.completePending();
                 device.close();
             }
+            restore(saved);
             SDL_Quit();
         }
     }
 
     @Test
-    void theSwitchTurnsPassTimingOff() throws Exception {
+    void passTimingIsOffUnlessAsked() throws Exception {
         assumeTrue(displayAvailable(), "需要显示服务器才能初始化 SDL 视频子系统（本地可用 xvfb-run）");
         assertTrue(LavaFlowFrameStats.enabled(), "-Dlavaflow.frameStats=true 未启用时这条对照没有意义");
-        Map<String, String> saved = setSwitches(Map.of("lavaflow.passGpuTiming", "false"));
         LavaFlowDevice device = null;
         LavaFlowGpuTexture target = null;
         GpuTextureView view = null;
@@ -120,8 +125,8 @@ class LavaFlowPassGpuTimingTest {
                 encoder.submit();
             }
             assertEquals(samplesBefore, LavaFlowFrameStats.timedPassSamples(),
-                    "lavaflow.passGpuTiming=false 时不应产生逐通道样本；"
-                            + "样本照常增长说明开关没被读到，真机上想关也关不掉");
+                    "默认不开时不应产生逐通道样本（需显式 -Dlavaflow.passGpuTiming=true）；"
+                            + "样本照常增长说明默认值或开关读取被改坏，性能会被诊断本身拖下去");
         } finally {
             if (view != null) view.close();
             if (target != null) target.close();
@@ -129,7 +134,6 @@ class LavaFlowPassGpuTimingTest {
                 device.completePending();
                 device.close();
             }
-            restore(saved);
             SDL_Quit();
         }
     }

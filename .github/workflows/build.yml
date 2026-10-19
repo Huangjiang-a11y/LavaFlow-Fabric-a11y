@@ -191,7 +191,7 @@ jobs:
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowPassGpuTimingTest.xml
           test -f "$report" || { echo "::error::$report is missing"; exit 1; }
           for method in aFinishedPassIsTimedOnTheGpu \
-                        theSwitchTurnsPassTimingOff; do
+                        passTimingIsOffUnlessAsked; do
             grep -q "testcase name=\"$method" "$report" \
               || { echo "::error::$method did not run"; exit 1; }
           done
