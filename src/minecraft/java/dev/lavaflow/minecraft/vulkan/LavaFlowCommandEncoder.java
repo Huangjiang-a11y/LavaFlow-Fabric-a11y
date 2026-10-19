@@ -47,6 +47,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // when the slot's fence signals — two frames later, since slots rotate — so the reported GPU time is a
     // frame that has actually finished rather than the one being recorded. Zero when the device cannot time.
     private long timestampPool;
+    // Per-pass timing: two timestamp queries per pass, per submit slot, written just outside the render pass
+    // (before begin, after end) so the measurement cannot perturb the tile load/store it is meant to see.
+    // Gated by the frame stats and turned off by -Dlavaflow.passGpuTiming=false: a device that has to be
+    // measured without the measurement also pays for the queries can drop them.
+    private static final int MAX_TIMED_PASSES = 64;
+    private boolean passTimingEnabled;
+    private long passTimestampPool;
 
     private static final class SubmitSlot {
         final VkCommandBuffer commandBuffer;
@@ -55,6 +62,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         LavaFlowDevice.SubmitBatch batch;
         long serial;
         boolean inFlight;
+        // Passes timed in this slot's recording, in recording order; the labels are kept until the slot's
+        // fence signals, because only then can the queries be read back.
+        int timedPasses;
+        final String[] passLabels = new String[MAX_TIMED_PASSES];
 
         SubmitSlot(VkCommandBuffer commandBuffer, long fence, LavaFlowTransientMemory transientMemory) {
             this.commandBuffer = commandBuffer;
@@ -82,6 +93,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             // "this device cannot be timed", not as "the GPU finished instantly".
             LOGGER.log(System.Logger.Level.INFO,
                     "The graphics queue reports no timestamp bits, so the report will carry no gpu_ms");
+        }
+        passTimingEnabled = context.timestampsSupported() && LavaFlowFrameStats.enabled()
+                && !"false".equalsIgnoreCase(System.getProperty("lavaflow.passGpuTiming", "true"));
+        if (passTimingEnabled) {
+            try (MemoryStack stack = stackPush()) {
+                VkQueryPoolCreateInfo info = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                        .queryType(VK_QUERY_TYPE_TIMESTAMP)
+                        .queryCount(SUBMIT_SLOTS * MAX_TIMED_PASSES * 2);
+                LongBuffer out = stack.mallocLong(1);
+                int result = vkCreateQueryPool(context.device(), info, null, out);
+                if (result == VK_SUCCESS) passTimestampPool = out.get(0);
+                else {
+                    passTimingEnabled = false;
+                    LOGGER.log(System.Logger.Level.WARNING, "vkCreateQueryPool(pass timestamps) failed with "
+                            + "VkResult " + result + ", so the report will carry no per-pass GPU time");
+                }
+            }
         }
         prepareSlot(0);
     }
@@ -120,6 +148,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             device.completeSubmit(slot.batch);
             slot.batch = null;
             readGpuTime(index);
+            readPassGpuTimes(index);
         }
         slot.transientMemory.recycle();
         check(vkResetCommandBuffer(slot.commandBuffer, 0), "vkResetCommandBuffer");
@@ -135,6 +164,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
         }
+        if (passTimestampPool != 0) {
+            vkCmdResetQueryPool(commandBuffer, passTimestampPool, index * MAX_TIMED_PASSES * 2,
+                    MAX_TIMED_PASSES * 2);
+            slot.timedPasses = 0;
+        }
     }
 
     /**
@@ -142,6 +176,56 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      * whose queries are not ready contributes no sample rather than a wrong one, and a device that cannot time
      * never gets here at all.
      */
+    /**
+     * The pass-timing counterpart of {@link #readGpuTime}: reads back this slot's pairs of pass timestamps
+     * once its fence has signalled and hands each pair to the frame stats under the pass's label.
+     */
+    private void readPassGpuTimes(int index) {
+        if (passTimestampPool == 0) return;
+        SubmitSlot current = slots[index];
+        int passes = current.timedPasses;
+        if (passes == 0) return;
+        try (MemoryStack stack = stackPush()) {
+            LongBuffer values = stack.mallocLong(passes * 2);
+            // The fence has signalled, so WAIT returns immediately; it is passed anyway because "the fence
+            // said it was done" and "the query results are readable" are two different promises, and a
+            // result read half-written would show up as a nonsense pass time rather than as an error.
+            int result = vkGetQueryPoolResults(context.device(), passTimestampPool,
+                    index * MAX_TIMED_PASSES * 2, passes * 2, values, Long.BYTES,
+                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            if (result != VK_SUCCESS) return;
+            double period = context.timestampPeriod();
+            for (int p = 0; p < passes; p++) {
+                long begin = values.get(p * 2);
+                long end = values.get(p * 2 + 1);
+                if (end <= begin) continue;
+                LavaFlowFrameStats.passGpuCompleted(current.passLabels[p],
+                        (end - begin) * period / 1_000_000.0);
+            }
+        }
+    }
+
+    /**
+     * Records the start of a timed pass and returns its slot-local index, or -1 when pass timing is off (or
+     * this recording already holds the maximum). The matching {@link #endTimedPass} closes the pair.
+     */
+    int beginTimedPass(String label) {
+        if (passTimestampPool == 0 || slot.timedPasses >= MAX_TIMED_PASSES) return -1;
+        int pass = slot.timedPasses;
+        slot.passLabels[pass] = label;
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, passTimestampPool,
+                slotIndex * MAX_TIMED_PASSES * 2 + pass * 2);
+        return pass;
+    }
+
+    /** Records the end of the pass started by {@link #beginTimedPass}. */
+    void endTimedPass(int pass) {
+        if (pass < 0) return;
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, passTimestampPool,
+                slotIndex * MAX_TIMED_PASSES * 2 + pass * 2 + 1);
+        slot.timedPasses++;
+    }
+
     private void readGpuTime(int index) {
         if (timestampPool == 0) return;
         try (MemoryStack stack = stackPush()) {
@@ -268,6 +352,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (timestampPool != 0) {
             vkDestroyQueryPool(context.device(), timestampPool, null);
             timestampPool = 0;
+        }
+        if (passTimestampPool != 0) {
+            vkDestroyQueryPool(context.device(), passTimestampPool, null);
+            passTimestampPool = 0;
         }
         commandBuffer = null;
     }
