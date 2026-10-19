@@ -90,6 +90,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // way into legacyFramebuffer, which copies the key it retains, so one array can serve every call and
     // is grown only when the attachment count changes — the same shape as the two above.
     private long[] attachmentScratch = new long[0];
+    // sampledTextures() runs on every descriptor push and on every pass begin, so its list is filled in
+    // place rather than allocated per call. Callers that may re-enter the fill (pushDescriptors ->
+    // splitForSampledTransitions) hand the filled list down instead of calling back in.
+    private final List<LavaFlowGpuTexture> sampledScratch = new ArrayList<>();
+    // The legacy path builds its format/load-op arrays once, at construction; the all-load variant used
+    // when the pass is split is built once too. Both are keyed by the render pass cache, which copies
+    // what it retains, so reusing one pair of arrays is safe.
+    private int[] colorFormats;
+    private int[] colorLoadOps;
+    private long resumeRenderPass;
     private int pendingVertexMask;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
@@ -124,8 +134,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (context.dynamicRendering()) {
             renderPass = 0;
         } else {
-            int[] colorFormats = new int[colors.size()];
-            int[] colorLoadOps = new int[colors.size()];
+            colorFormats = new int[colors.size()];
+            colorLoadOps = new int[colors.size()];
             for (int i = 0; i < colors.size(); i++) {
                 if (colorViews[i] == null) {
                     colorFormats[i] = VK_FORMAT_UNDEFINED;
@@ -295,21 +305,17 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * do not affect render-pass compatibility, so pipelines built against the original stay valid.
      */
     private long resumeRenderPass() {
-        List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
-        int[] colorFormats = new int[colorViews.length];
-        int[] colorLoadOps = new int[colorViews.length];
-        for (int i = 0; i < colorViews.length; i++) {
-            if (colorViews[i] == null) {
-                colorFormats[i] = VK_FORMAT_UNDEFINED;
-                colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            } else {
-                colorFormats[i] = LavaFlowVk.format(colorViews[i].texture().getFormat());
-                colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_LOAD;
-            }
+        if (resumeRenderPass != 0) return resumeRenderPass;
+        // Formats are the ones built at construction; only the load ops differ (all LOAD so the split
+        // does not lose the first half of the pass).
+        for (int i = 0; i < colorLoadOps.length; i++) {
+            if (colorViews[i] != null) colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_LOAD;
         }
         int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
-        return context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD);
+        resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat,
+                VK_ATTACHMENT_LOAD_OP_LOAD);
+        return resumeRenderPass;
     }
 
     /**
@@ -320,14 +326,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * attachment layout: barriers cannot be recorded inside a render pass. Dynamic state, the bound
      * pipeline, and descriptor bindings are command-buffer state and survive the boundary untouched.
      */
-    private void splitForSampledTransitions() {
+    private void splitForSampledTransitions(List<LavaFlowGpuTexture> sampled) {
         LavaFlowFrameStats.passSplit();
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (LavaFlowGpuTexture sampled : sampledTextures()) {
+        for (LavaFlowGpuTexture texture : sampled) {
             int layout = LavaFlowVk.sampledLayout();
-            if (sampled.layout() != layout) {
-                encoder.transition(sampled, layout);
+            if (texture.layout() != layout) {
+                encoder.transition(texture, layout);
             }
         }
         try (MemoryStack stack = stackPush()) {
@@ -612,9 +618,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             descriptorsDirty = false;
             return;
         }
-        for (LavaFlowGpuTexture sampled : sampledTextures()) {
-            if (sampled.layout() != LavaFlowVk.sampledLayout()) {
-                splitForSampledTransitions();
+        List<LavaFlowGpuTexture> sampled = sampledTextures();
+        for (int i = 0; i < sampled.size(); i++) {
+            if (sampled.get(i).layout() != LavaFlowVk.sampledLayout()) {
+                splitForSampledTransitions(sampled);
                 break;
             }
         }
@@ -765,16 +772,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
 
     /** Textures behind the sampled-image uniforms currently bound, in slot order. */
     private List<LavaFlowGpuTexture> sampledTextures() {
-        if (pipeline == null) return List.of();
+        sampledScratch.clear();
+        if (pipeline == null) return sampledScratch;
         List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
-        List<LavaFlowGpuTexture> result = new ArrayList<>();
         for (int i = 0; i < entries.size() && i < uniforms.size(); i++) {
             if (entries.get(i).type() != LavaFlowRenderPipeline.EntryType.SAMPLED_IMAGE) continue;
             if (uniforms.get(i) instanceof TextureViewAndSampler binding) {
-                result.add(((LavaFlowGpuTextureView) binding.view()).texture());
+                sampledScratch.add(((LavaFlowGpuTextureView) binding.view()).texture());
             }
         }
-        return result;
+        return sampledScratch;
     }
 
     private static void unsupported() { throw new UnsupportedOperationException("LavaFlow graphics pipeline binding is not initialized"); }
