@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -48,7 +49,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
     }
 
     private static void check(int result, String operation) {
-        if (result < 0) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result < 0) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 
     private Set<GpuSurface.PresentMode> queryPresentModes() {

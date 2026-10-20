@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -172,7 +173,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     }
 
     private static void check(int result, String operation) {
-        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 
     /**

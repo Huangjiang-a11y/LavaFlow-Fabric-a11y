@@ -20,6 +20,7 @@ import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.*;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.util.shaderc.Shaderc.*;
@@ -438,7 +439,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     boolean dynamicUniforms() { return dynamicUniforms; }
 
     private static void check(int result, String operation) {
-        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 
     List<Entry> entries() { return entries; }

@@ -6,6 +6,7 @@ import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 
 import java.nio.LongBuffer;
 import java.util.OptionalLong;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -23,7 +24,7 @@ final class LavaFlowQueryPool implements GpuQueryPool {
                     .queryType(VK_QUERY_TYPE_TIMESTAMP).queryCount(size);
             LongBuffer out = stack.mallocLong(1);
             int result = vkCreateQueryPool(context.device(), info, null, out);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vkCreateQueryPool failed with VkResult " + result);
+            if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe("vkCreateQueryPool", result));
             pool = out.get(0);
         }
     }
@@ -37,7 +38,7 @@ final class LavaFlowQueryPool implements GpuQueryPool {
             int result = vkGetQueryPoolResults(context.device(), pool, index, 1, value, Long.BYTES,
                     VK_QUERY_RESULT_64_BIT);
             if (result == VK_NOT_READY) return OptionalLong.empty();
-            if (result != VK_SUCCESS) throw new IllegalStateException("vkGetQueryPoolResults failed with VkResult " + result);
+            if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe("vkGetQueryPoolResults", result));
             return OptionalLong.of(value.get(0));
         }
     }

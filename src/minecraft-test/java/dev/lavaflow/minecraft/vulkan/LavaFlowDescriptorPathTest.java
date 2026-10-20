@@ -19,6 +19,7 @@ import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import java.nio.LongBuffer;
 import java.util.Map;
 import java.util.OptionalDouble;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.displayAvailable;
 import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.exposeVulkanLoaderToLwjgl;
@@ -488,7 +489,7 @@ class LavaFlowDescriptorPathTest {
 
     private static void check(int result, String operation) {
         if (result != VK_SUCCESS) {
-            throw new IllegalStateException(operation + " failed with VkResult " + result);
+            throw new IllegalStateException(VulkanException.describe(operation, result));
         }
     }
 }
