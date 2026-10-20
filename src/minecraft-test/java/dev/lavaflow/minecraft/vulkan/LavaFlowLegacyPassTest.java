@@ -9,17 +9,13 @@ import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.ShaderType;
-import com.mojang.renderpearl.api.pipeline.SpvModule;
-import com.mojang.renderpearl.api.pipeline.UniformType;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
-import com.mojang.renderpearl.util.ShaderCompileException;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -174,14 +170,5 @@ class LavaFlowLegacyPassTest {
                 List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
                         ColorTargetState.WRITE_ALL)),
                 PrimitiveTopology.TRIANGLES);
-    }
-
-    private record CompiledShader(String name, String entryPoint, ByteBuffer spv, ShaderType type)
-            implements SpvModule {
-        @Override public void close() {}
-        @Override public SpvModule.Reflection reflect() throws ShaderCompileException {
-            throw new UnsupportedOperationException("reflection is the frontend's job");
-        }
-        @Override public SpvModule.Reflection getReflectionInfoIfAvailable() { return null; }
     }
 }

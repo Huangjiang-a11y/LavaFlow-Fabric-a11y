@@ -12,7 +12,6 @@ import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.displayAvailable
 import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.exposeVulkanLoaderToLwjgl;
 import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.restore;
 import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.setSwitches;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
