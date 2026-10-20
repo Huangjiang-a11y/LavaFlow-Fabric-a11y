@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -133,7 +134,7 @@ final class LavaFlowDescriptorCache {
                     return set;
                 }
                 if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
-                    throw new IllegalStateException("vkAllocateDescriptorSets failed with VkResult " + result);
+                    throw new IllegalStateException(VulkanException.describe("vkAllocateDescriptorSets", result));
                 }
                 poolIndex++;
                 if (poolIndex == pools.size()) pools.add(createPool());
@@ -286,6 +287,6 @@ final class LavaFlowDescriptorCache {
     }
 
     private static void check(int result, String operation) {
-        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 }

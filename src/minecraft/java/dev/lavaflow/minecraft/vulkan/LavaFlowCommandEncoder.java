@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -123,7 +124,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     private static void check(int result, String operation) {
-        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 
     private void createSlots() {
