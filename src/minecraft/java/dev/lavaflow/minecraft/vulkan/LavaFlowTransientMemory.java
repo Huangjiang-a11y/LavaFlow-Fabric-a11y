@@ -123,8 +123,10 @@ final class LavaFlowTransientMemory implements TransientMemory {
         // 每个子区间在 mapped 缓冲内按 reqAlign 对齐，等价于原各 source 独立 allocateMapped 的对齐行为，
         // 因而 copyToBuffer 的 src/dst 偏移仍满足设备对齐要求。
         long reqAlign = Math.max(1, alignment);
-        long total = 0;
-        for (ByteBuffer source : sources) total = Math.addExact(total, source.remaining());
+        // 布局先算准再分配。每个源都要落在 reqAlign 的边界上，所以所需字节数不是 remaining 的
+        // 简单和：这里曾经只累加 remaining，而下面的循环却按 reqAlign 推进 off，末段一旦被对齐
+        // 推过 total，memCopy 就写到 staging 区间之外，踩掉同一映射块里紧随其后的分配。
+        long total = layoutSize(sources, reqAlign);
         GpuBufferSlice.MappedView staging = allocateMapped(total, alignment);
         long base = MemoryUtil.memAddress(staging.data());
         long off = 0;
@@ -306,6 +308,22 @@ final class LavaFlowTransientMemory implements TransientMemory {
             long remainder = value % alignment;
             return remainder == 0 ? value : value + (alignment - remainder);
         }
+    }
+
+    /**
+     * Bytes needed to lay {@code sources} out back to back with every source starting on an
+     * {@code alignment} boundary — the same walk {@link #multiUploadGpu} performs when it copies.
+     *
+     * <p>Kept separate and package-private so a test can pin the number: a naive sum of
+     * {@code remaining()} is short by the padding between sources, and being short here means the
+     * last {@code memCopy} writes past the mapped slice instead of failing.
+     */
+    static long layoutSize(List<ByteBuffer> sources, long alignment) {
+        long end = 0;
+        for (ByteBuffer source : sources) {
+            end = Math.addExact(alignUp(end, alignment), source.remaining());
+        }
+        return end;
     }
 
     private static long alignUp(long value, long alignment) {
