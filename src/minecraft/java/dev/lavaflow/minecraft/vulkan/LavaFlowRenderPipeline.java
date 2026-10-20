@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRPushDescriptor.VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
@@ -398,7 +399,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     boolean dynamicUniforms() { return dynamicUniforms; }
 
     private static void check(int result, String operation) {
-        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+        if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe(operation, result));
     }
 
     List<Entry> entries() { return entries; }

@@ -6,6 +6,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 
 import java.nio.LongBuffer;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -39,7 +40,7 @@ final class LavaFlowGpuTextureView implements GpuTextureView {
                     .baseMipLevel(baseMipLevel).levelCount(mipLevels).baseArrayLayer(0).layerCount(layers);
             LongBuffer out = stack.mallocLong(1);
             int result = vkCreateImageView(context.device(), info, null, out);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vkCreateImageView failed with VkResult " + result);
+            if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe("vkCreateImageView", result));
             view = out.get(0);
         }
         texture.retainView();

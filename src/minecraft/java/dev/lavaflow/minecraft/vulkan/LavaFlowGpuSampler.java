@@ -8,6 +8,7 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.LongBuffer;
 import java.util.OptionalDouble;
+import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -39,7 +40,7 @@ final class LavaFlowGpuSampler implements GpuSampler {
                     .anisotropyEnable(maxAnisotropy > 1).maxAnisotropy(Math.max(1, maxAnisotropy));
             LongBuffer out = stack.mallocLong(1);
             int result = vkCreateSampler(context.device(), info, null, out);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vkCreateSampler failed with VkResult " + result);
+            if (result != VK_SUCCESS) throw new IllegalStateException(VulkanException.describe("vkCreateSampler", result));
             sampler = out.get(0);
         }
     }
