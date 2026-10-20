@@ -20,7 +20,6 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -66,7 +65,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // One slot per uniform the bound pipeline was compiled with, in the same order as the frontend's
     // uniform indices: 26.3 resolves a uniform name to its slot in the frontend and hands the backend
     // (index, value) pairs. Sized in setPipeline, then filled by setUniform.
-    private final List<Object> uniforms = new ArrayList<>();
+    private final ArrayList<Object> uniforms = new ArrayList<>();
     private LavaFlowRenderPipeline pipeline;
     private boolean descriptorsDirty = true;
     private boolean begun;
@@ -90,6 +89,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // way into legacyFramebuffer, which copies the key it retains, so one array can serve every call and
     // is grown only when the attachment count changes — the same shape as the two above.
     private long[] attachmentScratch = new long[0];
+    // Descriptor lookups reuse one key: the array it points at is the scratch above, and allocateAndStore
+    // copies whatever it retains, so the probe never lands in a map. That removes the per-push Key object
+    // (~15 a frame) without touching the cache's identity rules.
+    private final LavaFlowDescriptorCache.Key keyProbe = new LavaFlowDescriptorCache.Key();
     // sampledTextures() runs on every descriptor push and on every pass begin, so its list is filled in
     // place rather than allocated per call. Callers that may re-enter the fill (pushDescriptors ->
     // splitForSampledTransitions) hand the filled list down instead of calling back in.
@@ -435,8 +438,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         this.pipeline = lavaPipeline;
         // One slot per compiled uniform; the frontend replays the uniforms it already holds right after
         // this call, and 26.3 resolves names to slots there rather than here.
+        int uniformCount = lavaPipeline.entries().size();
         uniforms.clear();
-        uniforms.addAll(Collections.nCopies(lavaPipeline.entries().size(), null));
+        // Capacity is kept between passes, so only the first pass allocates; the fill avoids the
+        // nCopies wrapper and its iterator that the clear-and-addAll form produced on every pass.
+        uniforms.ensureCapacity(uniformCount);
+        for (int i = 0; i < uniformCount; i++) uniforms.add(null);
         if (begun) recordPipelineBind();
         descriptorsDirty = true;
     }
@@ -693,7 +700,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             }
         }
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
-        LavaFlowDescriptorCache.Key key = new LavaFlowDescriptorCache.Key(pipeline.descriptorSetLayout(), keyValues);
+        LavaFlowDescriptorCache.Key key = keyProbe.reset(pipeline.descriptorSetLayout(), keyValues);
         long descriptorSet = cache.lookup(key);
         boolean reused = descriptorSet != 0;
         if (reused) LavaFlowFrameStats.descriptorSetReused();

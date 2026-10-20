@@ -50,6 +50,7 @@ final class LavaFlowDescriptorCache {
     // Reused across buffer-view lookups: the key is only read on lookup, and a stored key owns its
     // array (see Key.copy). Not thread-safe, like the rest of this cache — it lives on the render thread.
     private final long[] bufferViewKey = new long[3];
+    private final Key bufferViewProbe = new Key();
     private final WriteScratch writeScratch = new WriteScratch();
     private int poolIndex;
 
@@ -62,14 +63,29 @@ final class LavaFlowDescriptorCache {
 
     /** Identity of a cached object: the layout or format it was built for, plus the resources in it. */
     static final class Key {
-        private final long owner;
-        private final long[] values;
-        private final int hash;
+        private long owner;
+        private long[] values;
+        private int hash;
 
         Key(long owner, long[] values) {
             this.owner = owner;
             this.values = values;
             this.hash = 31 * Long.hashCode(owner) + Arrays.hashCode(values);
+        }
+
+        /** For {@linkplain #reset reusable probes} only; a key that is retained must come from the constructor. */
+        Key() {}
+
+        /**
+         * Retargets this key at {@code owner} and {@code values}. Only ever called on the per-caller probe used
+         * for lookups: {@link #allocateAndStore} copies the key it retains, so a probe never ends up in a map
+         * where a later reset could corrupt its hash.
+         */
+        Key reset(long owner, long[] values) {
+            this.owner = owner;
+            this.values = values;
+            this.hash = 31 * Long.hashCode(owner) + Arrays.hashCode(values);
+            return this;
         }
 
         @Override public boolean equals(Object other) {
@@ -130,7 +146,7 @@ final class LavaFlowDescriptorCache {
         bufferViewKey[0] = buffer;
         bufferViewKey[1] = offset;
         bufferViewKey[2] = length;
-        Key probe = new Key(format, bufferViewKey);
+        Key probe = bufferViewProbe.reset(format, bufferViewKey);
         Long cached = bufferViews.get(probe);
         if (cached != null) return cached;
         try (MemoryStack stack = stackPush()) {
