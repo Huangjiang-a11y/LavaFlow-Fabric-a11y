@@ -17,12 +17,9 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
-import com.mojang.renderpearl.backend.api.SpvModule;
-import com.mojang.renderpearl.util.ShaderCompileException;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -208,18 +205,5 @@ class LavaFlowRebindElisionTest {
                 List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
                         ColorTargetState.WRITE_ALL)),
                 PrimitiveTopology.TRIANGLES);
-    }
-
-    /**
-     * The backend reads only {@code spv()} and {@code type()} while compiling; the caller
-     * that owns the module (here: this test, standing in for the frontend) releases it
-     * once {@code finishCompile()} returns, so closing is a no-op.
-     */
-    private record CompiledShader(ByteBuffer spv, ShaderType type) implements SpvModule {
-        @Override public void close() {}
-        @Override public Reflection reflect() throws ShaderCompileException {
-            throw new UnsupportedOperationException("reflection is the frontend's job");
-        }
-        @Override public Reflection getReflectionInfoIfAvailable() { return null; }
     }
 }
