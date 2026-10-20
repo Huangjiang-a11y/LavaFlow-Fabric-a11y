@@ -84,6 +84,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     // way into legacyFramebuffer, which copies the key it retains, so one array can serve every call and
     // is grown only when the attachment count changes — the same shape as the two above.
     private long[] attachmentScratch = new long[0];
+    // Descriptor lookups reuse one key: the array it points at is the scratch above, and allocateAndStore
+    // copies whatever it retains, so the probe never lands in a map. That removes the per-push Key object
+    // (~15 a frame) without touching the cache's identity rules.
+    private final LavaFlowDescriptorCache.Key keyProbe = new LavaFlowDescriptorCache.Key();
     // The legacy path builds its format/load-op arrays once, at construction; the all-load variant used
     // when the pass is split is built once too. Both are keyed by the render pass cache, which copies
     // what it retains, so reusing one pair of arrays is safe.
@@ -713,7 +717,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             }
         }
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
-        LavaFlowDescriptorCache.Key key = new LavaFlowDescriptorCache.Key(pipeline.descriptorSetLayout(), keyValues);
+        LavaFlowDescriptorCache.Key key = keyProbe.reset(pipeline.descriptorSetLayout(), keyValues);
         long descriptorSet = cache.lookup(key);
         boolean reused = descriptorSet != 0;
         if (reused) LavaFlowFrameStats.descriptorSetReused();
