@@ -87,8 +87,18 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
             MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
-            VkMappedMemoryRange flushRange = VkMappedMemoryRange.calloc(stack).sType$Default()
-                    .memory(memory).offset(0).size(VK_WHOLE_SIZE);
+            // 只刷这次写到的映射区间。原来用 VK_WHOLE_SIZE，范围从 0 一直盖到 allocation 末尾，
+            // 而映射只有 [offset, offset+remaining)，严格说已经越过映射；Mali 上整块冲刷也比按
+            // 区间贵。offset 不是 nonCoherentAtomSize 的倍数时不缩小 —— 那会从映射之外开始刷，
+            // 这种情况下退回原来的整块范围。size 不必是 atom 的倍数：它正好延伸到映射末尾，
+            // 这是规范允许的例外。
+            long atom = context.properties().limits().nonCoherentAtomSize();
+            VkMappedMemoryRange flushRange = VkMappedMemoryRange.calloc(stack).sType$Default().memory(memory);
+            if (atom <= 0 || offset % atom == 0) {
+                flushRange.offset(offset).size(source.remaining());
+            } else {
+                flushRange.offset(0).size(VK_WHOLE_SIZE);
+            }
             vkFlushMappedMemoryRanges(context.device(), flushRange);
             vkUnmapMemory(context.device(), memory);
         }
