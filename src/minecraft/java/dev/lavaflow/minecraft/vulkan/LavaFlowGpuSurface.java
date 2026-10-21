@@ -206,6 +206,10 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
         };
     }
 
+    // 26.4-snapshot-5 asks every surface whether it is a DXGI one. LavaFlow presents through a
+    // plain Vulkan swapchain, so the answer is always no.
+    @Override public boolean isDXGI() { return false; }
+
     @Override public boolean isSuboptimal() { return suboptimal; }
 
     @Override

@@ -77,11 +77,13 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // draws into a plain CPU array instead of an indirect-parameter buffer, which on tile-based GPUs
         // is host-visible memory the GPU has to read back once per draw.
         boolean multiDrawDirectInterleaved = !Boolean.getBoolean("lavaflow.forceNoMultiDrawDirect");
-        // 26.3 prepended wireframeFillMode to DeviceFeatures; the remaining seven keep their 26.2
-        // meaning and values. wireframeFillMode reports the Vulkan fillModeNonSolid capability, which
+        // 26.4-snapshot-5 prepended dxgiSurface to DeviceFeatures; the remaining eight keep their
+        // 26.3 meaning and values. dxgiSurface reports whether a D3D12 swapchain can be presented,
+        // and LavaFlow only ever presents a plain Vulkan swapchain, so it stays false.
+        // wireframeFillMode reports the Vulkan fillModeNonSolid capability, which
         // is what actually gates PolygonMode.LINE pipelines in LavaFlowRenderPipeline.
-        DeviceFeatures features = new DeviceFeatures(context.fillModeNonSolid(), false, multiDrawDirectInterleaved,
-                false, true, true, false, true);
+        DeviceFeatures features = new DeviceFeatures(false, context.fillModeNonSolid(), false,
+                multiDrawDirectInterleaved, false, true, true, false, true);
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -107,11 +109,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
                 "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
-                // All five hints stay false. The fifth is 26.4's isExplicitDepthRequired: LavaFlow's
+                // All four hints stay false. The third is 26.4's isExplicitDepthRequired: LavaFlow's
                 // legacy render-pass path accepts a pass with no depth attachment, which is exactly the
                 // case that hint exists to flag. The indirect-draw hint stays false too, because that
                 // emulation is exercised by the baselineDevice switch rather than being a known-bad path.
-                new HintsAndWorkarounds(false, false, false, false, false), type);
+                // 26.4-snapshot-5 dropped needsImeFullscreenWorkaround, the one that used to be
+                // first: it flags that the IME needs a fullscreen workaround, a Windows input
+                // concern a Vulkan backend never reports.
+                new HintsAndWorkarounds(false, false, false, false), type);
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
@@ -191,8 +196,12 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
     synchronized void completePending() { completeSubmit(detachSubmitBatch(null)); }
 
-    @Override public GpuSurfaceBackend createSurface(long window, BooleanSupplier isIconified) {
+    @Override public GpuSurfaceBackend createSurface(long window, BooleanSupplier isIconified, boolean dxgi) {
         if (window == 0) throw new IllegalArgumentException("window must be valid");
+        // 26.4-snapshot-5 added the dxgi flag: the caller asks for a D3D12 swapchain rather than a
+        // plain window surface. LavaFlow has only the latter, and DeviceFeatures.dxgiSurface is
+        // false, so the request is refused the way Minecraft's own Vulkan backend refuses it.
+        if (dxgi) throw new IllegalArgumentException("DXGI surface unavailable");
         // isIconified is unused: LavaFlow throttles through the swapchain present mode instead.
         return new LavaFlowGpuSurface(this, window);
     }
