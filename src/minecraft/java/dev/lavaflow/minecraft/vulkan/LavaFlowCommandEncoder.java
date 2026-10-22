@@ -308,7 +308,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     slotIndex * 2 + 1);
         }
         check(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer");
-        transientMemory.flushMappedRanges();
         try (MemoryStack stack = stackPush()) {
             VkSubmitInfo submit = VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(commandBuffer));
             if (waitSemaphore != NULL) {

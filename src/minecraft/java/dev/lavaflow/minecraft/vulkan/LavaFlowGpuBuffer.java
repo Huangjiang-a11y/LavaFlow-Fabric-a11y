@@ -87,19 +87,10 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
             MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
-            // 只刷这次写到的映射区间。原来用 VK_WHOLE_SIZE，范围从 0 一直盖到 allocation 末尾，
-            // 而映射只有 [offset, offset+remaining)，严格说已经越过映射；Mali 上整块冲刷也比按
-            // 区间贵。offset 不是 nonCoherentAtomSize 的倍数时不缩小 —— 那会从映射之外开始刷，
-            // 这种情况下退回原来的整块范围。size 不必是 atom 的倍数：它正好延伸到映射末尾，
-            // 这是规范允许的例外。
-            long atom = context.properties().limits().nonCoherentAtomSize();
-            VkMappedMemoryRange flushRange = VkMappedMemoryRange.calloc(stack).sType$Default().memory(memory);
-            if (atom <= 0 || offset % atom == 0) {
-                flushRange.offset(offset).size(source.remaining());
-            } else {
-                flushRange.offset(0).size(VK_WHOLE_SIZE);
-            }
-            vkFlushMappedMemoryRanges(context.device(), flushRange);
+            // 不做手工 flush：映射型 buffer 的 memory type 被 findMemoryType 强制要求
+            // HOST_COHERENT，一致内存上的 vkFlushMappedMemoryRanges 按规范是 no-op，而它的
+            // 区间约束（size 为 nonCoherentAtomSize 的倍数，或 offset+size 恰好等于
+            // VkDeviceMemory 的大小）在这种小块上传上很难同时满足，只会换来 validation 噪音。
             vkUnmapMemory(context.device(), memory);
         }
     }
@@ -130,41 +121,6 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         mappedPhysicalBase = 0;
         vkUnmapMemory(context.device(), memory);
         mappingCount = 0;
-    }
-
-    // Ensures CPU writes to this mapped buffer are visible to the GPU. Required on some mobile
-    // drivers (Mali) where HOST_COHERENT writes are not reliably visible without an explicit flush.
-    // 整块 flush：确保 CPU 写入对 GPU 可见；部分移动驱动（Mali）非 HOST_COHERENT 时需要显式 flush。
-    void flushMapped() {
-        if (mappingCount == 0) return;
-        try (MemoryStack stack = stackPush()) {
-            VkMappedMemoryRange range = VkMappedMemoryRange.calloc(stack).sType$Default()
-                    .memory(memory).offset(0).size(VK_WHOLE_SIZE);
-            vkFlushMappedMemoryRanges(context.device(), range);
-        }
-    }
-
-    // 按脏区间 flush：Vulkan 要求 offset/size 对齐到 nonCoherentAtomSize，否则部分移动驱动
-    // 会拒绝或漏刷缓存行。这里把调用方给的区间按 atom 向下/向上对齐，并 clamp 到映射范围。
-    void flushMapped(long offset, long length) {
-        if (mappingCount == 0) return;
-        if (length <= 0 || length >= VK_WHOLE_SIZE) {
-            flushMapped();
-            return;
-        }
-        long atom = context.properties().limits().nonCoherentAtomSize();
-        if (atom <= 0) atom = 1;
-        long alignedOffset = (offset / atom) * atom;
-        long end = ((offset + length + atom - 1) / atom) * atom;
-        long mappedBytes = size();
-        if (end > mappedBytes) end = mappedBytes;
-        long alignedLength = end - alignedOffset;
-        if (alignedLength <= 0) return;
-        try (MemoryStack stack = stackPush()) {
-            VkMappedMemoryRange range = VkMappedMemoryRange.calloc(stack).sType$Default()
-                    .memory(memory).offset(alignedOffset).size(alignedLength);
-            vkFlushMappedMemoryRanges(context.device(), range);
-        }
     }
 
     @Override public synchronized boolean isClosed() { return closed; }

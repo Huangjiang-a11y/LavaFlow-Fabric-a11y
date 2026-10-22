@@ -28,9 +28,6 @@ final class LavaFlowTransientMemory implements TransientMemory {
         final LavaFlowGpuBuffer buffer;
         final GpuBufferSlice.MappedView mapping;
         long offset;
-        boolean touched;
-        long dirtyFrom = Long.MAX_VALUE;
-        long dirtyTo = 0;
 
         MappedBlock(LavaFlowGpuBuffer buffer, GpuBufferSlice.MappedView mapping) {
             this.buffer = buffer;
@@ -118,8 +115,8 @@ final class LavaFlowTransientMemory implements TransientMemory {
 
     @Override public List<GpuBufferSlice> multiUploadGpu(List<ByteBuffer> sources, long alignment, int usage) {
         if (sources.isEmpty()) return List.of();
-        // 合并为单次大 staging 上传再分批 copy：把映射分配与帧末 flush 从 O(n) 降到 O(1)，
-        // 与 flushMappedRanges 的 per-block 收窄协同（只产生一个 touched 的 mapped block）。
+        // 合并为单次大 staging 上传再分批 copy：映射分配的次数从 O(n) 降到 O(1)。
+        // 一致内存上不做手工 flush，数据写进块里即可被 GPU 看到。
         // 每个子区间在 mapped 缓冲内按 reqAlign 对齐，等价于原各 source 独立 allocateMapped 的对齐行为，
         // 因而 copyToBuffer 的 src/dst 偏移仍满足设备对齐要求。
         long reqAlign = Math.max(1, alignment);
@@ -166,9 +163,6 @@ final class LavaFlowTransientMemory implements TransientMemory {
             offset = 0;
         }
         block.offset = offset + size;
-        block.touched = true;
-        if (offset < block.dirtyFrom) block.dirtyFrom = offset;
-        if (offset + size > block.dirtyTo) block.dirtyTo = offset + size;
         ByteBuffer data = MemoryUtil.memByteBuffer(
                 MemoryUtil.memAddress(block.mapping.data()) + offset, (int)size);
         return new GpuBufferSlice.MappedView(block.buffer.slice(offset, size), data, NOOP);
@@ -212,14 +206,6 @@ final class LavaFlowTransientMemory implements TransientMemory {
         return allocation.slice();
     }
 
-    void flushMappedRanges() {
-        for (MappedBlock block : mappedBlocks) {
-            if (block.touched && block.dirtyFrom < Long.MAX_VALUE) {
-                block.buffer.flushMapped(block.dirtyFrom, block.dirtyTo - block.dirtyFrom);
-            }
-        }
-    }
-
     Retired retire() {
         List<ByteBuffer> slabs = cpuSlabs.detach();
         if (slabs.isEmpty()) return null;
@@ -227,7 +213,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
     }
 
     void recycle() {
-        for (MappedBlock block : mappedBlocks) { block.offset = 0; block.touched = false; block.dirtyFrom = Long.MAX_VALUE; block.dirtyTo = 0; }
+        for (MappedBlock block : mappedBlocks) block.offset = 0;
         for (GpuBlock block : gpuBlocks) block.offset = 0;
         mappedBlockIndex = mappedBlocks.isEmpty() ? -1 : 0;
         gpuBlockIndex = gpuBlocks.isEmpty() ? -1 : 0;
