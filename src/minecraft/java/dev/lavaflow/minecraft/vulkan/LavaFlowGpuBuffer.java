@@ -29,10 +29,11 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     private int memoryTypeIndex;
     private final long buffer;
     private final long memory;
-    private int mappingCount;
-    // Physical base of the mapping such that address of buffer position x = mappedPhysicalBase + x.
-    // Zero when the buffer is not mapped. Volatile so the render-thread draw path can read it without
-    // a lock: map() and unmap() are synchronized but drawIndexedIndirect runs on the same thread.
+    private int liveViews;
+    // Physical base of the buffer's single persistent mapping, such that the address of buffer position x
+    // is mappedPhysicalBase + x. Zero until the buffer is first mapped and only cleared by close(). Volatile
+    // so the render-thread draw path can read it without a lock: write()/map() are synchronized but
+    // drawIndexedIndirect runs on the same thread.
     volatile long mappedPhysicalBase;
     private boolean closed;
 
@@ -103,19 +104,16 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (closed) throw new IllegalStateException("Buffer is closed");
         if ((usage() & GpuBuffer.USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not host writable");
         if (offset < 0 || offset + source.remaining() > size()) throw new IllegalArgumentException("Write exceeds buffer");
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pointer = stack.mallocPointer(1);
-            check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
-            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
-            // 不做手工 flush。映射型 buffer 的 memory type 被 findMemoryType 强制要求 HOST_COHERENT
-            // （见构造函数里的 requiredFlags），一致内存上的 vkFlushMappedMemoryRanges 按规范是 no-op，
-            // 却仍要满足 VUID-VkMappedMemoryRange 的区间约束：size 必须是 nonCoherentAtomSize 的倍数，
-            // 或 offset+size 恰好等于 VkDeviceMemory 的大小。writeToTexture 的字节数很少是 atom 的倍数，
-            // 驱动又通常把 allocation 补齐到更大，于是这条 flush 会被 validation 报
-            // VUID-VkMappedMemoryRange-size-01390。Minecraft 自带的 Vulkan 后端
-            // （VMA + vmaMapMemory/vmaUnmapMemory）同样从不 flush，只靠一致内存。
-            vkUnmapMemory(context.device(), memory);
-        }
+        // 写进常驻映射，不再每次 vkMapMemory/vkUnmapMemory 一进一出。
+        // 不做手工 flush：映射型 buffer 的 memory type 被 findMemoryType 强制要求 HOST_COHERENT
+        // （见构造函数里的 requiredFlags），一致内存上的 vkFlushMappedMemoryRanges 按规范是 no-op，
+        // 却仍要满足 VUID-VkMappedMemoryRange 的区间约束：size 必须是 nonCoherentAtomSize 的倍数，
+        // 或 offset+size 恰好等于 VkDeviceMemory 的大小。写侧上传的字节数很少是 atom 的倍数，驱动又
+        // 通常把 allocation 补齐到更大，于是这条 flush 会被 validation 报
+        // VUID-VkMappedMemoryRange-size-01390。Minecraft 自带的 Vulkan 后端
+        // （VMA + vmaMapMemory/vmaUnmapMemory）同样从不 flush，只靠一致内存。
+        long base = ensureMapped();
+        MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + offset, source.remaining());
     }
 
     @Override public synchronized GpuBufferSlice.MappedView map(long offset, long length, boolean read, boolean write) {
@@ -125,33 +123,50 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (write && (usage() & GpuBuffer.USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not writable");
         if (offset < 0 || length < 0 || offset + length > size()) throw new IllegalArgumentException("Invalid mapped range");
         if (length > Integer.MAX_VALUE) throw new IllegalArgumentException("Mappings larger than 2 GiB are unsupported");
-        if (mappingCount != 0) throw new IllegalStateException("Concurrent mappings of one buffer are unsupported");
-        try (MemoryStack stack = stackPush()) {
-            PointerBuffer pointer = stack.mallocPointer(1);
-            check(vkMapMemory(context.device(), memory, offset, length, 0, pointer), "vkMapMemory");
-            mappingCount = 1;
-            mappedPhysicalBase = pointer.get(0) - offset;
-            ByteBuffer data = MemoryUtil.memByteBuffer(pointer.get(0), (int)length);
-            AtomicBoolean released = new AtomicBoolean();
-            return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
-                if (released.compareAndSet(false, true)) unmap();
-            });
-        }
+        // 与 write() 共用同一个常驻映射：一块 VkDeviceMemory 同时只能有一个映射，所以这里不再自己
+        // vkMapMemory，只按 offset 取视图。视图可以同时开多个，各自 close 时只减计数。
+        long base = ensureMapped();
+        ByteBuffer data = MemoryUtil.memByteBuffer(base + offset, (int) length);
+        liveViews++;
+        AtomicBoolean released = new AtomicBoolean();
+        return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
+            if (released.compareAndSet(false, true)) {
+                synchronized (LavaFlowGpuBuffer.this) { liveViews--; }
+            }
+        });
     }
 
-    private synchronized void unmap() {
-        if (mappingCount == 0) return;
-        mappedPhysicalBase = 0;
-        vkUnmapMemory(context.device(), memory);
-        mappingCount = 0;
+    /**
+     * Establishes the buffer's single persistent mapping and returns its base.
+     *
+     * <p>Vulkan allows one mapping per VkDeviceMemory, so {@code write} and {@code map} share this one
+     * rather than each mapping a range of its own. It covers the whole buffer, is created on first use,
+     * and is released by {@link #close()}. It also makes {@link #mappedPhysicalBase} meaningful for the
+     * indirect-draw fallback: once the buffer has been written from the host, that view holds the same
+     * bytes the GPU reads, because every mappable buffer is HOST_COHERENT.
+     */
+    private long ensureMapped() {
+        long base = mappedPhysicalBase;
+        if (base != 0) return base;
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            check(vkMapMemory(context.device(), memory, 0, size, 0, pointer), "vkMapMemory");
+            base = pointer.get(0);
+        }
+        mappedPhysicalBase = base;
+        return base;
     }
 
     @Override public synchronized boolean isClosed() { return closed; }
 
     @Override public synchronized void close() {
         if (closed) return;
-        if (mappingCount != 0) throw new IllegalStateException("Cannot close a mapped buffer");
+        if (liveViews != 0) throw new IllegalStateException("Cannot close a buffer with an open mapping");
         closed = true;
+        if (mappedPhysicalBase != 0) {
+            vkUnmapMemory(context.device(), memory);
+            mappedPhysicalBase = 0;
+        }
         LavaFlowFrameStats.bufferRetired();
         device.invalidateDescriptorCache(buffer);
         device.defer(this::destroyNow);
