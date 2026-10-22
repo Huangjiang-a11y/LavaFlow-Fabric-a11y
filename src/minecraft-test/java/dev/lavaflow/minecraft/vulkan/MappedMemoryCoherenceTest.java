@@ -74,6 +74,20 @@ class MappedMemoryCoherenceTest {
                 }
             }
 
+            // 再写一次到同一映射的另一个位置：常驻映射不能因此在两次 write 之间被拆掉，也不能把
+            // 第一次写的内容冲掉。原来的实现每次 write 都 map/unmap，这一点只是"碰巧"成立。
+            ByteBuffer tail = ByteBuffer.allocateDirect(16);
+            for (int i = 0; i < 16; i++) tail.put(i, (byte) 0x5A);
+            buffer.write(7, tail);
+
+            try (GpuBufferSlice.MappedView view = buffer.map(0, ODD_LENGTH, true, false)) {
+                ByteBuffer read = view.data();
+                for (int i = 0; i < ODD_LENGTH; i++) {
+                    byte expected = i >= 7 && i < 23 ? (byte) 0x5A : (byte) (i * 7);
+                    assertEquals(expected, read.get(i), "第二次写入后第 " + i + " 字节不对");
+                }
+            }
+
             buffer.close();
             device.completePending();
             device.close();
