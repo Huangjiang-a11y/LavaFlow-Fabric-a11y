@@ -164,9 +164,12 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (closed) return;
         if (liveViews != 0) throw new IllegalStateException("Cannot close a buffer with an open mapping");
         closed = true;
-        if (DEBUG_BUFFERS) System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO,
-                "buffer close: handle=" + buffer + " usage=0x" + Integer.toHexString(usage) + " size=" + size
-                        + " frame=" + LavaFlowFrameStats.totalFrames());
+        if (DEBUG_BUFFERS) {
+            String msg = "buf close h=" + Long.toHexString(buffer) + " u=0x" + Integer.toHexString(usage)
+                    + " sz=" + size + " f=" + LavaFlowFrameStats.totalFrames();
+            System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO, msg);
+            device.recordDebug(msg);
+        }
         if (mappedPhysicalBase != 0) {
             vkUnmapMemory(context.device(), memory);
             mappedPhysicalBase = 0;
@@ -177,8 +180,11 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     }
 
     private void destroyNow() {
-        if (DEBUG_BUFFERS) System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO,
-                "buffer destroyNow: handle=" + buffer + " frame=" + LavaFlowFrameStats.totalFrames());
+        if (DEBUG_BUFFERS) {
+            String msg = "buf destroy h=" + Long.toHexString(buffer) + " f=" + LavaFlowFrameStats.totalFrames();
+            System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO, msg);
+            device.recordDebug(msg);
+        }
         vkDestroyBuffer(context.device(), buffer, null);
         vkFreeMemory(context.device(), memory, null);
     }

@@ -25,6 +25,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private final DeviceInfo deviceInfo;
     private final LavaFlowCommandEncoder commandEncoder;
     private List<AutoCloseable> deferred = new ArrayList<>();
+    // F3 调试读数：最近的诊断事件环形缓冲，-Dlavaflow.debugBuffers 打开时填充。
+    // getLastDebugMessages() 返回它的快照，前端每帧读一次并显示在 F3 上，
+    // 这样事件和视频画面严格同步，不会像日志时间戳那样不同步。
+    private final Deque<String> debugMessages = new ArrayDeque<>();
+    private static final int DEBUG_MESSAGE_CAP = 8;
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
     // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
@@ -241,7 +246,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         commandEncoder.writeToBuffer(buffer.slice(), initialData);
         return buffer;
     }
-    @Override public List<String> getLastDebugMessages() { return List.of(); }
+    @Override public synchronized List<String> getLastDebugMessages() {
+        return new ArrayList<>(debugMessages);
+    }
+
+    public synchronized void recordDebug(String message) {
+        if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
+        debugMessages.addLast(message);
+    }
     /**
      * Whether the frontend resolves the names of the objects it asks us to create.
      *

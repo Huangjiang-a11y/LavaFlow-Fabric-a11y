@@ -590,9 +590,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // draw itself. When the parameters are in host memory that is currently mapped, read them here
         // and record plain indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
-        if (Boolean.getBoolean("lavaflow.debugBuffers")) System.getLogger(LavaFlowRenderPass.class.getName()).log(
-                System.Logger.Level.INFO, "drawIndexedIndirect: handle=" + parameters.handle()
-                        + " hostBase=" + hostBase + " frame=" + LavaFlowFrameStats.totalFrames());
+        if (Boolean.getBoolean("lavaflow.debugBuffers")) {
+            String msg = "indirect h=" + Long.toHexString(parameters.handle()) + " hostBase=" + hostBase
+                    + " f=" + LavaFlowFrameStats.totalFrames();
+            System.getLogger(LavaFlowRenderPass.class.getName()).log(System.Logger.Level.INFO, msg);
+            encoder.device().recordDebug(msg);
+        }
         if (hostBase == 0) {
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
