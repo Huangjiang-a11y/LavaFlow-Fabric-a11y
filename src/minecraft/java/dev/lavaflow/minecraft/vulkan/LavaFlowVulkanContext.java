@@ -634,6 +634,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * are very slow, and host-cached. Which one a buffer wants depends on whether anything reads it
      * back, so the caller states a preference and falls back to any match.
      */
+    /** The property flags of one memory type, for callers that need to state which heap they got. */
+    int memoryTypeFlags(int index) {
+        ensureMemoryProperties();
+        return memoryTypeFlags[index];
+    }
+
     int findMemoryType(int typeBits, int requiredFlags, int preferredFlags) {
         ensureMemoryProperties();
         int fallback = -1;

@@ -176,15 +176,26 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 failure = new RuntimeException(e);
             }
         }
-        for (Runnable callback : batch.callbacks) callback.run();
-        completingBatch = null;
-        // The only holder of a batch is the submit slot, and it drops its reference the moment this
-        // returns, so the lists are free to hand out again. Clearing is part of that: a recycled list
-        // must not carry the previous batch's contents.
-        batch.resources.clear();
-        batch.callbacks.clear();
-        freeResourceLists.push(batch.resources);
-        freeCallbackLists.push(batch.callbacks);
+        try {
+            for (int i = 0; i < batch.callbacks.size(); i++) {
+                try {
+                    batch.callbacks.get(i).run();
+                } catch (Exception e) {
+                    if (failure == null) failure = new RuntimeException(e);
+                }
+            }
+        } finally {
+            // 必须无条件执行：回调一旦抛异常而这里被跳过，completingBatch 会永远停在非 null，
+            // 之后的 defer() 会把资源塞进一个已经回收完的批次，两个列表也再不会回到池里。
+            completingBatch = null;
+            // The only holder of a batch is the submit slot, and it drops its reference the moment this
+            // returns, so the lists are free to hand out again. Clearing is part of that: a recycled list
+            // must not carry the previous batch's contents.
+            batch.resources.clear();
+            batch.callbacks.clear();
+            freeResourceLists.push(batch.resources);
+            freeCallbackLists.push(batch.callbacks);
+        }
         if (failure != null) throw failure;
     }
     synchronized void completePending() { completeSubmit(detachSubmitBatch(null)); }
