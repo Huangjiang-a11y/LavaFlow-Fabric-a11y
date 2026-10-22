@@ -28,11 +28,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     // F3 调试读数：最近的诊断事件环形缓冲，-Dlavaflow.debugBuffers 打开时填充。
     // getLastDebugMessages() 返回它的快照，前端每帧读一次并显示在 F3 上，
     // 这样事件和视频画面严格同步，不会像日志时间戳那样不同步。
-    private final Deque<String> debugMessages = new ArrayDeque<>();
+    // -Dlavaflow.debugBuffers：诊断事件写入 LavaFlow 自己的 F3 栏目（LavaFlowBufferDebugEntry），
+    // 不追加到任何现有栏目、不写主日志。环形缓冲是静态的，因为 F3 条目没有 device 引用。
+    public static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
+    private static final Deque<String> debugMessages = new ArrayDeque<>();
     private static final int DEBUG_MESSAGE_CAP = 8;
-    // -Dlavaflow.debugBuffers：诊断事件只写入 F3 环形缓冲（getLastDebugMessages），
-    // 与画面同帧显示，不追加到主日志、不写独立文件。
-    static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
     // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
@@ -249,14 +249,16 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         commandEncoder.writeToBuffer(buffer.slice(), initialData);
         return buffer;
     }
-    @Override public synchronized List<String> getLastDebugMessages() {
-        return new ArrayList<>(debugMessages);
-    }
+    @Override public List<String> getLastDebugMessages() { return List.of(); }
 
-    public synchronized void recordDebug(String message) {
-        // 仅写入 F3 环形缓冲，和画面同帧，不写主日志/独立文件
+    public static synchronized void recordDebug(String message) {
         if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
         debugMessages.addLast(message);
+    }
+
+    /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
+    public static synchronized List<String> debugMessages() {
+        return new ArrayList<>(debugMessages);
     }
     /**
      * Whether the frontend resolves the names of the objects it asks us to create.

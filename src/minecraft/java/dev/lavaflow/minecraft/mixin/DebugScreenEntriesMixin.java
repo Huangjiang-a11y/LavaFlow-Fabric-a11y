@@ -1,5 +1,6 @@
 package dev.lavaflow.minecraft.mixin;
 
+import dev.lavaflow.minecraft.LavaFlowBufferDebugEntry;
 import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
 import net.minecraft.client.core.registries.ClientRegistries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntries;
@@ -28,6 +29,11 @@ abstract class DebugScreenEntriesMixin {
     @Inject(method = "bootstrap", at = @At("TAIL"))
     private static void lavaflow$registerEntry(Registry<DebugScreenEntry> registry,
                                                CallbackInfoReturnable<Object> callback) {
+        ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
+                LavaFlowBufferDebugEntry.ID);
+        if (!registry.containsKey(bufferKey)) {
+            Registry.register(registry, bufferKey, new LavaFlowBufferDebugEntry());
+        }
         ResourceKey<DebugScreenEntry> key = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowGpuDebugEntry.ID);
         if (!registry.containsKey(key)) {
