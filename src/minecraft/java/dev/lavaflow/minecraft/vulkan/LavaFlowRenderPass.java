@@ -188,7 +188,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (!LAYOUT_DEBUG.isEmpty()) debugValidateLayouts();
         // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
         // would put pipeline work between the tile load and the tile store this is meant to measure.
-        timedPass = encoder.beginTimedPass(passLabel());
+        timedPass = encoder.beginTimedPass(this::passLabel);
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, false);
             else beginLegacy(stack, false);
@@ -209,7 +209,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             pendingVertexMask = 0;
         }
         if (pendingIndexType >= 0) {
+            LavaFlowFrameStats.indexBufferBindRecorded();
             vkCmdBindIndexBuffer(encoder.commandBuffer(), pendingIndexBuffer, 0, pendingIndexType);
+            encoder.recordIndexBound(pendingIndexBuffer, pendingIndexType);
             pendingIndexType = -1;
         }
     }
@@ -515,8 +517,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void setIndexBuffer(GpuBuffer buffer, IndexType type) {
         long handle = ((LavaFlowGpuBuffer) buffer).handle();
         int vkType = type == IndexType.SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+        // Same bargain as setVertexBuffer: the request is not hidden from the frontend's counters, only
+        // the redundant vkCmdBindIndexBuffer is dropped. The binding outlives the pass it was recorded
+        // in, so the question goes to the encoder.
+        boolean repeated = encoder.indexBound(handle, vkType);
+        LavaFlowFrameStats.indexBufferBindCalled(repeated);
+        if (repeated) return;
         if (begun) {
+            LavaFlowFrameStats.indexBufferBindRecorded();
             vkCmdBindIndexBuffer(encoder.commandBuffer(), handle, 0, vkType);
+            encoder.recordIndexBound(handle, vkType);
         } else {
             pendingIndexBuffer = handle;
             pendingIndexType = vkType;
