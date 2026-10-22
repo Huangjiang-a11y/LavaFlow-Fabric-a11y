@@ -35,6 +35,7 @@ public final class LavaFlowFrameStats {
     private static long previousFrameNanos;
     private static long lastReportNanos;
     private static long totalFrames;
+    public static long totalFrames() { return totalFrames; }
     private static long descriptorSets;
     private static long descriptorSetsAtReport;
     private static long descriptorHits;

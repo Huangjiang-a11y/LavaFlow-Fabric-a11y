@@ -21,6 +21,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
 final class LavaFlowGpuBuffer implements GpuBuffer {
+    private static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
     private final LavaFlowDevice device;
     private final LavaFlowVulkanContext context;
     // 26.3 turned GpuBuffer into an interface; these two were the former abstract base class fields.
@@ -163,6 +164,9 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (closed) return;
         if (liveViews != 0) throw new IllegalStateException("Cannot close a buffer with an open mapping");
         closed = true;
+        if (DEBUG_BUFFERS) System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO,
+                "buffer close: handle=" + buffer + " usage=0x" + Integer.toHexString(usage) + " size=" + size
+                        + " frame=" + LavaFlowFrameStats.totalFrames());
         if (mappedPhysicalBase != 0) {
             vkUnmapMemory(context.device(), memory);
             mappedPhysicalBase = 0;
@@ -173,6 +177,8 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     }
 
     private void destroyNow() {
+        if (DEBUG_BUFFERS) System.getLogger(LavaFlowGpuBuffer.class.getName()).log(System.Logger.Level.INFO,
+                "buffer destroyNow: handle=" + buffer + " frame=" + LavaFlowFrameStats.totalFrames());
         vkDestroyBuffer(context.device(), buffer, null);
         vkFreeMemory(context.device(), memory, null);
     }
