@@ -30,6 +30,9 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     // 这样事件和视频画面严格同步，不会像日志时间戳那样不同步。
     private final Deque<String> debugMessages = new ArrayDeque<>();
     private static final int DEBUG_MESSAGE_CAP = 8;
+    // -Dlavaflow.debugBuffers：诊断事件只写入 F3 环形缓冲（getLastDebugMessages），
+    // 与画面同帧显示，不追加到主日志、不写独立文件。
+    static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
     // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
@@ -251,6 +254,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
 
     public synchronized void recordDebug(String message) {
+        // 仅写入 F3 环形缓冲，和画面同帧，不写主日志/独立文件
         if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
         debugMessages.addLast(message);
     }
