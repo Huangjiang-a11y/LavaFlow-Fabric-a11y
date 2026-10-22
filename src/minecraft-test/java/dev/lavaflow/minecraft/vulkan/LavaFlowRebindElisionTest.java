@@ -7,6 +7,7 @@ import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
+import com.mojang.renderpearl.api.pipeline.IndexType;
 import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.ShaderType;
@@ -84,6 +85,7 @@ class LavaFlowRebindElisionTest {
         LavaFlowGpuTexture color = null;
         LavaFlowGpuTexture depth = null;
         GpuBuffer uniform = null;
+        GpuBuffer indices = null;
         LavaFlowRenderPipeline pipeline = null;
         GpuTextureView colorView = null;
         GpuTextureView depthView = null;
@@ -101,6 +103,7 @@ class LavaFlowRebindElisionTest {
                     GpuFormat.D32_FLOAT, SIZE, SIZE, 1, 1);
             uniform = device.createBuffer(() -> "rebind test uniform",
                     GpuBuffer.USAGE_UNIFORM, 128);
+            indices = device.createBuffer(() -> "rebind test indices", GpuBuffer.USAGE_INDEX, 12);
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
             RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "rebind test pass")
@@ -132,6 +135,18 @@ class LavaFlowRebindElisionTest {
             // just as well for a counter that never counts and a dirty flag that is never set.
             pass.setUniform(0, otherSlice); // different value: this one really dirties
             pass.draw(3, 1, 0, 0);  // third draw: still no re-record, but the push is owed
+
+            // Index bindings get the same treatment as vertex bindings, and the type is part of the
+            // state: a repeated same-type bind records nothing, a same-handle different-type bind must.
+            long indexCallsBefore = LavaFlowFrameStats.indexBufferBindCallsTotal();
+            long indexRecordedBefore = LavaFlowFrameStats.indexBufferBindsTotal();
+            long indexRepeatsBefore = LavaFlowFrameStats.indexBufferBindRepeatsTotal();
+            pass.setIndexBuffer(indices, IndexType.SHORT); // first: recorded
+            pass.drawIndexed(3, 1, 0, 0, 0);
+            pass.setIndexBuffer(indices, IndexType.SHORT); // same handle and type: elided
+            pass.drawIndexed(3, 1, 0, 0, 0);
+            pass.setIndexBuffer(indices, IndexType.INT);   // type changed: must be re-recorded
+            pass.drawIndexed(3, 1, 0, 0, 0);
             encoder.submitRenderPass();
 
             assertEquals(2, LavaFlowFrameStats.pipelineBindsTotal() - bindsBefore,
@@ -146,10 +161,18 @@ class LavaFlowRebindElisionTest {
             assertEquals(2, LavaFlowFrameStats.descriptorPushesTotal() - pushesBefore,
                     "首次脏了推一次、重复值那次不推、换值后又脏了再推一次；"
                             + "负面对照：把换值那步去掉，这条会红在 1");
+            assertEquals(3, LavaFlowFrameStats.indexBufferBindCallsTotal() - indexCallsBefore,
+                    "三次 setIndexBuffer 都要计数：和顶点绑定一样，计数器描述前端行为");
+            assertEquals(1, LavaFlowFrameStats.indexBufferBindRepeatsTotal() - indexRepeatsBefore,
+                    "只有第二次是同 handle 同类型，才该被记为重复");
+            assertEquals(2, LavaFlowFrameStats.indexBufferBindsTotal() - indexRecordedBefore,
+                    "三次请求只录制两条 vkCmdBindIndexBuffer；负面对照：把换类型那步也去重，"
+                            + "这条会红在 1");
 
             device.completePending();
             pipeline.close(); pipeline = null;
             uniform.close(); uniform = null;
+            indices.close(); indices = null;
             colorView.close(); colorView = null;
             depthView.close(); depthView = null;
             color.close(); color = null;
@@ -169,6 +192,7 @@ class LavaFlowRebindElisionTest {
         } finally {
             if (pipeline != null) pipeline.close();
             if (uniform != null) uniform.close();
+            if (indices != null) indices.close();
             if (color != null) color.close();
             if (depth != null) depth.close();
             if (device != null) {

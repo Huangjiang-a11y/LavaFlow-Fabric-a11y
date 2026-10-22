@@ -13,6 +13,7 @@ import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.function.Supplier;
 import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -165,6 +166,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
+        boundIndexHandle = 0;
+        boundIndexType = -1;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -224,10 +227,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      * Records the start of a timed pass and returns its slot-local index, or -1 when pass timing is off (or
      * this recording already holds the maximum). The matching {@link #endTimedPass} closes the pair.
      */
-    int beginTimedPass(String label) {
+    int beginTimedPass(Supplier<String> label) {
         if (passTimestampPool == 0 || slot.timedPasses >= MAX_TIMED_PASSES) return -1;
         int pass = slot.timedPasses;
-        slot.passLabels[pass] = label;
+        slot.passLabels[pass] = label.get();
         // No timestamp here on purpose. A start timestamp cheap enough to be free is TOP_OF_PIPE, which is
         // taken when the GPU front end processes the command and can therefore precede the end of the previous
         // pass — the intervals then overlap and their sum ran 8-9% above gpu_ms on the device. One timestamp
@@ -269,6 +272,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private final long[] boundVertexHandles = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
     private final long[] boundVertexOffsets = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
     private final boolean[] vertexSlotBound = new boolean[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
+    // Index bindings are command buffer state as well, and nothing here ever unbinds one. -1 means
+    // nothing recorded yet in this command buffer.
+    private long boundIndexHandle;
+    private int boundIndexType = -1;
 
     /** Whether recording this binding would change what the command buffer already has in that slot. */
     boolean vertexBound(int slot, long handle, long offset) {
@@ -280,6 +287,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         vertexSlotBound[slot] = true;
         boundVertexHandles[slot] = handle;
         boundVertexOffsets[slot] = offset;
+    }
+
+    boolean indexBound(long handle, int type) {
+        return boundIndexType == type && boundIndexHandle == handle;
+    }
+
+    void recordIndexBound(long handle, int type) {
+        boundIndexHandle = handle;
+        boundIndexType = type;
     }
 
     VkCommandBuffer commandBuffer() { return commandBuffer; }
@@ -466,10 +482,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
     }
     @Override public void writeToTexture(GpuTexture target, ByteBuffer source, int mip, int layer, int x, int y, int width, int height) {
-        LavaFlowGpuBuffer staging = new LavaFlowGpuBuffer(device, GpuBuffer.USAGE_MAP_WRITE | GpuBuffer.USAGE_COPY_SRC, source.remaining());
-        staging.write(0, source);
-        copyBufferToTexture(staging.slice(), 0, 0, width, height, target, x, y, width, height, mip, layer);
-        device.defer(staging);
+        // 复用 transient 的映射 staging，而不是为每次上传单独建一个 buffer。资源重载和进世界时贴图
+        // 是成批上传的，原写法每张都要走一遍 vkCreateBuffer → vkAllocateMemory → map/copy/unmap，
+        // 提交之后再 vkDestroyBuffer + vkFreeMemory。staging 块本身就是 ALL_GPU_USAGES | MAP_WRITE，
+        // 含 TRANSFER_SRC，且由槽位的 fence 保证在本帧提交完成前不会被回收。
+        // 对齐取目标格式的 blockSize：VkBufferImageCopy.bufferOffset 必须是 texel block 的倍数。
+        GpuBufferSlice staging = transientMemory.uploadStaging(source, target.getFormat().blockSize());
+        copyBufferToTexture(staging, 0, 0, width, height, target, x, y, width, height, mip, layer);
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
         LavaFlowGpuTexture texture = texture(target); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

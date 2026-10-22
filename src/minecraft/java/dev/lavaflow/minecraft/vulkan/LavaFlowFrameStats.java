@@ -74,6 +74,12 @@ public final class LavaFlowFrameStats {
     private static long vertexBufferBindCallsAtReport;
     private static long vertexBufferBindRepeats;
     private static long vertexBufferBindRepeatsAtReport;
+    private static long indexBufferBinds;
+    private static long indexBufferBindsAtReport;
+    private static long indexBufferBindCalls;
+    private static long indexBufferBindCallsAtReport;
+    private static long indexBufferBindRepeats;
+    private static long indexBufferBindRepeatsAtReport;
     private static long passSplits;
     private static long passSplitsAtReport;
     // GPU execution time, sampled by the encoder's timestamp queries. Reported as an average over the same
@@ -192,6 +198,18 @@ public final class LavaFlowFrameStats {
     public static void vertexBufferBindRecorded() {
         if (!ENABLED) return;
         vertexBufferBinds++;
+    }
+
+    /** Same bargain as {@link #vertexBufferBindCalled}: requests count, repeated ones separately. */
+    public static void indexBufferBindCalled(boolean repeated) {
+        if (!ENABLED) return;
+        indexBufferBindCalls++;
+        if (repeated) indexBufferBindRepeats++;
+    }
+
+    public static void indexBufferBindRecorded() {
+        if (!ENABLED) return;
+        indexBufferBinds++;
     }
 
     /**
@@ -326,6 +344,12 @@ public final class LavaFlowFrameStats {
     static long vertexBufferBindCallsTotal() { return vertexBufferBindCalls; }
 
     static long vertexBufferBindRepeatsTotal() { return vertexBufferBindRepeats; }
+
+    static long indexBufferBindsTotal() { return indexBufferBinds; }
+
+    static long indexBufferBindCallsTotal() { return indexBufferBindCalls; }
+
+    static long indexBufferBindRepeatsTotal() { return indexBufferBindRepeats; }
     static long passSplitsTotal() { return passSplits; }
     static long gpuFramesTotal() { return gpuFrames; }
     static double gpuMillisTotal() { return gpuMillis; }
@@ -457,6 +481,13 @@ public final class LavaFlowFrameStats {
         double vertexRebindRatio = vertexBufferBindCalls == vertexBufferBindCallsAtReport ? 0
                 : (vertexBufferBindRepeats - vertexBufferBindRepeatsAtReport)
                         / (double) (vertexBufferBindCalls - vertexBufferBindCallsAtReport);
+        double indexBindsPerFrame = framesSince == 0 ? 0
+                : (indexBufferBinds - indexBufferBindsAtReport) / (double) framesSince;
+        double indexBindCallsPerFrame = framesSince == 0 ? 0
+                : (indexBufferBindCalls - indexBufferBindCallsAtReport) / (double) framesSince;
+        double indexRebindRatio = indexBufferBindCalls == indexBufferBindCallsAtReport ? 0
+                : (indexBufferBindRepeats - indexBufferBindRepeatsAtReport)
+                        / (double) (indexBufferBindCalls - indexBufferBindCallsAtReport);
         double passSplitsPerFrame = framesSince == 0 ? 0
                 : (passSplits - passSplitsAtReport) / (double) framesSince;
         long gpuSamplesSince = gpuFrames - gpuFramesAtReport;
@@ -488,6 +519,9 @@ public final class LavaFlowFrameStats {
         vertexBufferBindsAtReport = vertexBufferBinds;
         vertexBufferBindCallsAtReport = vertexBufferBindCalls;
         vertexBufferBindRepeatsAtReport = vertexBufferBindRepeats;
+        indexBufferBindsAtReport = indexBufferBinds;
+        indexBufferBindCallsAtReport = indexBufferBindCalls;
+        indexBufferBindRepeatsAtReport = indexBufferBindRepeats;
         passSplitsAtReport = passSplits;
         gpuFramesAtReport = gpuFrames;
         gpuMillisAtReport = gpuMillis;
@@ -500,7 +534,8 @@ public final class LavaFlowFrameStats {
                         + " pushes_per_frame={16} uniform_changes_per_frame={17}"
                         + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
                         + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
-                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}",
+                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
+                        + " index_binds_per_frame={27} index_bind_calls_per_frame={28} index_rebind_ratio={29}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -527,7 +562,10 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", passSplitsPerFrame),
                 topViewLabels,
                 String.format("%.1f", vertexBindCallsPerFrame),
-                String.format("%.3f", vertexRebindRatio));
+                String.format("%.3f", vertexRebindRatio),
+                String.format("%.1f", indexBindsPerFrame),
+                String.format("%.1f", indexBindCallsPerFrame),
+                String.format("%.3f", indexRebindRatio));
         if (timedPasses != timedPassesAtReport) {
             double passMillisPerFrame = gpuSamplesSince == 0 ? 0
                     : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
