@@ -62,6 +62,16 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
             int preferredMemory = mapped && (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_INDIRECT_PARAMETERS)) != 0
                     ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0;
             int memoryType = context.findMemoryType(requirements.memoryTypeBits(), requiredMemory, preferredMemory);
+            // HOST_COHERENT 是硬条件而不是偏好：LavaFlow 不做手工 flush（write() 与 transient 上传都不调
+            // vkFlushMappedMemoryRanges），非一致内存会让 GPU 读到旧数据。findMemoryType 已经把它列进
+            // requiredFlags，这里在分配点再核对一次 flags，免得以后有人把它挪成 preferredFlags 而静默
+            // 选到非一致类型。
+            int chosenFlags = context.memoryTypeFlags(memoryType);
+            if (mapped && (chosenFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0) {
+                throw new IllegalStateException("Mapped buffers must live in HOST_COHERENT memory, but memory type "
+                        + memoryType + " has flags 0x" + Integer.toHexString(chosenFlags)
+                        + "; LavaFlow does not flush mapped ranges");
+            }
             VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
                     .allocationSize(requirements.size())
                     .memoryTypeIndex(memoryType);
