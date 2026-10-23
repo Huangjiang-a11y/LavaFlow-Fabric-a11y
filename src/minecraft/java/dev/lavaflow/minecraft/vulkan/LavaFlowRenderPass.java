@@ -589,7 +589,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // makes the driver re-validate the parameter buffer every time, which costs far more than the
         // draw itself. When the parameters are in host memory that is currently mapped, read them here
         // and record plain indexed draws instead, which is the same command count on a cheaper path.
-        long hostBase = parameters.mappedPhysicalBase;
+        long hostBase = parameters.hostAuthoritative() ? parameters.mappedPhysicalBase : 0;
         if (LavaFlowDevice.DEBUG_BUFFERS) {
             LavaFlowDevice.recordDebug("indirect h=" + Long.toHexString(parameters.handle())
                     + " hostBase=" + hostBase + " f=" + LavaFlowFrameStats.totalFrames());
