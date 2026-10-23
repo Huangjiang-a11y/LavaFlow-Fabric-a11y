@@ -48,6 +48,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      */
     private final CompiledRenderPipeline.CreateInfo info;
     private final List<Entry> entries;
+    private final int[] descriptorTypes;
+    private final int[] sampledIndices;
     private final long[] shaderModules;
     private final int[] shaderStages;
     private final String[] shaderEntryPoints;
@@ -73,6 +75,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         this.device = device;
         this.info = createInfo;
         this.entries = buildEntries(createInfo);
+        this.descriptorTypes = new int[entries.size()];
+        for (int i = 0; i < entries.size(); i++) descriptorTypes[i] = vkDescriptorType(entries.get(i).type());
+        this.sampledIndices = buildSampledIndices(entries);
         this.shaderModules = new long[createInfo.shaders().size()];
         this.shaderStages = new int[createInfo.shaders().size()];
         this.shaderEntryPoints = new String[createInfo.shaders().size()];
@@ -144,6 +149,19 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             result.add(new Entry(type, uniform.name(), uniform.gpuFormat()));
         }
         return List.copyOf(result);
+    }
+
+    private static int[] buildSampledIndices(List<Entry> entries) {
+        int count = 0;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).type() == EntryType.SAMPLED_IMAGE) count++;
+        }
+        int[] indices = new int[count];
+        int at = 0;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).type() == EntryType.SAMPLED_IMAGE) indices[at++] = i;
+        }
+        return indices;
     }
 
     private long createShaderModule(ByteBuffer spirv) {
@@ -411,6 +429,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     }
 
     List<Entry> entries() { return entries; }
+    int descriptorType(int index) { return descriptorTypes[index]; }
+    int[] sampledIndices() { return sampledIndices; }
     long descriptorSetLayout() { return descriptorSetLayout; }
     long pipelineLayout() { return pipelineLayout; }
     @Override public boolean isClosed() { return closed; }

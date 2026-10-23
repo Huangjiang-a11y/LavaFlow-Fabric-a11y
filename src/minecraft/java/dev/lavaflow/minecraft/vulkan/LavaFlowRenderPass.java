@@ -679,10 +679,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (resourceScratch.length != entryCount * 2) resourceScratch = new long[entryCount * 2];
         long[] keyValues = keyScratch;
         long[] resourceHandles = resourceScratch;
-        // Every slot must be written on every push: a sampled image fills only two of its three slots, so
-        // without this a value left by an earlier push would become part of this key, and two identical
-        // binding sets would stop producing identical keys.
-        java.util.Arrays.fill(keyValues, 0L);
+        // Every slot is written below; a sampled image fills only two of its three slots and clears the
+        // third, so a value left by an earlier push cannot leak into this key. The array is reallocated
+        // whenever the entry count changes, and a fresh array is zeroed, which is why no full fill is
+        // needed here.
         int handleCount = 0;
         int dynamicCount = 0;
         for (int i = 0; i < entryCount; i++) {
@@ -690,7 +690,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int at = i * 3;
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
-                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
+                    GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
                     keyValues[at] = ((LavaFlowGpuBuffer) slice.buffer()).handle();
                     keyValues[at + 1] = dynamic ? 0 : slice.offset();
                     keyValues[at + 2] = slice.length();
@@ -698,16 +698,17 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     if (dynamic) dynamicCount++;
                 }
                 case TEXEL_BUFFER -> {
-                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
+                    GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
                     keyValues[at] = ((LavaFlowGpuBuffer) slice.buffer()).handle();
                     keyValues[at + 1] = slice.offset();
                     keyValues[at + 2] = slice.length();
                     resourceHandles[handleCount++] = keyValues[at];
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
+                    TextureViewAndSampler binding = requireAt(entry, i, TextureViewAndSampler.class);
                     keyValues[at] = ((LavaFlowGpuTextureView) binding.view()).handle();
                     keyValues[at + 1] = ((LavaFlowGpuSampler) binding.sampler()).handle();
+                    keyValues[at + 2] = 0;
                     resourceHandles[handleCount++] = keyValues[at];
                     resourceHandles[handleCount++] = keyValues[at + 1];
                 }
@@ -728,8 +729,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (dynamicCount > 0) {
                 dynamicOffsets = stack.mallocInt(dynamicCount);
                 for (int i = 0; i < entryCount; i++) {
-                    if (entries.get(i).type() != LavaFlowRenderPipeline.EntryType.UNIFORM_BUFFER) continue;
-                    dynamicOffsets.put((int) requireAt(i, GpuBufferSlice.class).offset());
+                    LavaFlowRenderPipeline.Entry entry = entries.get(i);
+                    if (entry.type() != LavaFlowRenderPipeline.EntryType.UNIFORM_BUFFER) continue;
+                    dynamicOffsets.put((int) requireAt(entry, i, GpuBufferSlice.class).offset());
                 }
                 dynamicOffsets.flip();
             }
@@ -755,17 +757,17 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             // only the member matching this entry's type carries meaning.
             VkWriteDescriptorSet write = scratch.write(i).sType$Default().dstBinding(i)
                     .dstArrayElement(0).descriptorCount(1).dstSet(descriptorSet)
-                    .descriptorType(pipeline.vkDescriptorType(entry.type()))
+                    .descriptorType(pipeline.descriptorType(i))
                     .pBufferInfo(null).pImageInfo(null).pTexelBufferView(null);
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
-                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
+                    GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
                     write.pBufferInfo(scratch.bufferInfo(i)
                             .buffer(((LavaFlowGpuBuffer) slice.buffer()).handle())
                             .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length()));
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureViewAndSampler binding = requireAt(i, TextureViewAndSampler.class);
+                    TextureViewAndSampler binding = requireAt(entry, i, TextureViewAndSampler.class);
                     LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) binding.view();
                     LavaFlowGpuTexture sampledTexture = view.texture();
                     if (sampledTexture.layout() != LavaFlowVk.sampledLayout()) {
@@ -776,7 +778,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                             .imageLayout(LavaFlowVk.sampledLayout()));
                 }
                 case TEXEL_BUFFER -> {
-                    GpuBufferSlice slice = requireAt(i, GpuBufferSlice.class);
+                    GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
                     long bufferView = cache.bufferView(((LavaFlowGpuBuffer) slice.buffer()).handle(),
                             LavaFlowVk.format(entry.texelFormat()), slice.offset(), slice.length());
                     write.pTexelBufferView(stack.longs(bufferView));
@@ -792,7 +794,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * layout, which would otherwise show up as a wrong or unread descriptor.
      */
     private <T> T requireAt(int index, Class<T> type) {
-        LavaFlowRenderPipeline.Entry entry = pipeline.entries().get(index);
+        return requireAt(pipeline.entries().get(index), index, type);
+    }
+
+    private <T> T requireAt(LavaFlowRenderPipeline.Entry entry, int index, Class<T> type) {
         Object value = index < uniforms.size() ? uniforms.get(index) : null;
         if (value == null) throw new IllegalStateException("Missing uniform " + entry.name() + " (slot " + index + ")");
         if (!type.isInstance(value)) {
@@ -809,10 +814,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private List<LavaFlowGpuTexture> sampledTextures() {
         sampledScratch.clear();
         if (pipeline == null) return sampledScratch;
-        List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
-        for (int i = 0; i < entries.size() && i < uniforms.size(); i++) {
-            if (entries.get(i).type() != LavaFlowRenderPipeline.EntryType.SAMPLED_IMAGE) continue;
-            if (uniforms.get(i) instanceof TextureViewAndSampler binding) {
+        for (int index : pipeline.sampledIndices()) {
+            if (index < uniforms.size() && uniforms.get(index) instanceof TextureViewAndSampler binding) {
                 sampledScratch.add(((LavaFlowGpuTextureView) binding.view()).texture());
             }
         }
