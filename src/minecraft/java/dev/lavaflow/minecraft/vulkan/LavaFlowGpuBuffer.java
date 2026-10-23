@@ -164,7 +164,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (liveViews != 0) throw new IllegalStateException("Cannot close a buffer with an open mapping");
         closed = true;
         if (LavaFlowDevice.DEBUG_BUFFERS) {
-            device.recordDebug("buf close h=" + Long.toHexString(buffer) + " u=0x" + Integer.toHexString(usage)
+            LavaFlowDevice.recordDebug("buf close h=" + Long.toHexString(buffer) + " u=0x" + Integer.toHexString(usage)
                     + " sz=" + size + " f=" + LavaFlowFrameStats.totalFrames());
         }
         if (mappedPhysicalBase != 0) {
@@ -178,7 +178,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
 
     private void destroyNow() {
         if (LavaFlowDevice.DEBUG_BUFFERS) {
-            device.recordDebug("buf destroy h=" + Long.toHexString(buffer) + " f=" + LavaFlowFrameStats.totalFrames());
+            LavaFlowDevice.recordDebug("buf destroy h=" + Long.toHexString(buffer) + " f=" + LavaFlowFrameStats.totalFrames());
         }
         vkDestroyBuffer(context.device(), buffer, null);
         vkFreeMemory(context.device(), memory, null);

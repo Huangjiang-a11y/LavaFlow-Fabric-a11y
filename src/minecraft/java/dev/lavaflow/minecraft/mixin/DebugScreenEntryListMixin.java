@@ -2,6 +2,7 @@ package dev.lavaflow.minecraft.mixin;
 
 import dev.lavaflow.minecraft.LavaFlowBufferDebugEntry;
 import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
+import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import net.minecraft.client.core.registries.ClientRegistries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
 import net.minecraft.client.gui.components.debug.DebugScreenEntryList;
@@ -38,9 +39,11 @@ abstract class DebugScreenEntryListMixin {
     @Inject(method = "resetStatuses", at = @At("TAIL"))
     private void lavaflow$enableGpuEntryByDefault(
             Map<ResourceKey<DebugScreenEntry>, DebugScreenEntryStatus> statuses, CallbackInfo callback) {
-        ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
-                LavaFlowBufferDebugEntry.ID);
-        allStatuses.putIfAbsent(bufferKey, DebugScreenEntryStatus.IN_OVERLAY);
+        if (LavaFlowDevice.DEBUG_BUFFERS) {
+            ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
+                    LavaFlowBufferDebugEntry.ID);
+            allStatuses.putIfAbsent(bufferKey, DebugScreenEntryStatus.IN_OVERLAY);
+        }
         ResourceKey<DebugScreenEntry> key = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowGpuDebugEntry.ID);
         allStatuses.putIfAbsent(key, DebugScreenEntryStatus.IN_OVERLAY);

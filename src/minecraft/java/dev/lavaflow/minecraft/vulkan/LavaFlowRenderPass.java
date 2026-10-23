@@ -591,7 +591,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // and record plain indexed draws instead, which is the same command count on a cheaper path.
         long hostBase = parameters.mappedPhysicalBase;
         if (LavaFlowDevice.DEBUG_BUFFERS) {
-            encoder.device().recordDebug("indirect h=" + Long.toHexString(parameters.handle())
+            LavaFlowDevice.recordDebug("indirect h=" + Long.toHexString(parameters.handle())
                     + " hostBase=" + hostBase + " f=" + LavaFlowFrameStats.totalFrames());
         }
         if (hostBase == 0) {
