@@ -35,6 +35,10 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     // so the render-thread draw path can read it without a lock: write()/map() are synchronized but
     // drawIndexedIndirect runs on the same thread.
     volatile long mappedPhysicalBase;
+    // 主机内存是否是这块 buffer 当前内容的权威来源。drawIndexedIndirect 的“直接读主机内存”
+    // 捷径依赖它：只有最后一次写入来自 write()/map(write=true) 时才成立。任何 vkCmdCopyBuffer
+    // 写进这块 buffer 都把它清掉——那条 copy 只是被“记录”，录制时主机内存还是旧内容。
+    private volatile boolean hostAuthoritative;
     private boolean closed;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
@@ -99,6 +103,8 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     long handle() { return buffer; }
     long memory() { return memory; }
     int memoryTypeIndex() { return memoryTypeIndex; }
+    boolean hostAuthoritative() { return hostAuthoritative; }
+    void markGpuWritten() { hostAuthoritative = false; }
 
     synchronized void write(long offset, ByteBuffer source) {
         if (closed) throw new IllegalStateException("Buffer is closed");
@@ -114,6 +120,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         // （VMA + vmaMapMemory/vmaUnmapMemory）同样从不 flush，只靠一致内存。
         long base = ensureMapped();
         MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + offset, source.remaining());
+        hostAuthoritative = true;
     }
 
     @Override public synchronized GpuBufferSlice.MappedView map(long offset, long length, boolean read, boolean write) {
@@ -127,6 +134,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         // vkMapMemory，只按 offset 取视图。视图可以同时开多个，各自 close 时只减计数。
         long base = ensureMapped();
         ByteBuffer data = MemoryUtil.memByteBuffer(base + offset, (int) length);
+        if (write) hostAuthoritative = true;
         liveViews++;
         AtomicBoolean released = new AtomicBoolean();
         return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
@@ -163,6 +171,10 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         if (closed) return;
         if (liveViews != 0) throw new IllegalStateException("Cannot close a buffer with an open mapping");
         closed = true;
+        if (LavaFlowDevice.DEBUG_BUFFERS) {
+            LavaFlowDevice.recordDebug("buf close h=" + Long.toHexString(buffer) + " u=0x" + Integer.toHexString(usage)
+                    + " sz=" + size + " f=" + LavaFlowFrameStats.totalFrames());
+        }
         if (mappedPhysicalBase != 0) {
             vkUnmapMemory(context.device(), memory);
             mappedPhysicalBase = 0;
@@ -173,6 +185,9 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     }
 
     private void destroyNow() {
+        if (LavaFlowDevice.DEBUG_BUFFERS) {
+            LavaFlowDevice.recordDebug("buf destroy h=" + Long.toHexString(buffer) + " f=" + LavaFlowFrameStats.totalFrames());
+        }
         vkDestroyBuffer(context.device(), buffer, null);
         vkFreeMemory(context.device(), memory, null);
     }

@@ -511,6 +511,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(source.offset())
                     .dstOffset(destination.offset()).size(source.length());
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
+            // copy 只是记录，录制时目标的主机内存还是旧内容：不能再用主机捷径读它。
+            if (destination.buffer() instanceof LavaFlowGpuBuffer written) written.markGpuWritten();
             int usage = destination.buffer().usage();
             int destinationStages = bufferDestinationStages(usage);
             int destinationAccess = bufferDestinationAccess(usage);
