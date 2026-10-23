@@ -440,7 +440,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (x < 0 || y < 0 || x + width > color.getWidth(0) || y + height > color.getHeight(0)) {
             throw new IllegalArgumentException("Clear rectangle exceeds texture bounds");
         }
-        LavaFlowFrameStats.partialClear();
+        // LavaFlowFrameStats.partialClear(); // dead code: partialClear never called in production
         // The two attachment views are reused, not created here and destroyed on the way out: this was the
         // only view churn LavaFlow manufactured itself, and a device run showed it was exactly twice the
         // partial clears, all of it labeled "UI items atlas" and "UI items atlas depth". See

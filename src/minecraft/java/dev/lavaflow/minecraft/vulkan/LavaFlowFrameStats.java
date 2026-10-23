@@ -53,9 +53,9 @@ public final class LavaFlowFrameStats {
     private static long retiredViews;
     private static long retiredSamplers;
     private static long retiredTextures;
-    private static long partialClears;
+    // private static long partialClears; // dead code: partialClear() is never called in production
     private static long retiredTexturesAtReport;
-    private static long partialClearsAtReport;
+    // private static long partialClearsAtReport; // dead code: paired with partialClears
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -346,10 +346,10 @@ public final class LavaFlowFrameStats {
      * destroyed again immediately, so this is the one place LavaFlow itself manufactures view churn
      * and it is worth being able to rule in or out by number rather than by reading the call graph.
      */
-    public static void partialClear() {
-        if (!ENABLED) return;
-        partialClears++;
-    }
+    // public static void partialClear() { // dead code: never called in production
+    //     if (!ENABLED) return;
+    //     partialClears++;
+    // }
 
     /** Counts one retired sampler. */
     public static void samplerRetired() {
@@ -418,15 +418,51 @@ public final class LavaFlowFrameStats {
         }
     }
 
-    private static void report() {
-        long[] sorted = Arrays.copyOf(intervals, count);
-        Arrays.sort(sorted);
+    /** Frame-timing percentiles for the current report window, in milliseconds. */
+    private static double[] computeFrameTiming(long[] sorted) {
         double medianMillis = sorted[sorted.length / 2] / 1_000_000.0;
         double p99Millis = sorted[Math.min(sorted.length - 1, (int) (sorted.length * 0.99))] / 1_000_000.0;
         double minMillis = sorted[0] / 1_000_000.0;
         long total = 0;
         for (long interval : sorted) total += interval;
         double meanMillis = total / (double) sorted.length / 1_000_000.0;
+        return new double[] { medianMillis, meanMillis, p99Millis, minMillis };
+    }
+
+    /** Snapshots every counter into its *AtReport companion so the next report diffs from here. */
+    private static void updateReportBaselines() {
+        framesAtReport = totalFrames;
+        descriptorSetsAtReport = descriptorSets;
+        descriptorHitsAtReport = descriptorHits;
+        descriptorInvalidationsAtReport = descriptorInvalidations;
+        barriersAtReport = barriers;
+        submitsAtReport = submits;
+        retiredBuffersAtReport = retiredBuffers;
+        retiredViewsAtReport = retiredViews;
+        retiredSamplersAtReport = retiredSamplers;
+        retiredTexturesAtReport = retiredTextures;
+        // partialClearsAtReport = partialClears; // dead code: paired with partialClears
+        pipelineBindsAtReport = pipelineBinds;
+        pipelineRebindsAtReport = pipelineRebinds;
+        pipelineBindsRecordedAtReport = pipelineBindsRecorded;
+        uniformChangesAtReport = uniformChanges;
+        vertexBufferBindsAtReport = vertexBufferBinds;
+        vertexBufferBindCallsAtReport = vertexBufferBindCalls;
+        vertexBufferBindRepeatsAtReport = vertexBufferBindRepeats;
+        passSplitsAtReport = passSplits;
+        gpuFramesAtReport = gpuFrames;
+        gpuMillisAtReport = gpuMillis;
+        descriptorPushesAtReport = descriptorPushes;
+    }
+
+    private static void report() {
+        long[] sorted = Arrays.copyOf(intervals, count);
+        Arrays.sort(sorted);
+        double[] timing = computeFrameTiming(sorted);
+        double medianMillis = timing[0];
+        double meanMillis = timing[1];
+        double p99Millis = timing[2];
+        double minMillis = timing[3];
         // Every value is pre-formatted: the logger applies locale formatting to raw numbers, which
         // would put digit-group separators in the output.
         long framesSince = totalFrames - framesAtReport;
@@ -465,30 +501,9 @@ public final class LavaFlowFrameStats {
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
-        double clearsPerFrame = framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
+        double clearsPerFrame = 0.0; // was: framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
-        framesAtReport = totalFrames;
-        descriptorSetsAtReport = descriptorSets;
-        descriptorHitsAtReport = descriptorHits;
-        descriptorInvalidationsAtReport = descriptorInvalidations;
-        barriersAtReport = barriers;
-        submitsAtReport = submits;
-        retiredBuffersAtReport = retiredBuffers;
-        retiredViewsAtReport = retiredViews;
-        retiredSamplersAtReport = retiredSamplers;
-        retiredTexturesAtReport = retiredTextures;
-        partialClearsAtReport = partialClears;
-        pipelineBindsAtReport = pipelineBinds;
-        pipelineRebindsAtReport = pipelineRebinds;
-        pipelineBindsRecordedAtReport = pipelineBindsRecorded;
-        uniformChangesAtReport = uniformChanges;
-        vertexBufferBindsAtReport = vertexBufferBinds;
-        vertexBufferBindCallsAtReport = vertexBufferBindCalls;
-        vertexBufferBindRepeatsAtReport = vertexBufferBindRepeats;
-        passSplitsAtReport = passSplits;
-        gpuFramesAtReport = gpuFrames;
-        gpuMillisAtReport = gpuMillis;
-        descriptorPushesAtReport = descriptorPushes;
+        updateReportBaselines();
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} gpu_ms={6}"
                         + " sets_per_frame={7}"
