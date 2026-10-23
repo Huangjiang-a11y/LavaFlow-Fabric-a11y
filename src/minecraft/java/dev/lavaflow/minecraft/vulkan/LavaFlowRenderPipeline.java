@@ -36,6 +36,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     final RenderPipeline info;
     final ShaderSource source;
     private final List<Entry> entries;
+    private final int[] descriptorTypes;
     private final Map<String, Integer> entryIndices;
     private final long vertexModule;
     private final long fragmentModule;
@@ -63,6 +64,8 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         this.info = info;
         this.source = source;
         this.entries = buildEntries(info);
+        this.descriptorTypes = new int[entries.size()];
+        for (int i = 0; i < entries.size(); i++) descriptorTypes[i] = vkDescriptorType(entries.get(i).type());
         this.entryIndices = buildEntryIndices(entries);
         int uniformCount = 0;
         for (Entry entry : entries) {
@@ -443,6 +446,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     }
 
     List<Entry> entries() { return entries; }
+    int descriptorType(int index) { return descriptorTypes[index]; }
     int bindingIndex(String name) {
         Integer index = entryIndices.get(name);
         return index == null ? -1 : index;

@@ -685,10 +685,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         if (resourceScratch.length != entryCount * 2) resourceScratch = new long[entryCount * 2];
         long[] keyValues = keyScratch;
         long[] resourceHandles = resourceScratch;
-        // Every slot must be written on every push: a sampled image fills only two of its three slots, so
-        // without this a value left by an earlier push would become part of this key, and two identical
-        // binding sets would stop producing identical keys.
-        java.util.Arrays.fill(keyValues, 0L);
+        // Every slot is written below; a sampled image fills only two of its three slots and clears the
+        // third, so a value left by an earlier push cannot leak into this key. The array is reallocated
+        // whenever the entry count changes, and a fresh array is zeroed, which is why no full fill is
+        // needed here.
         int handleCount = 0;
         int dynamicCount = 0;
         for (int i = 0; i < entryCount; i++) {
@@ -715,6 +715,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     if (binding == null) throw new IllegalStateException("Missing sampled image " + entry.name());
                     keyValues[at] = binding.view.handle();
                     keyValues[at + 1] = binding.sampler.handle();
+                    keyValues[at + 2] = 0;
                     resourceHandles[handleCount++] = keyValues[at];
                     resourceHandles[handleCount++] = keyValues[at + 1];
                 }
@@ -763,7 +764,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             // only the member matching this entry's type carries meaning.
             VkWriteDescriptorSet write = scratch.write(i).sType$Default().dstBinding(i)
                     .dstArrayElement(0).descriptorCount(1).dstSet(descriptorSet)
-                    .descriptorType(pipeline.vkDescriptorType(entry.type()))
+                    .descriptorType(pipeline.descriptorType(i))
                     .pBufferInfo(null).pImageInfo(null).pTexelBufferView(null);
             switch (entry.type()) {
                 case UNIFORM_BUFFER -> {
