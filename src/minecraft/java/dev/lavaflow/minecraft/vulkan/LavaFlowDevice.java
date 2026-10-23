@@ -25,6 +25,12 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private final ShaderSource shaderSource;
     private final DeviceInfo deviceInfo;
     private final LavaFlowCommandEncoder commandEncoder;
+    // F3 调试读数：最近的诊断事件环形缓冲，-Dlavaflow.debugBuffers 打开时填充。
+    // 事件由 LavaFlowBufferDebugEntry 作为独立 F3 栏目读取并显示，和画面同帧，
+    // 不追加到任何现有栏目、不写主日志。环形缓冲是静态的，因为 F3 条目没有 device 引用。
+    public static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
+    private static final Deque<String> debugMessages = new ArrayDeque<>();
+    private static final int DEBUG_MESSAGE_CAP = 16;
     private List<AutoCloseable> deferred = new ArrayList<>();
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
@@ -268,10 +274,23 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     @Override public long getTimestampNow() { return System.nanoTime(); }
     @Override public DeviceInfo getDeviceInfo() { return deviceInfo; }
 
+    public static synchronized void recordDebug(String message) {
+        if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
+        debugMessages.addLast(message);
+    }
+
+    /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
+    public static synchronized List<String> debugMessages() {
+        return new ArrayList<>(debugMessages);
+    }
+
+    public static synchronized void clearDebugMessages() { debugMessages.clear(); }
+
     private void ensureOpen() { if (closed) throw new IllegalStateException("LavaFlow device is closed"); }
     @Override public synchronized void close() {
         if (closed) return; closed = true;
         commandEncoder.destroy();
+        clearDebugMessages();
         clearPipelineCache();
         completePending();
         descriptorCache.destroy();

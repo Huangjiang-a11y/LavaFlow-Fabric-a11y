@@ -30,6 +30,10 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     // Zero when the buffer is not mapped. Volatile so the render-thread draw path can read it without
     // a lock: map() and unmap() are synchronized but drawIndexedIndirect runs on the same thread.
     volatile long mappedPhysicalBase;
+    // 主机内存是否是这块 buffer 当前内容的权威来源。drawIndexedIndirect 的“直接读主机内存”
+    // 捷径依赖它：只有最后一次写入来自 write()/map(write=true) 时才成立。任何 vkCmdCopyBuffer
+    // 写进这块 buffer 都把它清掉——那条 copy 只是被“记录”，录制时主机内存还是旧内容。
+    private volatile boolean hostAuthoritative;
     private boolean closed;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
@@ -78,6 +82,8 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
 
     long handle() { return buffer; }
     long memory() { return memory; }
+    boolean hostAuthoritative() { return hostAuthoritative; }
+    void markGpuWritten() { hostAuthoritative = false; }
 
     synchronized void write(long offset, ByteBuffer source) {
         if (closed) throw new IllegalStateException("Buffer is closed");
@@ -87,6 +93,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
             MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
+            hostAuthoritative = true;
             // 不做手工 flush：映射型 buffer 的 memory type 被 findMemoryType 强制要求
             // HOST_COHERENT，一致内存上的 vkFlushMappedMemoryRanges 按规范是 no-op，而它的
             // 区间约束（size 为 nonCoherentAtomSize 的倍数，或 offset+size 恰好等于
@@ -107,6 +114,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, length, 0, pointer), "vkMapMemory");
             mappingCount = 1;
+            if (write) hostAuthoritative = true;
             mappedPhysicalBase = pointer.get(0) - offset;
             ByteBuffer data = MemoryUtil.memByteBuffer(pointer.get(0), (int)length);
             AtomicBoolean released = new AtomicBoolean();
@@ -129,12 +137,19 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         if (closed) return;
         if (mappingCount != 0) throw new IllegalStateException("Cannot close a mapped buffer");
         closed = true;
+        if (LavaFlowDevice.DEBUG_BUFFERS) {
+            LavaFlowDevice.recordDebug("buf close h=" + Long.toHexString(buffer) + " u=0x" + Integer.toHexString(usage())
+                    + " sz=" + size() + " f=" + LavaFlowFrameStats.totalFrames());
+        }
         LavaFlowFrameStats.bufferRetired();
         device.invalidateDescriptorCache(buffer);
         device.defer(this::destroyNow);
     }
 
     private void destroyNow() {
+        if (LavaFlowDevice.DEBUG_BUFFERS) {
+            LavaFlowDevice.recordDebug("buf destroy h=" + Long.toHexString(buffer) + " f=" + LavaFlowFrameStats.totalFrames());
+        }
         vkDestroyBuffer(context.device(), buffer, null);
         vkFreeMemory(context.device(), memory, null);
     }

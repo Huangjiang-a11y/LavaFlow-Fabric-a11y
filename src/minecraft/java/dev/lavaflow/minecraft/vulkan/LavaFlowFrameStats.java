@@ -271,6 +271,7 @@ public final class LavaFlowFrameStats {
     }
 
     /** Number of pass samples recorded so far; 0 when per-pass timing is off or nothing has finished. */
+    static long totalFrames() { return totalFrames; }
     static long timedPassSamples() { return timedPasses; }
 
     /** Lifetime sum of per-frame pass durations in milliseconds; 0 when pass timing is off. */

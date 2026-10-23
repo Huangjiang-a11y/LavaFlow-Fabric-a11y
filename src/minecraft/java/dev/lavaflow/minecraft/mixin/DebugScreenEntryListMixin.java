@@ -1,7 +1,10 @@
 package dev.lavaflow.minecraft.mixin;
 
+import dev.lavaflow.minecraft.LavaFlowBufferDebugEntry;
 import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
+import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import net.minecraft.client.gui.components.debug.DebugScreenEntries;
+import net.minecraft.client.gui.components.debug.DebugScreenEntry;
 import net.minecraft.client.gui.components.debug.DebugScreenEntryList;
 import net.minecraft.client.gui.components.debug.DebugScreenEntryStatus;
 import net.minecraft.resources.Identifier;
@@ -27,6 +30,9 @@ import java.util.Map;
  * the enabled list is rebuilt by looking every enabled id up in the entry map, so an id with a status but no
  * entry would be a null dereference inside Minecraft's own code. Both are therefore done together, through
  * Minecraft's own registration method.
+ *
+ * <p>The buffer-events entry is only registered and enabled when {@code -Dlavaflow.debugBuffers} is set;
+ * otherwise it is not registered at all, so it cannot appear as an empty column in the debug options.
  */
 @Mixin(DebugScreenEntryList.class)
 abstract class DebugScreenEntryListMixin {
@@ -38,24 +44,33 @@ abstract class DebugScreenEntryListMixin {
     @Inject(method = "resetStatuses", at = @At("TAIL"))
     private void lavaflow$enableGpuEntryByDefault(
             Map<Identifier, DebugScreenEntryStatus> statuses, CallbackInfo callback) {
-        if (DebugScreenEntries.getEntry(LavaFlowGpuDebugEntry.ID) == null) {
-            try {
-                DebugScreenEntriesInvoker.lavaflow$register(LavaFlowGpuDebugEntry.ID,
-                        new LavaFlowGpuDebugEntry());
-            } catch (AssertionError | AbstractMethodError failure) {
-                // The registration helper did not land, which means this config was not applied. Said out
-                // loud and then given up on rather than thrown: a missing debug line is a nuisance, while an
-                // exception here would take the game down over a diagnostic.
-                //
-                // The status is deliberately not added either. The enabled list is rebuilt by looking every
-                // enabled id up in the entry map, so an id with a status but no entry is a null dereference
-                // inside Minecraft's own code — this feature must not be able to do that to itself.
-                LOGGER.log(System.Logger.Level.WARNING,
-                        "Could not register the LavaFlow debug entry, so F3 will not show its GPU time: "
-                                + failure);
-                return;
-            }
+        if (register(new LavaFlowGpuDebugEntry(), LavaFlowGpuDebugEntry.ID, "GPU time")) {
+            allStatuses.putIfAbsent(LavaFlowGpuDebugEntry.ID, DebugScreenEntryStatus.IN_OVERLAY);
         }
-        allStatuses.putIfAbsent(LavaFlowGpuDebugEntry.ID, DebugScreenEntryStatus.IN_OVERLAY);
+        if (LavaFlowDevice.DEBUG_BUFFERS
+                && register(new LavaFlowBufferDebugEntry(), LavaFlowBufferDebugEntry.ID, "buffer events")) {
+            allStatuses.putIfAbsent(LavaFlowBufferDebugEntry.ID, DebugScreenEntryStatus.IN_OVERLAY);
+        }
+    }
+
+    /**
+     * Registers an entry through Minecraft's own method. Returns whether the id is registered afterwards,
+     * so the caller only adds a status when the entry actually exists — a status without an entry is a
+     * null dereference inside Minecraft's enabled-list rebuild.
+     */
+    private static boolean register(DebugScreenEntry entry, Identifier id, String what) {
+        if (DebugScreenEntries.getEntry(id) != null) return true;
+        try {
+            DebugScreenEntriesInvoker.lavaflow$register(id, entry);
+            return true;
+        } catch (AssertionError | AbstractMethodError failure) {
+            // The registration helper did not land, which means this config was not applied. Said out
+            // loud and then given up on rather than thrown: a missing debug line is a nuisance, while an
+            // exception here would take the game down over a diagnostic.
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "Could not register the LavaFlow debug entry, so F3 will not show its " + what
+                            + ": " + failure);
+            return false;
+        }
     }
 }
