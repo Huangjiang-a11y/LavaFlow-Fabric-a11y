@@ -34,7 +34,6 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
 
     private long swapchain;
     private long[] images = new long[0];
-    private int[] imageLayouts = new int[0];
     private long[] presentSemaphores = new long[0];
     private int width;
     private int height;
@@ -147,7 +146,6 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             check(vkGetSwapchainImagesKHR(context.device(), swapchain, count, handles),
                     "vkGetSwapchainImagesKHR");
             images = new long[count.get(0)];
-            imageLayouts = new int[images.length];
             presentSemaphores = new long[images.length];
             for (int i = 0; i < images.length; i++) images[i] = handles.get(i);
 
@@ -241,8 +239,11 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
         encoder.transition(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         long destination = images[currentImage];
         try (MemoryStack stack = stackPush()) {
+            // An acquired swapchain image has undefined contents: the previous presentation does not
+            // promise what it left behind. Saying UNDEFINED instead of the last-recorded PRESENT_SRC lets
+            // the driver discard the old contents rather than transition from them.
             VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
-                    .oldLayout(imageLayouts[currentImage]).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(destination).srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
             toTransfer.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
@@ -272,7 +273,6 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             vkCmdPipelineBarrier(encoder.commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, toPresent);
         }
-        imageLayouts[currentImage] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         encoder.signal(presentSemaphores[currentImage]);
     }
 
@@ -311,7 +311,6 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
         vkDestroySwapchainKHR(context.device(), swapchain, null);
         swapchain = NULL;
         images = new long[0];
-        imageLayouts = new int[0];
         presentSemaphores = new long[0];
         currentImage = NO_IMAGE;
     }
