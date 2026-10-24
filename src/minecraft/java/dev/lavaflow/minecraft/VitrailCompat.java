@@ -47,6 +47,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class VitrailCompat {
     private static final System.Logger LOGGER = System.getLogger("LavaFlow/Vitrail");
 
+    /**
+     * Whether Vitrail's engine is let run on LavaFlow's backend.
+     *
+     * <p>Off unless {@code -Dlavaflow.vitrail.allow=true} is passed. The default is the standing
+     * answer, not a preference: the engine switches itself on here by the name LavaFlow reports,
+     * then reaches for the native classes it was written against and finds none of them, and a
+     * half-open engine draws wrong and finally throws on the first uniform it cannot fill. Letting
+     * it in is the experiment, and the property is the handle back: a session that goes wrong is
+     * a relaunch away from the behaviour every earlier build had.
+     */
+    private static final boolean ALLOWED = Boolean.getBoolean("lavaflow.vitrail.allow");
+
     /** Vitrail asks its question every tick and from several screens; the line is worth hearing once. */
     private static final AtomicBoolean REPORTED = new AtomicBoolean();
 
@@ -66,6 +78,9 @@ public final class VitrailCompat {
 
     /** The device-taking form, which is what the tests drive. */
     static boolean runsOnLavaFlow(GpuDevice device) {
+        if (ALLOWED) {
+            return false;
+        }
         if (!LavaFlowDevices.isLavaFlow(device)) {
             return false;
         }
