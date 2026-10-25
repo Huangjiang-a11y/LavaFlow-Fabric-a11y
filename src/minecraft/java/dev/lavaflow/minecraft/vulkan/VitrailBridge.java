@@ -6,10 +6,20 @@ import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.GpuDeviceBackend;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkInstance;
+import org.lwjgl.vulkan.VkBufferCreateInfo;
+import org.lwjgl.vulkan.VkImageCreateInfo;
+import org.lwjgl.vulkan.VkMemoryAllocateInfo;
+import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkPhysicalDevice;
+
+import java.nio.LongBuffer;
+
+import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.vulkan.VK10.*;
 
 /**
  * The native handles Vitrail Shaders reads out of the backend it is standing on.
@@ -74,5 +84,114 @@ public final class VitrailBridge {
     /** The {@code VkSampler} behind a sampler LavaFlow made, or 0 for any other sampler. */
     public static long samplerHandle(GpuSampler sampler) {
         return sampler instanceof LavaFlowGpuSampler lavaflow ? lavaflow.handle() : 0L;
+    }
+    /**
+     * Creates a buffer for a pack's own storage, with memory bound to it.
+     *
+     * <p>Vitrail asks VMA for these on the game's own backend, which LavaFlow does not keep. The
+     * resources a pack declares are therefore made here on the same terms as the backend's own
+     * buffers: the usage the caller names, and device-local memory, which is what a storage buffer
+     * written and read on the device wants.
+     *
+     * @return {@code {VkBuffer, VkDeviceMemory}}, or null when the backend is not LavaFlow's or the
+     *         driver refused the allocation, which retires the caller's storage path for this load
+     */
+    public static long[] createBuffer(GpuDeviceBackend backend, long size, int usage) {
+        if (!(backend instanceof LavaFlowDevice device)) return null;
+        LavaFlowVulkanContext context = device.context();
+        long buffer = 0L;
+        long memory = 0L;
+        try (MemoryStack stack = stackPush()) {
+            VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default()
+                    .size(size).usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+            LongBuffer out = stack.mallocLong(1);
+            if (vkCreateBuffer(context.device(), info, null, out) != VK_SUCCESS) return null;
+            buffer = out.get(0);
+            VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
+            vkGetBufferMemoryRequirements(context.device(), buffer, requirements);
+            int type;
+            try {
+                type = context.findMemoryType(requirements.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            } catch (RuntimeException none) {
+                vkDestroyBuffer(context.device(), buffer, null);
+                return null;
+            }
+            VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                    .allocationSize(requirements.size()).memoryTypeIndex(type);
+            if (vkAllocateMemory(context.device(), allocation, null, out) != VK_SUCCESS) {
+                vkDestroyBuffer(context.device(), buffer, null);
+                return null;
+            }
+            memory = out.get(0);
+            if (vkBindBufferMemory(context.device(), buffer, memory, 0) != VK_SUCCESS) {
+                vkFreeMemory(context.device(), memory, null);
+                vkDestroyBuffer(context.device(), buffer, null);
+                return null;
+            }
+        }
+        return new long[]{buffer, memory};
+    }
+
+    /** Frees a buffer {@link #createBuffer} made. Both handles may be 0. */
+    public static void destroyBuffer(GpuDeviceBackend backend, long buffer, long memory) {
+        if (!(backend instanceof LavaFlowDevice device)) return;
+        VkDevice vkDevice = device.context().device();
+        if (buffer != 0L) vkDestroyBuffer(vkDevice, buffer, null);
+        if (memory != 0L) vkFreeMemory(vkDevice, memory, null);
+    }
+
+    /**
+     * Creates an image for a pack's own storage, with memory bound to it.
+     *
+     * @return {@code {VkImage, VkDeviceMemory}}, or null when the backend is not LavaFlow's or the
+     *         driver refused the allocation
+     */
+    public static long[] createImage(GpuDeviceBackend backend, int format, int width, int height,
+            int mipLevels, int arrayLayers, int samples, int tiling, int usage, int initialLayout) {
+        if (!(backend instanceof LavaFlowDevice device)) return null;
+        LavaFlowVulkanContext context = device.context();
+        long image = 0L;
+        long memory = 0L;
+        try (MemoryStack stack = stackPush()) {
+            VkImageCreateInfo info = VkImageCreateInfo.calloc(stack).sType$Default()
+                    .imageType(VK_IMAGE_TYPE_2D).format(format)
+                    .extent(e -> e.width(width).height(height).depth(1))
+                    .mipLevels(mipLevels).arrayLayers(arrayLayers).samples(samples)
+                    .tiling(tiling).usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+                    .initialLayout(initialLayout);
+            LongBuffer out = stack.mallocLong(1);
+            if (vkCreateImage(context.device(), info, null, out) != VK_SUCCESS) return null;
+            image = out.get(0);
+            VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
+            vkGetImageMemoryRequirements(context.device(), image, requirements);
+            int type;
+            try {
+                type = context.findMemoryType(requirements.memoryTypeBits(), VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            } catch (RuntimeException none) {
+                vkDestroyImage(context.device(), image, null);
+                return null;
+            }
+            VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                    .allocationSize(requirements.size()).memoryTypeIndex(type);
+            if (vkAllocateMemory(context.device(), allocation, null, out) != VK_SUCCESS) {
+                vkDestroyImage(context.device(), image, null);
+                return null;
+            }
+            memory = out.get(0);
+            if (vkBindImageMemory(context.device(), image, memory, 0) != VK_SUCCESS) {
+                vkFreeMemory(context.device(), memory, null);
+                vkDestroyImage(context.device(), image, null);
+                return null;
+            }
+        }
+        return new long[]{image, memory};
+    }
+
+    /** Frees an image {@link #createImage} made. Both handles may be 0. */
+    public static void destroyImage(GpuDeviceBackend backend, long image, long memory) {
+        if (!(backend instanceof LavaFlowDevice device)) return;
+        VkDevice vkDevice = device.context().device();
+        if (image != 0L) vkDestroyImage(vkDevice, image, null);
+        if (memory != 0L) vkFreeMemory(vkDevice, memory, null);
     }
 }
