@@ -4,6 +4,7 @@ import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout.UniformDescription;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import org.lwjgl.system.MemoryStack;
@@ -387,7 +388,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             DepthStencilState depthState = info.depthStencilState();
             if (depthVkFormat != 0 && depthState != null) {
                 depth.depthTestEnable(true).depthWriteEnable(depthState.writeDepth())
-                        .depthCompareOp(LavaFlowVk.compareOp(depthState.depthTest()));
+                        .depthCompareOp(depthCompareOp(depthState.depthTest()));
                 boolean bias = depthState.depthBiasConstant() != 0 || depthState.depthBiasScaleFactor() != 0;
                 raster.depthBiasEnable(bias).depthBiasConstantFactor(depthState.depthBiasConstant())
                         .depthBiasSlopeFactor(depthState.depthBiasScaleFactor());
@@ -478,6 +479,28 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                             + ", colorTargets=" + targets.size() + ", shaders=" + shaderModules.length + ")");
             return out.get(0);
         }
+    }
+
+    /**
+     * The compare operation for a depth test, with the one lever a session that cannot get past
+     * a pipeline has: {@code -Dlavaflow.depthCompare=greater} maps the two "pass when nearer"
+     * forms onto their "pass when farther" mirror.
+     *
+     * <p>This is a bisection switch, not a fix. A shadow map that keeps the other half of the
+     * window casts a wrong shadow. What it settles is whether this driver dies on the compare
+     * operation itself, which is the only field left describing the one pipeline this session
+     * cannot build.
+     */
+    private static int depthCompareOp(CompareOp op) {
+        int mapped = LavaFlowVk.compareOp(op);
+        if (!"greater".equalsIgnoreCase(System.getProperty("lavaflow.depthCompare", ""))) {
+            return mapped;
+        }
+        return switch (mapped) {
+            case VK_COMPARE_OP_LESS -> VK_COMPARE_OP_GREATER;
+            case VK_COMPARE_OP_LESS_OR_EQUAL -> VK_COMPARE_OP_GREATER_OR_EQUAL;
+            default -> mapped;
+        };
     }
 
     private static void applyBlend(VkPipelineColorBlendAttachmentState attachment, BlendFunction blend) {

@@ -157,6 +157,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null || depth.clearValue().isEmpty()
                     ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            // The same bisection on the pass side: -Dlavaflow.depthClear=load turns a cleared depth
+            // into a loaded one. A shadow map then starts the frame with what it last held, which is
+            // wrong for the picture, but the render pass and the pipeline built against it are the
+            // same objects otherwise, so what the session answers is about the clear and nothing else.
+            if (depthLoadOp == VK_ATTACHMENT_LOAD_OP_CLEAR
+                    && "load".equalsIgnoreCase(System.getProperty("lavaflow.depthClear", ""))) {
+                depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            }
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
             // Said once per pass. A pipeline is created against this object, and this driver answers
             // a pipeline it cannot build by dying inside vkCreateGraphicsPipelines, so the attachments
