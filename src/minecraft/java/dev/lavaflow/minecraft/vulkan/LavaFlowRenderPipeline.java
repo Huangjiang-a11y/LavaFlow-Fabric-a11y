@@ -394,6 +394,32 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             } else {
                 create.renderPass(renderPass).subpass(0);
             }
+            // Said before the call, not after a failure: this driver's answer to a pipeline it
+            // cannot build is a null dereference, so a state field that is wrong takes the log with
+            // it. One line per pipeline, built once, and only at creation.
+            StringBuilder stageText = new StringBuilder();
+            for (int i = 0; i < shaderModules.length; i++) {
+                if (i > 0) stageText.append(", ");
+                stageText.append(shaderStages[i]).append(':').append(shaderEntryPoints[i])
+                        .append("@0x").append(Long.toHexString(shaderModules[i]));
+            }
+            StringBuilder blendText = new StringBuilder();
+            for (int i = 0; i < blendCount; i++) {
+                VkPipelineColorBlendAttachmentState state = blendAttachments.get(i);
+                if (i > 0) blendText.append(' ');
+                blendText.append(state.blendEnable() ? "on" : "off")
+                        .append('/').append(state.colorWriteMask());
+            }
+            System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                    "Pipeline {0}: stages=[{1}], topology={2}, polygonMode={3}, cull={4}, frontFace={5}, "
+                            + "depthTest={6}, depthWrite={7}, depthCompareOp={8}, depthBias={9}, "
+                            + "samples={10}, colorTargets={11}, passColorTargets={12}, blend=[{13}], "
+                            + "vertexBindings={14}, vertexAttribs={15}, renderPass=0x{16}, depthVkFormat={17}",
+                    info.name(), stageText, assembly.topology(), polygonMode, raster.cullMode(),
+                    raster.frontFace(), depth.depthTestEnable(), depth.depthWriteEnable(),
+                    depth.depthCompareOp(), raster.depthBiasEnable(), multisample.rasterizationSamples(),
+                    targets.size(), passColorTargets, blendText, vertexBufferDescs.size(),
+                    attribDescs.size(), Long.toHexString(renderPass), depthVkFormat);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),
                     "vkCreateGraphicsPipelines for " + info.name()
