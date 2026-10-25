@@ -10,6 +10,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
@@ -51,6 +52,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     private final long[] shaderModules;
     private final int[] shaderStages;
     private final String[] shaderEntryPoints;
+    // What each module asks of the device, read out of the words before the module is made.
+    private final String[] spirvNotes;
     private final long descriptorSetLayout;
     private final long pipelineLayout;
     // Dynamic-rendering pipelines keyed by the VkFormat of the depth attachment (VK_FORMAT_UNDEFINED = no depth).
@@ -79,6 +82,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         this.shaderModules = new long[createInfo.shaders().size()];
         this.shaderStages = new int[createInfo.shaders().size()];
         this.shaderEntryPoints = new String[createInfo.shaders().size()];
+        this.spirvNotes = new String[createInfo.shaders().size()];
         int uniformCount = 0;
         for (Entry entry : entries) {
             if (entry.type() == EntryType.UNIFORM_BUFFER) uniformCount++;
@@ -97,6 +101,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 createdModules = i + 1;
                 shaderStages[i] = LavaFlowVk.stage(shader.module().type());
                 shaderEntryPoints[i] = shader.entryPoint();
+                spirvNotes[i] = spirvSummary(shader.module().spv());
             }
             createdSetLayout = createDescriptorSetLayout(entries);
             createdPipelineLayout = createPipelineLayout(createdSetLayout);
@@ -167,6 +172,44 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             check(vkCreateShaderModule(device.context().device(), create, null, out), "vkCreateShaderModule");
             return out.get(0);
         }
+    }
+
+    /**
+     * What a module is, read out of its words before it is handed to the driver.
+     *
+     * <p>The version word matters here more than it looks: a Vulkan 1.1 device takes modules up
+     * to SPIR-V 1.3, and LavaFlowSpirv lowers the word when the frontend emitted a newer one —
+     * but lowering the word does not lower the instructions. A module that uses an opcode past
+     * 1.3 keeps it, and vkCreateShaderModule accepts it while the first pipeline built from it
+     * is where the driver notices. On this one that notice is a null dereference.
+     *
+     * <p>The counts below are the shape of that question: image writes, atomics and subgroup
+     * operations are the instructions that come with capabilities a device may lack.
+     */
+    private static String spirvSummary(ByteBuffer module) {
+        if (module == null) return "no code";
+        ByteBuffer words = module.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        int start = words.position();
+        if (words.remaining() < 20 || words.getInt(start) != 0x07230203) return "not SPIR-V";
+        int version = words.getInt(start + 4);
+        IntBuffer ints = words.asIntBuffer();
+        int imageWrite = 0, atomics = 0, subgroups = 0, barriers = 0;
+        int at = start / Integer.BYTES + 5;
+        int limit = ints.limit();
+        while (at < limit) {
+            int first = ints.get(at);
+            int length = first >>> 16;
+            int opcode = first & 0xFFFF;
+            if (length <= 0) break;
+            if (opcode == 99) imageWrite++;
+            else if (opcode >= 227 && opcode <= 242) atomics++;
+            else if (opcode >= 333 && opcode <= 366) subgroups++;
+            else if (opcode == 224 || opcode == 225) barriers++;
+            at += length;
+        }
+        return "SPIR-V " + (version >>> 16) + . + ((version >>> 8) & 0xFF)
+                + " imageWrite=" + imageWrite + " atomics=" + atomics
+                + " subgroups=" + subgroups + " barriers=" + barriers;
     }
 
     private long createDescriptorSetLayout(List<Entry> entries) {
@@ -401,7 +444,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             for (int i = 0; i < shaderModules.length; i++) {
                 if (i > 0) stageText.append(", ");
                 stageText.append(shaderStages[i]).append(':').append(shaderEntryPoints[i])
-                        .append("@0x").append(Long.toHexString(shaderModules[i]));
+                        .append("@0x").append(Long.toHexString(shaderModules[i]))
+                        .append(" [").append(spirvNotes[i]).append(']');
             }
             StringBuilder vertexText = new StringBuilder();
             for (int i = 0; i < attribDescs.size(); i++) {
