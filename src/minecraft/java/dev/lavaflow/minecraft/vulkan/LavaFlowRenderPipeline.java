@@ -207,7 +207,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             else if (opcode == 224 || opcode == 225) barriers++;
             at += length;
         }
-        return "SPIR-V " + (version >>> 16) + . + ((version >>> 8) & 0xFF)
+        return "SPIR-V " + (version >>> 16) + '.' + ((version >>> 8) & 0xFF)
                 + " imageWrite=" + imageWrite + " atomics=" + atomics
                 + " subgroups=" + subgroups + " barriers=" + barriers;
     }
