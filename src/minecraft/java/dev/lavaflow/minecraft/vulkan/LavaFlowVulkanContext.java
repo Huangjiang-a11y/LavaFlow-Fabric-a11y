@@ -575,7 +575,20 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             VkPhysicalDeviceFeatures enabled = VkPhysicalDeviceFeatures.calloc(stack)
                     .samplerAnisotropy(supported.samplerAnisotropy())
                     .fillModeNonSolid(fillModeNonSolid)
-                    .multiDrawIndirect(multiDrawIndirect);
+                    .multiDrawIndirect(multiDrawIndirect)
+                    // Vitrail Shaders' programs carry the capabilities the game's own Vulkan
+                    // backend is asked for and this one never was: a storage image written from a
+                    // vertex shader (Complementary's UpdateVoxelMap), r16ui and rgba16f as storage
+                    // formats, per-target blend state, and a geometry stage. Each is asked of the
+                    // physical device first and only turned on where it exists, so a device without
+                    // one keeps the answer it always had. Without these, a pack that declares them
+                    // builds a module the device cannot run, and the draw dies on the empty slot.
+                    .vertexPipelineStoresAndAtomics(supported.vertexPipelineStoresAndAtomics())
+                    .fragmentStoresAndAtomics(supported.fragmentStoresAndAtomics())
+                    .shaderStorageImageExtendedFormats(supported.shaderStorageImageExtendedFormats())
+                    .shaderStorageImageWriteWithoutFormat(supported.shaderStorageImageWriteWithoutFormat())
+                    .independentBlend(supported.independentBlend())
+                    .geometryShader(supported.geometryShader());
             long featureChain = NULL;
             if (dynamicRendering && !forceLegacyRenderPass()) {
                 featureChain = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default()
