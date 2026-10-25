@@ -572,23 +572,39 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             }
             VkPhysicalDeviceFeatures supported = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(physicalDevice, supported);
+            // The six abilities Vitrail's programs are written against. Each is asked of the
+            // physical device and turned on only where it is reported, so a device without one
+            // keeps the answer it always had; the property turns all six off together, which is
+            // the lever a session that goes wrong is a relaunch away from. Nothing else in the
+            // backend reads them.
+            boolean vitrailFeatures = !Boolean.getBoolean("lavaflow.noVitrailDeviceFeatures");
+            boolean vertexStores = vitrailFeatures && supported.vertexPipelineStoresAndAtomics();
+            boolean fragmentStores = vitrailFeatures && supported.fragmentStoresAndAtomics();
+            boolean extendedFormats = vitrailFeatures && supported.shaderStorageImageExtendedFormats();
+            boolean storeWithoutFormat = vitrailFeatures && supported.shaderStorageImageWriteWithoutFormat();
+            boolean independentBlend = vitrailFeatures && supported.independentBlend();
+            boolean geometryShader = vitrailFeatures && supported.geometryShader();
+            LOGGER.log(System.Logger.Level.INFO,
+                    "Vitrail device features, supported/enabled: vertexPipelineStoresAndAtomics={0}/{1}, "
+                            + "fragmentStoresAndAtomics={2}/{3}, shaderStorageImageExtendedFormats={4}/{5}, "
+                            + "shaderStorageImageWriteWithoutFormat={6}/{7}, independentBlend={8}/{9}, "
+                            + "geometryShader={10}/{11}",
+                    supported.vertexPipelineStoresAndAtomics(), vertexStores,
+                    supported.fragmentStoresAndAtomics(), fragmentStores,
+                    supported.shaderStorageImageExtendedFormats(), extendedFormats,
+                    supported.shaderStorageImageWriteWithoutFormat(), storeWithoutFormat,
+                    supported.independentBlend(), independentBlend,
+                    supported.geometryShader(), geometryShader);
             VkPhysicalDeviceFeatures enabled = VkPhysicalDeviceFeatures.calloc(stack)
                     .samplerAnisotropy(supported.samplerAnisotropy())
                     .fillModeNonSolid(fillModeNonSolid)
                     .multiDrawIndirect(multiDrawIndirect)
-                    // Vitrail Shaders' programs carry the capabilities the game's own Vulkan
-                    // backend is asked for and this one never was: a storage image written from a
-                    // vertex shader (Complementary's UpdateVoxelMap), r16ui and rgba16f as storage
-                    // formats, per-target blend state, and a geometry stage. Each is asked of the
-                    // physical device first and only turned on where it exists, so a device without
-                    // one keeps the answer it always had. Without these, a pack that declares them
-                    // builds a module the device cannot run, and the draw dies on the empty slot.
-                    .vertexPipelineStoresAndAtomics(supported.vertexPipelineStoresAndAtomics())
-                    .fragmentStoresAndAtomics(supported.fragmentStoresAndAtomics())
-                    .shaderStorageImageExtendedFormats(supported.shaderStorageImageExtendedFormats())
-                    .shaderStorageImageWriteWithoutFormat(supported.shaderStorageImageWriteWithoutFormat())
-                    .independentBlend(supported.independentBlend())
-                    .geometryShader(supported.geometryShader());
+                    .vertexPipelineStoresAndAtomics(vertexStores)
+                    .fragmentStoresAndAtomics(fragmentStores)
+                    .shaderStorageImageExtendedFormats(extendedFormats)
+                    .shaderStorageImageWriteWithoutFormat(storeWithoutFormat)
+                    .independentBlend(independentBlend)
+                    .geometryShader(geometryShader);
             long featureChain = NULL;
             if (dynamicRendering && !forceLegacyRenderPass()) {
                 featureChain = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default()

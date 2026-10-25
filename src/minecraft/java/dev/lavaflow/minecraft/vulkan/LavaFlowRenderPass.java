@@ -100,6 +100,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // when the pass is split is built once too. Both are keyed by the render pass cache, which copies
     // what it retains, so reusing one pair of arrays is safe.
     private int[] colorFormats;
+    // Said once, because a mismatch takes the driver down and a line per draw would not survive it.
+    private boolean colorTargetMismatchReported;
     private int[] colorLoadOps;
     private long resumeRenderPass;
     private int pendingVertexMask;
@@ -416,8 +418,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         LavaFlowFrameStats.pipelineBindRecorded();
         int depthVkFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
+        // A legacy render pass fixes its colour attachment count at creation, and a pipeline whose
+        // blend state declares another count is not one Vulkan lets a driver be given: vkCreateGraphics
+        // Pipelines is supposed to answer an error. Mali's driver dereferences a null instead and takes
+        // the process with it, and the phone has no validation layer to name the field. Said here, before
+        // the call, so that a crash still leaves both counts in the log.
+        int declaredTargets = pipeline.colorTargetCount();
+        int passTargets = colorFormats == null ? 0 : colorFormats.length;
+        if (declaredTargets != passTargets && !colorTargetMismatchReported) {
+            colorTargetMismatchReported = true;
+            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                    "Pipeline declares " + declaredTargets + " colour targets, its legacy render pass has "
+                            + passTargets + "; vkCreateGraphicsPipelines crashes on that mismatch on this "
+                            + "driver rather than answering an error");
+        }
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline.pipelineFor(depthVkFormat, renderPass));
+                pipeline.pipelineFor(depthVkFormat, renderPass, passTargets));
     }
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
