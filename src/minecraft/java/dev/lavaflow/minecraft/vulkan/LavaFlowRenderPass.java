@@ -19,6 +19,7 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -157,6 +158,13 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int depthLoadOp = depth == null || depth.clearValue().isEmpty()
                     ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+            // Said once per pass. A pipeline is created against this object, and this driver answers
+            // a pipeline it cannot build by dying inside vkCreateGraphicsPipelines, so the attachments
+            // it was built from have to be in the log before that call can take the process down.
+            System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                    "Legacy render pass 0x{0}: colours={1}, loads={2}, depth={3}, depthLoad={4}",
+                    Long.toHexString(renderPass), Arrays.toString(colorFormats),
+                    Arrays.toString(colorLoadOps), depthFormat, depthLoadOp);
         }
 
         RenderPass.RenderArea area = descriptor.renderArea();

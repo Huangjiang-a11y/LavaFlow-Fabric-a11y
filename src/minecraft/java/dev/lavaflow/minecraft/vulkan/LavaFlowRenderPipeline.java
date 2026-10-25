@@ -403,6 +403,13 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 stageText.append(shaderStages[i]).append(':').append(shaderEntryPoints[i])
                         .append("@0x").append(Long.toHexString(shaderModules[i]));
             }
+            StringBuilder vertexText = new StringBuilder();
+            for (int i = 0; i < attribDescs.size(); i++) {
+                BackendRenderPipeline.CreateInfo.AttribBinding attrib = attribDescs.get(i);
+                if (i > 0) vertexText.append(' ');
+                vertexText.append(attrib.location()).append(':').append(attrib.bufferSlot())
+                        .append('/').append(attrib.format()).append('@').append(attrib.offset());
+            }
             StringBuilder blendText = new StringBuilder();
             for (int i = 0; i < blendCount; i++) {
                 VkPipelineColorBlendAttachmentState state = blendAttachments.get(i);
@@ -419,7 +426,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                     raster.frontFace(), depth.depthTestEnable(), depth.depthWriteEnable(),
                     depth.depthCompareOp(), raster.depthBiasEnable(), multisample.rasterizationSamples(),
                     targets.size(), passColorTargets, blendText, vertexBufferDescs.size(),
-                    attribDescs.size(), Long.toHexString(renderPass), depthVkFormat);
+                    vertexText, Long.toHexString(renderPass), depthVkFormat);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),
                     "vkCreateGraphicsPipelines for " + info.name()
