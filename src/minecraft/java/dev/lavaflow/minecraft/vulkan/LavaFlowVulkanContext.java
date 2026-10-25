@@ -75,6 +75,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean multiDrawIndirect;
     private boolean vertexAttributeDivisor;
     private Set<String> enabledExtensions = Set.of();
+    // The abilities this device actually enabled, kept for the one check that runs before a
+    // pipeline is handed to the driver. Only the ones LavaFlow asks for are here: an ability it
+    // never requests must not be reported as available.
+    private boolean enabledVertexStores;
+    private boolean enabledFragmentStores;
+    private boolean enabledExtendedFormats;
+    private boolean enabledWriteWithoutFormat;
+    private boolean enabledIndependentBlend;
+    private boolean enabledGeometryShader;
+
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
     // Reverse index from an attachment view to the cached framebuffers naming it. Releasing a view
@@ -584,6 +594,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             boolean storeWithoutFormat = vitrailFeatures && supported.shaderStorageImageWriteWithoutFormat();
             boolean independentBlend = vitrailFeatures && supported.independentBlend();
             boolean geometryShader = vitrailFeatures && supported.geometryShader();
+            this.enabledVertexStores = vertexStores;
+            this.enabledFragmentStores = fragmentStores;
+            this.enabledExtendedFormats = extendedFormats;
+            this.enabledWriteWithoutFormat = storeWithoutFormat;
+            this.enabledIndependentBlend = independentBlend;
+            this.enabledGeometryShader = geometryShader;
             LOGGER.log(System.Logger.Level.INFO,
                     "Vitrail device features, supported/enabled: vertexPipelineStoresAndAtomics={0}/{1}, "
                             + "fragmentStoresAndAtomics={2}/{3}, shaderStorageImageExtendedFormats={4}/{5}, "
@@ -713,6 +729,26 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * never enables the 1.4 extension, so a 1.1 device — the floor LavaFlow accepts — gets 1.3, which is
      * exactly what the frontend's 1.2-targeted modules have to be lowered to. See {@link LavaFlowSpirv}.
      */
+    /**
+     * Whether this device enables what a SPIR-V module declares.
+     *
+     * <p>A module says up front which abilities it needs. Asking for one the device did not
+     * enable is invalid, and this driver's way of saying so is to die inside
+     * vkCreateGraphicsPipelines rather than answer an error. Only the abilities LavaFlow itself
+     * controls are checked; everything else is let through, because a wrong "no" would drop a
+     * pipeline that would have worked.
+     */
+    boolean supportsSpirvCapability(int capability) {
+        return switch (capability) {
+            case 1 -> true;                    // Shader, every module has it
+            case 2 -> enabledGeometryShader;   // Geometry
+            case 47 -> enabledExtendedFormats; // StorageImageExtendedFormats
+            case 53 -> false;                  // StorageImageReadWithoutFormat: never requested
+            case 54 -> enabledWriteWithoutFormat; // StorageImageWriteWithoutFormat
+            default -> true;
+        };
+    }
+
     int maxSpirvVersion() {
         int api = properties.apiVersion();
         int major = VK_VERSION_MAJOR(api), minor = VK_VERSION_MINOR(api);

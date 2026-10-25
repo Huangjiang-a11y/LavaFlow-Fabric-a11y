@@ -55,6 +55,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     private final String[] shaderEntryPoints;
     // What each module asks of the device, read out of the words before the module is made.
     private final String[] spirvNotes;
+    // The abilities each module declares, kept so a pipeline can be refused before the driver sees it.
+    private final int[][] spirvCapabilities;
     private final long descriptorSetLayout;
     private final long pipelineLayout;
     // Dynamic-rendering pipelines keyed by the VkFormat of the depth attachment (VK_FORMAT_UNDEFINED = no depth).
@@ -84,6 +86,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         this.shaderStages = new int[createInfo.shaders().size()];
         this.shaderEntryPoints = new String[createInfo.shaders().size()];
         this.spirvNotes = new String[createInfo.shaders().size()];
+        this.spirvCapabilities = new int[createInfo.shaders().size()][];
         int uniformCount = 0;
         for (Entry entry : entries) {
             if (entry.type() == EntryType.UNIFORM_BUFFER) uniformCount++;
@@ -103,6 +106,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 shaderStages[i] = LavaFlowVk.stage(shader.module().type());
                 shaderEntryPoints[i] = shader.entryPoint();
                 spirvNotes[i] = spirvSummary(shader.module().spv());
+                spirvCapabilities[i] = readCapabilities(shader.module().spv());
             }
             createdSetLayout = createDescriptorSetLayout(entries);
             createdPipelineLayout = createPipelineLayout(createdSetLayout);
@@ -187,6 +191,28 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * <p>The counts below are the shape of that question: image writes, atomics and subgroup
      * operations are the instructions that come with capabilities a device may lack.
      */
+    /** The abilities a module declares in its OpCapability instructions, in the order it lists them. */
+    private static int[] readCapabilities(ByteBuffer module) {
+        if (module == null) return new int[0];
+        ByteBuffer words = module.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        int start = words.position();
+        if (words.remaining() < 20 || words.getInt(start) != 0x07230203) return new int[0];
+        IntBuffer ints = words.asIntBuffer();
+        int at = start / Integer.BYTES + 5;
+        int limit = ints.limit();
+        int[] found = new int[16];
+        int count = 0;
+        while (at < limit) {
+            int first = ints.get(at);
+            int length = first >>> 16;
+            int opcode = first & 0xFFFF;
+            if (length <= 0) break;
+            if (opcode == 17 && count < found.length) found[count++] = ints.get(at + 1);
+            at += length;
+        }
+        return java.util.Arrays.copyOf(found, count);
+    }
+
     private static String spirvSummary(ByteBuffer module) {
         if (module == null) return "no code";
         ByteBuffer words = module.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -195,6 +221,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         int version = words.getInt(start + 4);
         IntBuffer ints = words.asIntBuffer();
         int imageWrite = 0, atomics = 0, subgroups = 0, barriers = 0;
+        java.util.LinkedHashSet<Integer> capabilities = new java.util.LinkedHashSet<>();
         int at = start / Integer.BYTES + 5;
         int limit = ints.limit();
         while (at < limit) {
@@ -202,7 +229,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             int length = first >>> 16;
             int opcode = first & 0xFFFF;
             if (length <= 0) break;
-            if (opcode == 99) imageWrite++;
+            if (opcode == 17) capabilities.add(ints.get(at + 1));
+            else if (opcode == 99) imageWrite++;
             else if (opcode >= 227 && opcode <= 242) atomics++;
             else if (opcode >= 333 && opcode <= 366) subgroups++;
             else if (opcode == 224 || opcode == 225) barriers++;
@@ -210,7 +238,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         }
         return "SPIR-V " + (version >>> 16) + '.' + ((version >>> 8) & 0xFF)
                 + " imageWrite=" + imageWrite + " atomics=" + atomics
-                + " subgroups=" + subgroups + " barriers=" + barriers;
+                + " subgroups=" + subgroups + " barriers=" + barriers + " caps=" + capabilities;
     }
 
     private long createDescriptorSetLayout(List<Entry> entries) {
@@ -472,6 +500,21 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                     depth.depthCompareOp(), raster.depthBiasEnable(), multisample.rasterizationSamples(),
                     targets.size(), passColorTargets, blendText, vertexBufferDescs.size(),
                     vertexText, Long.toHexString(renderPass), depthVkFormat);
+            // Asked before the driver is: a module may declare an ability this device did not
+            // enable, and this one answers that by dying inside vkCreateGraphicsPipelines. A
+            // pipeline that cannot be built is dropped here instead, with the reason in the log,
+            // so the rest of the frame still runs. Only abilities LavaFlow controls are checked.
+            for (int i = 0; i < spirvCapabilities.length; i++) {
+                for (int capability : spirvCapabilities[i]) {
+                    if (device.context().supportsSpirvCapability(capability)) continue;
+                    System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                            "Skipping pipeline {0}: stage {1} declares SPIR-V capability {2}, which"
+                                    + " this device does not enable; the draw is dropped and the"
+                                    + " session goes on",
+                            info.name(), shaderStages[i], capability);
+                    return 0;
+                }
+            }
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),
                     "vkCreateGraphicsPipelines for " + info.name()

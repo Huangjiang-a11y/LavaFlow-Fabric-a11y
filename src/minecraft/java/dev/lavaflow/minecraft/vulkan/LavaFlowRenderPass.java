@@ -448,8 +448,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                             + passTargets + "; vkCreateGraphicsPipelines crashes on that mismatch on this "
                             + "driver rather than answering an error");
         }
-        vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline.pipelineFor(depthVkFormat, renderPass, passTargets));
+        long handle = pipeline.pipelineFor(depthVkFormat, renderPass, passTargets);
+        // 0 means the pipeline was refused before the driver saw it (see
+        // LavaFlowRenderPipeline): there is nothing to bind, so the draw that would have used it
+        // is dropped here rather than binding a handle that does not exist.
+        if (handle == 0) return;
+        vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS, handle);
     }
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
