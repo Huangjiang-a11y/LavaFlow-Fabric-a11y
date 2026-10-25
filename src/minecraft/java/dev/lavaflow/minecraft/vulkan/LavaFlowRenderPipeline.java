@@ -359,6 +359,17 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * @param renderPass    legacy render pass handle, or {@code 0} for dynamic rendering.
      */
     private long createGraphicsPipeline(int depthVkFormat, long renderPass, int passColorTargets) {
+        // A way past a pipeline this driver will not build, without a rebuild:
+        // -Dlavaflow.skipPipelines=shadow drops every pipeline whose name contains it. The draws
+        // that would have used one are dropped too (see LavaFlowRenderPass), so the frame goes on
+        // without that pass rather than dying in the driver.
+        String skip = System.getProperty("lavaflow.skipPipelines", "");
+        if (!skip.isEmpty() && info.name().contains(skip)) {
+            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                    "Skipping pipeline {0} (lavaflow.skipPipelines={1}); its draws are dropped",
+                    info.name(), skip);
+            return 0;
+        }
         try (MemoryStack stack = stackPush()) {
             List<BackendRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
             List<BackendRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
@@ -409,7 +420,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             }
             VkPipelineRasterizationStateCreateInfo raster = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default()
                     .polygonMode(polygonMode)
-                    .cullMode(info.cull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
+                    .cullMode(cullMode(info.cull()))
                     .frontFace(VK_FRONT_FACE_CLOCKWISE).lineWidth(1.0f);
 
             VkPipelineDepthStencilStateCreateInfo depth = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default();
@@ -534,6 +545,22 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * operation itself, which is the only field left describing the one pipeline this session
      * cannot build.
      */
+    /**
+     * The cull mode for a pipeline, with a bisection switch of its own:
+     * {@code -Dlavaflow.cull=back} makes every pipeline cull back faces.
+     *
+     * <p>This exists because of the one combination no successful pipeline in the sessions
+     * so far has used: cull mode NONE together with nine vertex attributes. solid has the nine
+     * and culls, entity_translucent does not cull and has six. Turning culling on for the
+     * nine-attribute shadow pass asks whether that pairing is what the driver dies on.
+     */
+    private static int cullMode(boolean cull) {
+        if ("back".equalsIgnoreCase(System.getProperty("lavaflow.cull", ""))) {
+            return VK_CULL_MODE_BACK_BIT;
+        }
+        return cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    }
+
     private static int depthCompareOp(CompareOp op) {
         int mapped = LavaFlowVk.compareOp(op);
         if (!"greater".equalsIgnoreCase(System.getProperty("lavaflow.depthCompare", ""))) {
