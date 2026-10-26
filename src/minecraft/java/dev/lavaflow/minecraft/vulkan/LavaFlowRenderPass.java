@@ -75,6 +75,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static long drawLogFrame = -1;
     private static int drawLogThisFrame = 0;
 
+    // 逐条索引绘制的摘要。只记名字里含 terrain 或 water 的管线——地形与水面都在这两类里，
+    // 而 GUI、实体、粒子会把这行淹掉。要看的正是这批 drawIndexed 的实际参数：indexCount、
+    // firstIndex、baseVertex。"顶点读偏"最终都落在这三个数的组合上。
+    private static long indexedLogFrame = -1;
+    private static int indexedLogThisFrame = 0;
+
+    private void logIndexedDraw(int indexCount, int firstIndex, int baseVertex) {
+        String name = pipeline == null ? "(none)" : pipeline.name();
+        if (!name.contains("terrain") && !name.contains("water")) return;
+        long frame = LavaFlowFrameStats.totalFrames();
+        if (frame > 900) return;
+        if (frame != indexedLogFrame) {
+            indexedLogFrame = frame;
+            indexedLogThisFrame = 0;
+        }
+        if (indexedLogThisFrame >= 4) return;
+        indexedLogThisFrame++;
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                "indexed pipeline=" + name + " indexCount=" + indexCount
+                        + " firstIndex=" + firstIndex + " baseVertex=" + baseVertex + " frame=" + frame);
+    }
+
     private void logIndirectDraw(GpuBufferSlice buffer, int count) {
         long frame = LavaFlowFrameStats.totalFrames();
         if (frame > 240) return;
@@ -557,6 +579,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         pushDescriptors();
+        if (DEBUG_DRAWS) logIndexedDraw(indexCount, firstIndex, baseVertex);
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
     /**
