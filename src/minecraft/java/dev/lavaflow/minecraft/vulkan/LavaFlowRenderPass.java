@@ -72,6 +72,17 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 命令条数、参数缓冲偏移。配合 -Dlavaflow.debugPipelines 打出的声明行，就能把"水面那批用的是
     // 哪条管线、参数从哪个偏移开始"对上号。只在开头若干帧记录，避免刷屏。
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
+
+    // 每种绘制入口第一次被调用时打一行，用来确定地形究竟走哪个方法——上一轮把记录器挂在
+    // drawIndexedIndirect 和 drawIndexed 上都没出东西，说明猜入口不如让入口自己报名。
+    private static final java.util.Set<String> SEEN_DRAW_KINDS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private void noteDrawKind(String kind) {
+        if (!DEBUG_DRAWS) return;
+        if (!SEEN_DRAW_KINDS.add(kind)) return;
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                "draw-kind " + kind + " pipeline=" + (pipeline == null ? "(none)" : pipeline.name()));
+    }
     private static long drawLogFrame = -1;
     private static int drawLogThisFrame = 0;
 
@@ -579,6 +590,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         pushDescriptors();
+        noteDrawKind("drawIndexed");
         if (DEBUG_DRAWS) logIndexedDraw(indexCount, firstIndex, baseVertex);
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
@@ -593,6 +605,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
         pushDescriptors();
+        noteDrawKind("multiDrawIndexed");
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
         if (indexInfo.isDirect()) {
             int requiredInts = drawCount * (VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES);
@@ -624,6 +637,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         pushDescriptors();
+        noteDrawKind("drawIndexedIndirect");
         if (DEBUG_DRAWS) logIndirectDraw(buffer, count);
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
@@ -669,12 +683,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         pushDescriptors();
+        noteDrawKind("draw");
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
     }
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
         pushDescriptors();
+        noteDrawKind("drawIndirect");
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         if (count <= 1 || context.multiDrawIndirect()) {
             vkCmdDrawIndirect(encoder.commandBuffer(), handle, buffer.offset(), count, VkDrawIndirectCommand.SIZEOF);
