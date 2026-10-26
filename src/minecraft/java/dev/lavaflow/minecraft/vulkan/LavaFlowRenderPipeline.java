@@ -47,6 +47,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * compilation finishes, so it must never be touched again.
      */
     private final CompiledRenderPipeline.CreateInfo info;
+
+    /** 前端的管线名，管线行与绘制行都靠它把两边对上号。 */
+    String name() { return info.name(); }
     private final List<Entry> entries;
     private final int[] descriptorTypes;
     private final int[] sampledIndices;
@@ -123,7 +126,40 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      * at this point and is released by the frontend once compilation returns.
      */
     static LavaFlowRenderPipeline compile(LavaFlowDevice device, CompiledRenderPipeline.CreateInfo createInfo) {
+        if (DEBUG_PIPELINES) logPipeline(createInfo);
         return new LavaFlowRenderPipeline(device, createInfo);
+    }
+
+    // 诊断开关：-Dlavaflow.debugPipelines=true 时，每编译一条管线打一行完整声明。
+    // 顶点布局是这行的重点：binding 的 stride 和 attribute 的 offset/format 决定顶点怎么被读，
+    // 布局与真正绑定的缓冲对不上，画面就是"顶点读偏"。管线懒创建且带缓存，一条只打一次，不会刷屏。
+    private static final boolean DEBUG_PIPELINES = Boolean.getBoolean("lavaflow.debugPipelines");
+    private static final System.Logger LOGGER = System.getLogger("LavaFlow.Pipeline");
+
+    private static void logPipeline(CompiledRenderPipeline.CreateInfo info) {
+        StringBuilder line = new StringBuilder(320);
+        line.append("pipeline ").append(info.name())
+                .append(" topology=").append(info.primitiveTopology())
+                .append(" cull=").append(info.cull())
+                .append(" polygon=").append(info.polygonMode())
+                .append(" pushConstants=").append(info.pushConstantsSize())
+                .append(" depthFormat=").append(info.depthStencilFormat())
+                .append(" colorTargets=").append(info.colorTargetStates().size())
+                .append(" vbufs=[");
+        for (CompiledRenderPipeline.CreateInfo.VertexBuffer vb : info.vertexBuffers()) {
+            line.append("{slot=").append(vb.bufferSlot())
+                    .append(",stride=").append(vb.stride())
+                    .append(",stepRate=").append(vb.stepRate()).append('}');
+        }
+        line.append("] attrs=[");
+        for (CompiledRenderPipeline.CreateInfo.AttribBinding ab : info.attribBindings()) {
+            line.append("{slot=").append(ab.bufferSlot())
+                    .append(",loc=").append(ab.location())
+                    .append(",off=").append(ab.offset())
+                    .append(",fmt=").append(ab.format()).append('}');
+        }
+        line.append(']');
+        LOGGER.log(System.Logger.Level.INFO, line.toString());
     }
 
     /**

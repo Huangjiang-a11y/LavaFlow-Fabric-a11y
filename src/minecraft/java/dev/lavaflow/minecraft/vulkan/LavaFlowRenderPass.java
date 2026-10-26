@@ -67,6 +67,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // (index, value) pairs. Sized in setPipeline, then filled by setUniform.
     private final ArrayList<Object> uniforms = new ArrayList<>();
     private LavaFlowRenderPipeline pipeline;
+
+    // 诊断开关：-Dlavaflow.debugDraws=true 时，开头若干帧里每次间接绘制记一行——当时绑定的管线名、
+    // 命令条数、参数缓冲偏移。配合 -Dlavaflow.debugPipelines 打出的声明行，就能把"水面那批用的是
+    // 哪条管线、参数从哪个偏移开始"对上号。只在开头若干帧记录，避免刷屏。
+    private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
+    private static long drawLogFrame = -1;
+    private static int drawLogThisFrame = 0;
+
+    private void logIndirectDraw(GpuBufferSlice buffer, int count) {
+        long frame = LavaFlowFrameStats.totalFrames();
+        if (frame > 240) return;
+        if (frame != drawLogFrame) {
+            drawLogFrame = frame;
+            drawLogThisFrame = 0;
+        }
+        if (drawLogThisFrame >= 3) return;
+        drawLogThisFrame++;
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                "indirect pipeline=" + (pipeline == null ? "(none)" : pipeline.name())
+                        + " count=" + count + " offset=" + buffer.offset() + " frame=" + frame);
+    }
+
     private boolean descriptorsDirty = true;
     private boolean begun;
     private boolean ended;
@@ -579,6 +601,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         pushDescriptors();
+        if (DEBUG_DRAWS) logIndirectDraw(buffer, count);
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
             vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(), buffer.offset(), count,
