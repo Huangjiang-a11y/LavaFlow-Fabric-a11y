@@ -264,7 +264,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      *                      format the render pass uses.
      * @param renderPass    the legacy render pass handle, or {@code 0} for dynamic rendering.
      */
-    long pipelineFor(int depthVkFormat, long renderPass) {
+    long pipelineFor(int depthVkFormat, long renderPass, int passColorTargets) {
         if (closed) throw new IllegalStateException("Pipeline is closed");
         if (device.context().dynamicRendering()) {
             long cached = lookupDynamicPipeline(depthVkFormat);
@@ -273,13 +273,13 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         for (int i = 0; i < legacyPipelineCount; i++) {
             if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
         }
-        return createLegacyPipeline(depthVkFormat != 0, renderPass);
+        return createLegacyPipeline(depthVkFormat != 0, renderPass, passColorTargets);
     }
 
     private synchronized long createDynamicPipeline(int depthVkFormat) {
         long cached = lookupDynamicPipeline(depthVkFormat);
         if (cached != 0) return cached;
-        long pipeline = createGraphicsPipeline(depthVkFormat, 0);
+        long pipeline = createGraphicsPipeline(depthVkFormat, 0, 0);
         if (dynamicPipelineCount == dynamicPipelines.length) {
             int grown = Math.max(4, dynamicPipelineCount * 2);
             dynamicFormats = Arrays.copyOf(dynamicFormats, grown);
@@ -298,13 +298,18 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         return 0;
     }
 
-    private synchronized long createLegacyPipeline(boolean hasDepth, long renderPass) {
+    /** The colour attachments this pipeline declares, which a legacy render pass has to match. */
+    int colorTargetCount() {
+        return info.colorTargetStates().size();
+    }
+
+    private synchronized long createLegacyPipeline(boolean hasDepth, long renderPass, int passColorTargets) {
         for (int i = 0; i < legacyPipelineCount; i++) {
             if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
         }
         // For legacy render passes, depth is a binary yes/no encoded in the render pass object itself;
         // the actual format is implicit in the render pass handle used as the key.
-        long pipeline = createGraphicsPipeline(hasDepth ? 1 : 0, renderPass);
+        long pipeline = createGraphicsPipeline(hasDepth ? 1 : 0, renderPass, passColorTargets);
         if (legacyPipelineCount == legacyRenderPasses.length) {
             legacyRenderPasses = Arrays.copyOf(legacyRenderPasses, legacyPipelineCount * 2);
             legacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount * 2);
@@ -324,7 +329,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      *                      format is already encoded in the render pass object).
      * @param renderPass    legacy render pass handle, or {@code 0} for dynamic rendering.
      */
-    private long createGraphicsPipeline(int depthVkFormat, long renderPass) {
+    private long createGraphicsPipeline(int depthVkFormat, long renderPass, int passColorTargets) {
         try (MemoryStack stack = stackPush()) {
             List<CompiledRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
             List<CompiledRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
@@ -389,9 +394,18 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             }
 
             List<ColorTargetState> targets = info.colorTargetStates();
-            VkPipelineColorBlendAttachmentState.Buffer blendAttachments = VkPipelineColorBlendAttachmentState.calloc(targets.size(), stack);
-            for (int i = 0; i < targets.size(); i++) {
-                ColorTargetState target = targets.get(i);
+            // A legacy render pass fixes how many colour attachments its subpass has, and
+            // VkPipelineColorBlendStateCreateInfo has to name exactly that many. Handing a driver a
+            // smaller count used to be something it was trusted to reject: Mali dereferences a null
+            // instead and takes the process down, which a shadow pass with one written target and a
+            // pass with two did on a Mali-G76. The extra entries are left as calloc wrote them, which
+            // writes no channel and blends nothing; a pipeline that names more targets than the pass
+            // has keeps its own count, since that is the side the pass cache cannot invent.
+            int blendCount = Math.max(targets.size(), passColorTargets);
+            VkPipelineColorBlendAttachmentState.Buffer blendAttachments =
+                    VkPipelineColorBlendAttachmentState.calloc(blendCount, stack);
+            for (int i = 0; i < blendCount; i++) {
+                ColorTargetState target = i < targets.size() ? targets.get(i) : null;
                 if (target == null) continue;
                 VkPipelineColorBlendAttachmentState attachment = blendAttachments.get(i)
                         .colorWriteMask(LavaFlowVk.colorWriteMask(target));

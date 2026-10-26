@@ -99,23 +99,35 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 逐条索引绘制的摘要。只记名字里含 terrain 或 water 的管线——地形与水面都在这两类里，
     // 而 GUI、实体、粒子会把这行淹掉。要看的正是这批 drawIndexed 的实际参数：indexCount、
     // firstIndex、baseVertex。"顶点读偏"最终都落在这三个数的组合上。
-    private static long indexedLogFrame = -1;
-    private static int indexedLogThisFrame = 0;
+    /** 地形绘制摘要的条数上限，从第一笔地形绘制开始数。 */
+    private static final int TERRAIN_DRAW_LOG_CAP = 400;
+    private static int terrainDrawsLogged;
 
+    /**
+     * 一笔地形绘制的全部读数：管线、索引参数、顶点/索引缓冲句柄，以及本次绘制时各 uniform 槽的
+     * 缓冲与偏移。上一版把窗口挂在全局帧号上，而进世界发生在第 3000 帧之后，窗口早就关了；这里
+     * 改成从第一笔地形绘制开始数，进世界多久都能记上。uniform 偏移是每段区块的位置数据，哪几笔
+     * 绘制共用了同一段，一眼就能看出来。
+     */
     private void logIndexedDraw(int indexCount, int firstIndex, int baseVertex) {
         String name = pipeline == null ? "(none)" : pipeline.name();
         if (!name.contains("terrain") && !name.contains("water")) return;
-        long frame = LavaFlowFrameStats.totalFrames();
-        if (frame > 900) return;
-        if (frame != indexedLogFrame) {
-            indexedLogFrame = frame;
-            indexedLogThisFrame = 0;
+        if (terrainDrawsLogged >= TERRAIN_DRAW_LOG_CAP) return;
+        terrainDrawsLogged++;
+        StringBuilder line = new StringBuilder(192);
+        line.append("terrain-draw #").append(terrainDrawsLogged).append(' ').append(name)
+                .append(" indexCount=").append(indexCount).append(" firstIndex=").append(firstIndex)
+                .append(" baseVertex=").append(baseVertex)
+                .append(" vbuf0=").append(Long.toHexString(encoder.boundVertexHandle(0)))
+                .append(" ibuf=").append(Long.toHexString(encoder.boundIndexHandle()));
+        for (int i = 0; i < uniforms.size(); i++) {
+            if (uniforms.get(i) instanceof GpuBufferSlice slice) {
+                line.append(" u").append(i).append('=')
+                        .append(Long.toHexString(((LavaFlowGpuBuffer) slice.buffer()).handle()))
+                        .append('@').append(slice.offset());
+            }
         }
-        if (indexedLogThisFrame >= 4) return;
-        indexedLogThisFrame++;
-        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
-                "indexed pipeline=" + name + " indexCount=" + indexCount
-                        + " firstIndex=" + firstIndex + " baseVertex=" + baseVertex + " frame=" + frame);
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO, line.toString());
     }
 
     private void logIndirectDraw(GpuBufferSlice buffer, int count) {
@@ -132,6 +144,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                         + " count=" + count + " offset=" + buffer.offset() + " frame=" + frame);
     }
 
+    // 通道的颜色附件数与管线声明的数量不一致这件事只说一次：真出问题时驱动可能把进程带走，
+    // 每个 draw 一行也没机会落盘。
+    private boolean colorTargetMismatchReported;
     private boolean descriptorsDirty = true;
     private boolean begun;
     private boolean ended;
@@ -482,8 +497,19 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         LavaFlowFrameStats.pipelineBindRecorded();
         int depthVkFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
+        // 旧版渲染通道的子通道颜色附件数是写死的，VkPipelineColorBlendStateCreateInfo 必须正好
+        // 报这么多。数量能对上就不必多说；对不上时驱动可能读越界（Mali 上是空指针），这一行是
+        // 崩溃前唯一能落盘的证词，所以只说一次、直接 WARNING。
+        int passColorTargets = descriptor.colorAttachments().size();
+        if (passColorTargets != pipeline.colorTargetCount() && !colorTargetMismatchReported) {
+            colorTargetMismatchReported = true;
+            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                    "render pass colour attachments " + passColorTargets + " != pipeline "
+                            + pipeline.name() + " declares " + pipeline.colorTargetCount()
+                            + "; padding the blend state to the larger count");
+        }
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline.pipelineFor(depthVkFormat, renderPass));
+                pipeline.pipelineFor(depthVkFormat, renderPass, passColorTargets));
     }
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
