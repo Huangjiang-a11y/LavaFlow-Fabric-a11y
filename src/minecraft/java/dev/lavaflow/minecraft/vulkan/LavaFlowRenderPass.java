@@ -77,6 +77,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawIndexedIndirect 和 drawIndexed 上都没出东西，说明猜入口不如让入口自己报名。
     private static final java.util.Set<String> SEEN_DRAW_KINDS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    // 每条被设进 pass 的管线第一次出现时报一次到。报名行只证明了 gui 与一个 blit 走过绘制入口，
+    // 地形一条都没有；这一步用来确认地形管线到底有没有进过 LavaFlow 的 pass。
+    private static final java.util.Set<String> SEEN_PIPELINES = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static void notePipeline(String name) {
+        if (!DEBUG_DRAWS) return;
+        if (!SEEN_PIPELINES.add(name)) return;
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO, "pass-pipeline " + name);
+    }
+
     private void noteDrawKind(String kind) {
         if (!DEBUG_DRAWS) return;
         if (!SEEN_DRAW_KINDS.add(kind)) return;
@@ -493,6 +503,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         LavaFlowFrameStats.pipelineBind(false);
         this.pipeline = lavaPipeline;
+        notePipeline(lavaPipeline.name());
         // One slot per compiled uniform; the frontend replays the uniforms it already holds right after
         // this call, and 26.3 resolves names to slots there rather than here.
         int uniformCount = lavaPipeline.entries().size();
