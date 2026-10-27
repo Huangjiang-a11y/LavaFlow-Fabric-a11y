@@ -13,45 +13,46 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 地形上传数据的哨兵。开关：-Dlavaflow.watchUploads=true。
  *
- * <p>怎么用：哨兵不认识地形用的缓冲。它先跟着绘制路径学——每一次地形绘制把当时绑在 slot 0 的顶点
- * 缓冲和索引缓冲登记进来——然后就只盯这几个句柄的上传。这样菜单、GUI、贴图的上传不会占用预算，
- * 也不会拿"28 字节一行"去误读别的顶点格式（上一版正是这么在开机阶段把 60 行额度用光的）。
+ * <p>索引那一侧已经被真机日志证明是干净的：每一次写入的最大索引都恰好等于该区块顶点数的上界减一
+ * （6 个索引对 4 个顶点），写入落在的偏移与绘制读的 firstIndex 一一对应。所以这一版把注意力全放到
+ * 顶点侧：地形顶点是区块内的相对坐标，落在 0..16 这一格附近，任何"被拉成尖刺"的顶点都会远远超出。
  *
- * <p>盯两件事，各自对应一种能造出"顶点被拉成尖刺"的机制：
+ * <p>做法：
  *
  * <ul>
- *   <li>顶点：按 28 字节一行取前三个 float 当位置，非有限或者绝对值超过一百万就记下来。
- *   <li>索引：记下这一帧每一次写入的区间与最大索引值，并当场比对同一帧里已记下的区间有没有重叠。
- *       半透明的索引区是按区块分槽、每帧重排的；同帧内两次写入叠在一起，就是"某些区块读到了别人的
- *       索引"，而它只在半透明那一层发生——因为只有那一层每帧重写。
+ *   <li>登记过句柄的顶点缓冲，每一次上传都报一行摘要（字节数、行数、三个轴的最小最大值），不管好
+ *       坏——这样至少能知道顶点区到底有没有被重写、坐标的取值范围是多少。
+ *   <li>还没登记、但单次上传 ≥ 4096 字节的顶点数据也报（前若干行）。世界加载时的顶点上传发生在
+ *       第一笔地形绘制之前，按"认句柄"是永远看不见的，这一段专门留给它。
+ *   <li>绝对坐标超过 64 或者非有限的，标 WILD 并单列出来。阈值取 64 而不是一百万：区块相对坐标
+ *       离 0..16 再远也不会到 64，而上一版的宽阈值等于什么都不查。
+ *   <li>索引侧只留区间重叠（同一次写入经过 writeToBuffer 与内部 copyToBuffer 会被报两遍，完全同
+ *       区间的那一遍不再算重叠）。
  * </ul>
  *
  * <p>全是诊断，不改行为。
  */
 final class LavaFlowDataWatch {
     static final boolean ENABLED = Boolean.getBoolean("lavaflow.watchUploads");
-    /** 每次写入都打一行的话，前多少行这么打。 */
-    private static final int WRITE_LINE_CAP = 150;
-    /** 帧摘要最多打多少行（帧号对得上就每次都打重叠警告，不受这个限制）。 */
-    private static final int SUMMARY_LINE_CAP = 20;
-    private static final int SUMMARY_EVERY = 50;
-    /** 同帧内记录多少个区间用于重叠比对。 */
-    private static final int RANGE_CAP = 256;
+    /** 顶点摘要最多打多少行。 */
+    private static final int VERTEX_LINE_CAP = 90;
+    /** 索引写入的普通行最多打多少行。 */
+    private static final int INDEX_LINE_CAP = 60;
+    /** 未登记但足够大的顶点上传，最多打多少行。 */
+    private static final int UNWATCHED_MIN_BYTES = 4096;
     private static final int VERTEX_STRIDE = 28;
-    private static final float WILD_POSITION = 1.0e6f;
+    /** 区块相对坐标的宽松上界；超过这个值几乎一定是坏顶点。 */
+    private static final float POSITION_LIMIT = 64f;
 
     private static final Set<Long> VERTEX_HANDLES = ConcurrentHashMap.newKeySet();
     private static final Set<Long> INDEX_HANDLES = ConcurrentHashMap.newKeySet();
     private static volatile boolean worldSeen;
-    private static final AtomicInteger WRITE_LINES = new AtomicInteger();
-    private static final AtomicInteger SUMMARY_LINES = new AtomicInteger();
+    private static final AtomicInteger VERTEX_LINES = new AtomicInteger();
+    private static final AtomicInteger INDEX_LINES = new AtomicInteger();
 
-    // 同帧索引区间的记账（只在渲染线程访问）。
     private static final List<long[]> RANGES = new ArrayList<>();
     private static long rangeFrame = -1;
     private static int frameWrites;
-    private static int frameOverlaps;
-    private static long lastOverlapFrame = -1;
 
     private LavaFlowDataWatch() {}
 
@@ -74,15 +75,20 @@ final class LavaFlowDataWatch {
      */
     static void onUpload(String what, int destinationUsage, long destinationHandle, long destinationOffset,
                          ByteBuffer data) {
-        if (!ENABLED || !worldSeen) return;
-        if ((destinationUsage & GpuBuffer.USAGE_VERTEX) != 0 && VERTEX_HANDLES.contains(destinationHandle)) {
-            checkVertices(what, destinationHandle, destinationOffset, data);
-        } else if ((destinationUsage & GpuBuffer.USAGE_INDEX) != 0 && INDEX_HANDLES.contains(destinationHandle)) {
-            noteIndexWrite(what, destinationHandle, destinationOffset, data);
+        if (!ENABLED) return;
+        if ((destinationUsage & GpuBuffer.USAGE_VERTEX) != 0) {
+            boolean watched = worldSeen && VERTEX_HANDLES.contains(destinationHandle);
+            if (watched || data.remaining() >= UNWATCHED_MIN_BYTES) {
+                checkVertices(what, destinationHandle, destinationOffset, data, watched);
+            }
+        } else if ((destinationUsage & GpuBuffer.USAGE_INDEX) != 0) {
+            if (worldSeen && INDEX_HANDLES.contains(destinationHandle)) {
+                noteIndexWrite(what, destinationHandle, destinationOffset, data);
+            }
         }
     }
 
-    private static void checkVertices(String what, long handle, long offset, ByteBuffer data) {
+    private static void checkVertices(String what, long handle, long offset, ByteBuffer data, boolean watched) {
         int remaining = data.remaining();
         if (remaining < VERTEX_STRIDE) return;
         ByteBuffer view = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -90,78 +96,74 @@ final class LavaFlowDataWatch {
         int rows = remaining / VERTEX_STRIDE;
         int nonFinite = 0;
         int wild = 0;
-        StringBuilder detail = new StringBuilder(96);
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
         for (int row = 0; row < rows; row++) {
             int at = start + row * VERTEX_STRIDE;
             for (int axis = 0; axis < 3; axis++) {
                 float value = view.getFloat(at + axis * 4);
                 if (Float.isNaN(value) || Float.isInfinite(value)) {
-                    if (nonFinite++ < 4) detail.append(" nan@").append(row).append(':').append(axis);
-                } else if (Math.abs(value) > WILD_POSITION) {
-                    if (wild++ < 4) detail.append(" pos@").append(row).append(':').append(axis).append('=').append(value);
+                    nonFinite++;
+                    continue;
+                }
+                if (Math.abs(value) > POSITION_LIMIT) wild++;
+                switch (axis) {
+                    case 0 -> {
+                        if (value < minX) minX = value;
+                        if (value > maxX) maxX = value;
+                    }
+                    case 1 -> {
+                        if (value < minY) minY = value;
+                        if (value > maxY) maxY = value;
+                    }
+                    default -> {
+                        if (value < minZ) minZ = value;
+                        if (value > maxZ) maxZ = value;
+                    }
                 }
             }
         }
-        if (nonFinite == 0 && wild == 0) return;
-        if (WRITE_LINES.getAndIncrement() >= WRITE_LINE_CAP) return;
-        log("vertex upload " + what + " h=" + Long.toHexString(handle) + "@" + offset
-                + " bytes=" + remaining + " rows=" + rows + " nonFinite=" + nonFinite + " wildPosition=" + wild + detail);
+        boolean suspicious = nonFinite > 0 || wild > 0;
+        if (VERTEX_LINES.getAndIncrement() >= VERTEX_LINE_CAP) return;
+        boolean finite = rows > 0 && nonFinite < rows * 3;
+        String bounds = finite
+                ? " x=[" + minX + "," + maxX + "] y=[" + minY + "," + maxY + "] z=[" + minZ + "," + maxZ + "]"
+                : " <no finite positions>";
+        System.getLogger("LavaFlow").log(suspicious ? System.Logger.Level.WARNING : System.Logger.Level.INFO,
+                "vertex upload " + what + (watched ? "" : " (unwatched)") + " h=" + Long.toHexString(handle)
+                        + "@" + offset + " bytes=" + remaining + " rows=" + rows
+                        + " nonFinite=" + nonFinite + " wild=" + wild + bounds);
     }
 
     private static void noteIndexWrite(String what, long handle, long offset, ByteBuffer data) {
         int length = data.remaining();
         long frame = LavaFlowFrameStats.totalFrames();
         if (frame != rangeFrame) {
-            reportFrame(frame);
             rangeFrame = frame;
             RANGES.clear();
             frameWrites = 0;
-            frameOverlaps = 0;
         }
         frameWrites++;
         long end = offset + length;
-        StringBuilder clashes = null;
+        long clashOffset = -1, clashEnd = -1;
         for (long[] range : RANGES) {
+            // 同一次写入会经过 writeToBuffer 与它内部的 copyToBuffer 报两遍，区间完全一样的不算重叠。
+            if (offset == range[0] && end == range[1]) continue;
             if (offset < range[1] && range[0] < end) {
-                frameOverlaps++;
-                if (clashes == null) clashes = new StringBuilder(64);
-                clashes.append(" [").append(range[0]).append(',').append(range[1]).append(')');
+                clashOffset = range[0];
+                clashEnd = range[1];
             }
         }
-        if (RANGES.size() < RANGE_CAP) RANGES.add(new long[]{offset, end});
-        int maxShort = 0;
-        int maxInt = 0;
-        ByteBuffer view = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-        int start = view.position();
-        int stop = start + length;
-        for (int at = start; at + 4 <= stop; at += 4) {
-            maxInt = Math.max(maxInt, view.getInt(at));
-            maxShort = Math.max(maxShort, view.getShort(at) & 0xFFFF);
-            maxShort = Math.max(maxShort, view.getShort(at + 2) & 0xFFFF);
+        if (RANGES.size() < 256) RANGES.add(new long[]{offset, end});
+        if (clashOffset >= 0) {
+            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                    "index upload OVERLAP " + what + " h=" + Long.toHexString(handle) + " @" + offset
+                            + "+" + length + " frame=" + frame + " clashes-with=[" + clashOffset + "," + clashEnd + ")");
         }
-        if (clashes != null) {
-            // 同帧重叠：这一行是重点，不受行数上限约束。
-            log("index upload OVERLAP " + what + " h=" + Long.toHexString(handle) + " @" + offset
-                    + "+" + length + " frame=" + frame + " maxIndex16=" + maxShort + " maxIndex32=" + maxInt
-                    + " clashes-with=" + clashes);
-            lastOverlapFrame = frame;
+        if (INDEX_LINES.getAndIncrement() < INDEX_LINE_CAP) {
+            System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                    "index upload " + what + " h=" + Long.toHexString(handle) + "@" + offset + " bytes=" + length
+                            + " frame=" + frame);
         }
-        if (WRITE_LINES.getAndIncrement() < WRITE_LINE_CAP) {
-            log("index upload " + what + " h=" + Long.toHexString(handle) + "@" + offset + " bytes=" + length
-                    + " frame=" + frame + " maxIndex16=" + maxShort + " maxIndex32=" + maxInt);
-        }
-    }
-
-    private static void reportFrame(long frame) {
-        if (rangeFrame < 0) return;
-        boolean interesting = frameOverlaps > 0 || lastOverlapFrame == rangeFrame || frame % SUMMARY_EVERY == 0;
-        if (!interesting) return;
-        if (SUMMARY_LINES.getAndIncrement() >= SUMMARY_LINE_CAP) return;
-        log("index frame " + rangeFrame + " writes=" + frameWrites + " distinct=" + RANGES.size()
-                + " overlaps=" + frameOverlaps);
-    }
-
-    private static void log(String message) {
-        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, message);
     }
 }
