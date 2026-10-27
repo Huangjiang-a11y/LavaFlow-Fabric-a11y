@@ -149,6 +149,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 通道的颜色附件数与管线声明的数量不一致这件事只说一次：真出问题时驱动可能把进程带走，
     // 每个 draw 一行也没机会落盘。
     private boolean colorTargetMismatchReported;
+    // 诊断用：当前绑在 slot 0 的顶点缓冲、以及当前的索引缓冲的"对象本身"——哨兵要拿它们的大小
+    // 和主机映射来核对这一笔绘制到底在读什么。句柄记录里没有这些。
+    private LavaFlowGpuBuffer watchedVertexBuffer;
+    private LavaFlowGpuBuffer watchedIndexBuffer;
     private boolean descriptorsDirty = true;
     private boolean begun;
     private boolean ended;
@@ -589,6 +593,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         long offset = buffer.offset();
+        if (slot == 0) watchedVertexBuffer = (LavaFlowGpuBuffer) buffer.buffer();
         // A device run measured 92.8 recorded vertex binds per frame against 92.8 draws: the frontend asks for
         // the same slot over and over, and each request that matches what is already bound would change
         // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
@@ -611,6 +616,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void setIndexBuffer(GpuBuffer buffer, IndexType type) {
         long handle = ((LavaFlowGpuBuffer) buffer).handle();
+        watchedIndexBuffer = (LavaFlowGpuBuffer) buffer;
         int vkType = type == IndexType.SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
         // Same bargain as setVertexBuffer: the request is not hidden from the frontend's counters, only
         // the redundant vkCmdBindIndexBuffer is dropped. The binding outlives the pass it was recorded
@@ -630,8 +636,26 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         pushDescriptors();
         noteDrawKind("drawIndexed");
+        if (LavaFlowDrawCheck.ENABLED) {
+            LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipeline == null ? "" : pipeline.name(),
+                    watchedVertexBuffer, baseVertex, watchedIndexBuffer,
+                    encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
+        }
         if (DEBUG_DRAWS) logIndexedDraw(indexCount, firstIndex, baseVertex);
+        if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
+    }
+
+    /**
+     * 把这一笔绘制正在用的顶点/索引缓冲登记给上传哨兵。
+     *
+     * <p>哨兵不认识地形用的缓冲，只能跟着绘制学：登记过之后，它盯的就只是这几个句柄的上传，
+     * 于是菜单、GUI、贴图的上传既不会占用它的行数预算，也不会被它按 28 字节一行误读。
+     */
+    private void noteTerrainHandles() {
+        String name = pipeline == null ? "" : pipeline.name();
+        if (!name.contains("terrain") && !name.contains("water")) return;
+        LavaFlowDataWatch.watchDraw(encoder.boundVertexHandle(0), encoder.boundIndexHandle());
     }
     /**
      * Records interleaved indexed draws packed as {@code VkMultiDrawIndexedInfoEXT} records.
@@ -645,6 +669,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (drawCount <= 0) return;
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
+        if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
         if (indexInfo.isDirect()) {
             int requiredInts = drawCount * (VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES);

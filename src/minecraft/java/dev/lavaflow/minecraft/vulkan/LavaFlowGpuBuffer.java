@@ -153,7 +153,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         long watchedHandle = buffer;
         return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
             // 诊断：主机写完这一段后再扫一遍，查非有限值与量级离谱的坐标。
-            if (write) LavaFlowDataWatch.scanForUsage("mapped write", watchedUsage, watchedHandle, offset, data);
+            if (write) LavaFlowDataWatch.onUpload("mapped write", watchedUsage, watchedHandle, offset, data);
             if (released.compareAndSet(false, true)) {
                 synchronized (LavaFlowGpuBuffer.this) { liveViews--; }
             }

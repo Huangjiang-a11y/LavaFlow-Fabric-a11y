@@ -482,7 +482,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (size == 0) return;
         if (size > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
         // 诊断：写进缓冲的这段字节先扫一遍，看有没有非有限值或量级离谱的坐标。
-        LavaFlowDataWatch.scanForUsage("writeToBuffer", destination.buffer().usage(),
+        LavaFlowDataWatch.onUpload("writeToBuffer", destination.buffer().usage(),
                 buffer(destination).handle(), destination.offset(), source);
         GpuBufferSlice staging = transientMemory.uploadStaging(source, 1);
         copyToBuffer(staging, destination.slice(0, size));
@@ -499,8 +499,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (source.buffer() instanceof LavaFlowGpuBuffer readback) {
                 ByteBuffer bytes = readback.mappedView(source.offset(), source.length());
                 if (bytes != null) {
-                    LavaFlowDataWatch.scanForUsage("copyToBuffer src", destination.buffer().usage(),
-                            readback.handle(), source.offset(), bytes);
+                    LavaFlowDataWatch.onUpload("copyToBuffer", destination.buffer().usage(),
+                            buffer(destination).handle(), destination.offset(), bytes);
                 }
             }
             int usage = destination.buffer().usage();
