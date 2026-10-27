@@ -807,7 +807,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // the cached set's identity — and the set itself — is independent of where in a buffer each
         // draw reads. A set is allocated and written only when these bindings name a resource
         // combination that has not been seen before.
-        boolean dynamic = pipeline.dynamicUniforms();
+        boolean dynamic = pipeline.dynamicUniforms() && LavaFlowElision.DYNAMIC_UNIFORM_OFFSETS;
         int entryCount = entries.size();
         if (keyScratch.length != entryCount * 3) keyScratch = new long[entryCount * 3];
         if (resourceScratch.length != entryCount * 2) resourceScratch = new long[entryCount * 2];

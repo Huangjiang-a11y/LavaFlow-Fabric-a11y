@@ -35,7 +35,9 @@ final class LavaFlowElision {
     /** 允许省略取值相同的 uniform。 */
     static final boolean UNIFORM = !DISABLED.contains("uniform");
     /** 允许在描述符没有变化时跳过重新绑定。 */
-    static final boolean DESCRIPTORS = !DISABLED.contains("descriptors");
+    /** 允许把 UBO 偏移当作动态偏移在绑定时给出。关掉它（-Dlavaflow.bakeUniform=true）就是官方那种做法：
+     * 把偏移烘焙进描述符集合、按资源+偏移去缓存集合，绑定时不给动态偏移。 */
+    static final boolean DYNAMIC_UNIFORM_OFFSETS = !Boolean.getBoolean("lavaflow.bakeUniform");
 
     private LavaFlowElision() {}
 
@@ -43,7 +45,8 @@ final class LavaFlowElision {
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "bind elision: vbuf=" + VERTEX + " ibuf=" + INDEX + " pipeline=" + PIPELINE
-                        + " uniform=" + UNIFORM + " descriptors=" + DESCRIPTORS
+                + " uniform=" + UNIFORM + " descriptors=" + DESCRIPTORS
+                + " dynamicUniformOffsets=" + DYNAMIC_UNIFORM_OFFSETS
                         + (DISABLED.isEmpty() ? "" : " (disabled=" + DISABLED + ")"));
     }
 
