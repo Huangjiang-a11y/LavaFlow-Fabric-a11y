@@ -112,10 +112,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private void logIndexedDraw(int indexCount, int firstIndex, int baseVertex) {
         String name = pipeline == null ? "(none)" : pipeline.name();
         if (!name.contains("terrain") && !name.contains("water")) return;
-        if (terrainDrawsLogged >= TERRAIN_DRAW_LOG_CAP) return;
+        // 前 TERRAIN_DRAW_LOG_CAP 笔照旧记；此后只在"出现过索引写入重叠"的帧附近再记，
+        // 这样重叠那几帧的参数一定在日志里，而不会被前面的几千笔挤掉。
+        if (terrainDrawsLogged >= TERRAIN_DRAW_LOG_CAP
+                && !LavaFlowDataWatch.overlapping(LavaFlowFrameStats.totalFrames())) return;
         terrainDrawsLogged++;
         StringBuilder line = new StringBuilder(192);
-        line.append("terrain-draw #").append(terrainDrawsLogged).append(' ').append(name)
+        line.append("terrain-draw #").append(terrainDrawsLogged)
+                .append(" frame=").append(LavaFlowFrameStats.totalFrames()).append(' ').append(name)
                 .append(" indexCount=").append(indexCount).append(" firstIndex=").append(firstIndex)
                 .append(" baseVertex=").append(baseVertex)
                 .append(" vbuf0=").append(Long.toHexString(encoder.boundVertexHandle(0)))

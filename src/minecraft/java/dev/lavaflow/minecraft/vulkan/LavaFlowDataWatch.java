@@ -53,6 +53,8 @@ final class LavaFlowDataWatch {
 
     private static final List<long[]> RANGES = new ArrayList<>();
     private static long rangeFrame = -1;
+    /** 最近发生索引写入重叠的帧号；绘制侧据此决定"这一帧值得记下来"。 */
+    private static volatile long overlapFrame = -1;
 
     private LavaFlowDataWatch() {}
 
@@ -184,6 +186,12 @@ final class LavaFlowDataWatch {
                         + " nonFinite=" + nonFinite + " wild=" + wild + bounds);
     }
 
+    /** 这一帧（或它的前一帧）里出现过索引写入重叠：绘制侧值得记下参数。 */
+    static boolean overlapping(long frame) {
+        long overlap = overlapFrame;
+        return overlap >= 0 && (frame == overlap || frame == overlap + 1);
+    }
+
     private static void noteIndexWrite(String what, long handle, long offset, ByteBuffer data) {
         int length = data.remaining();
         long frame = LavaFlowFrameStats.totalFrames();
@@ -191,26 +199,42 @@ final class LavaFlowDataWatch {
             rangeFrame = frame;
             RANGES.clear();
         }
+        int maxIndex = 0;
+        int firstSeen = -1;
+        ByteBuffer view = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        int cursor = view.position();
+        int stop = cursor + length;
+        for (; cursor + 4 <= stop; cursor += 4) {
+            int low = view.getShort(cursor) & 0xFFFF;
+            int high = view.getShort(cursor + 2) & 0xFFFF;
+            if (firstSeen < 0) firstSeen = low;
+            if (low > maxIndex) maxIndex = low;
+            if (high > maxIndex) maxIndex = high;
+        }
         long end = offset + length;
-        long clashOffset = -1, clashEnd = -1;
+        long[] clash = null;
         for (long[] range : RANGES) {
             // 同一次写入会经过 writeToBuffer 与它内部的 copyToBuffer 报两遍，区间完全一样的不算重叠。
             if (offset == range[0] && end == range[1]) continue;
-            if (offset < range[1] && range[0] < end) {
-                clashOffset = range[0];
-                clashEnd = range[1];
-            }
+            if (offset < range[1] && range[0] < end) clash = range;
         }
-        if (RANGES.size() < 256) RANGES.add(new long[]{offset, end});
-        if (clashOffset >= 0) {
+        if (RANGES.size() < 256) RANGES.add(new long[]{offset, end, maxIndex, firstSeen});
+        if (clash != null) {
+            overlapFrame = frame;
+            // 同一帧里同一个偏移被写了两次，而长度不同。两边最大索引若不同，就说明这俩写入的区块顶点数
+            // 不同，也就是两个不同的区块共用了一段索引：读这一段的那一笔拿到的就是两家拼起来的索引。
+            // 顶点都还在本区块自己的范围里（两边都是从 0 起的），所以查内容、查覆盖、查越界全都看不出
+            // 问题，画出来却是乱连的三角形——正是"个别三角形被拉得长到离谱"的样子。
             System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
-                    "index upload OVERLAP " + what + " h=" + Long.toHexString(handle) + " @" + offset
-                            + "+" + length + " frame=" + frame + " clashes-with=[" + clashOffset + "," + clashEnd + ")");
+                    "index OVERLAP " + what + " h=" + Long.toHexString(handle) + " @" + offset + "+" + length
+                            + " frame=" + frame + " new[len=" + length + " maxIndex=" + maxIndex + " first=" + firstSeen
+                            + "] old[len=" + (clash[1] - clash[0]) + " maxIndex=" + clash[2] + " first=" + clash[3]
+                            + "] " + (clash[2] == maxIndex ? "SAME-CONTENT" : "DIFFERENT-VERTEX-COUNT"));
         }
         if (INDEX_LINES.getAndIncrement() < INDEX_LINE_CAP) {
             System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                     "index upload " + what + " h=" + Long.toHexString(handle) + "@" + offset + " bytes=" + length
-                            + " frame=" + frame);
+                            + " frame=" + frame + " maxIndex=" + maxIndex + " first=" + firstSeen);
         }
     }
 }
