@@ -153,6 +153,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 和主机映射来核对这一笔绘制到底在读什么。句柄记录里没有这些。
     private LavaFlowGpuBuffer watchedVertexBuffer;
     private LavaFlowGpuBuffer watchedIndexBuffer;
+    /** slot 0 的绑定偏移：顶点字节的地址要在缓冲基址上加它。 */
+    private long watchedVertexOffset;
     private boolean descriptorsDirty = true;
     private boolean begun;
     private boolean ended;
@@ -593,7 +595,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         long offset = buffer.offset();
-        if (slot == 0) watchedVertexBuffer = (LavaFlowGpuBuffer) buffer.buffer();
+        if (slot == 0) {
+            watchedVertexBuffer = (LavaFlowGpuBuffer) buffer.buffer();
+            watchedVertexOffset = offset;
+        }
         // A device run measured 92.8 recorded vertex binds per frame against 92.8 draws: the frontend asks for
         // the same slot over and over, and each request that matches what is already bound would change
         // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
@@ -638,14 +643,13 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         noteDrawKind("drawIndexed");
         if (LavaFlowDrawCheck.ENABLED) {
             LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipeline == null ? "" : pipeline.name(),
-                    watchedVertexBuffer, baseVertex, watchedIndexBuffer,
+                    watchedVertexBuffer, watchedVertexOffset, baseVertex, watchedIndexBuffer,
                     encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
         }
         if (DEBUG_DRAWS) logIndexedDraw(indexCount, firstIndex, baseVertex);
         if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
-
     /**
      * 把这一笔绘制正在用的顶点/索引缓冲登记给上传哨兵。
      *
