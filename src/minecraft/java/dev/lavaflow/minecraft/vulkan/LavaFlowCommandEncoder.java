@@ -299,6 +299,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         return boundIndexHandle;
     }
 
+    /** 记录里 slot 上顶点绑定的字节偏移；未绑定时为 0。 */
+    long boundVertexOffset(int slot) {
+        return vertexSlotBound[slot] ? boundVertexOffsets[slot] : 0;
+    }
+
+    /** 记录里索引绑定的 VkIndexType；-1 表示还没录过。 */
+    int boundIndexType() {
+        return boundIndexType;
+    }
+
     boolean indexBound(long handle, int type) {
         return boundIndexType == type && boundIndexHandle == handle;
     }
@@ -471,6 +481,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         long size = source.remaining();
         if (size == 0) return;
         if (size > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
+        // 诊断：写进缓冲的这段字节先扫一遍，看有没有非有限值或量级离谱的坐标。
+        LavaFlowDataWatch.scanForUsage("writeToBuffer", destination.buffer().usage(),
+                buffer(destination).handle(), destination.offset(), source);
         GpuBufferSlice staging = transientMemory.uploadStaging(source, 1);
         copyToBuffer(staging, destination.slice(0, size));
     }
@@ -482,6 +495,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
             // copy 只是记录，录制时目标的主机内存还是旧内容：不能再用主机捷径读它。
             if (destination.buffer() instanceof LavaFlowGpuBuffer written) written.markGpuWritten();
+            // 诊断：源若是已映射的（transient staging 就是），直接读它即将被拷走的那段字节查一次。
+            if (source.buffer() instanceof LavaFlowGpuBuffer readback) {
+                ByteBuffer bytes = readback.mappedView(source.offset(), source.length());
+                if (bytes != null) {
+                    LavaFlowDataWatch.scanForUsage("copyToBuffer src", destination.buffer().usage(),
+                            readback.handle(), source.offset(), bytes);
+                }
+            }
             int usage = destination.buffer().usage();
             int destinationStages = bufferDestinationStages(usage);
             int destinationAccess = bufferDestinationAccess(usage);

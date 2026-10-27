@@ -130,7 +130,29 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         return new LavaFlowRenderPipeline(device, createInfo);
     }
 
-    // 诊断开关：-Dlavaflow.debugPipelines=true 时，每编译一条管线打一行完整声明。
+    /** 管线请求的深度状态，一行里放得下的写法。 */
+    private static String describeDepth(DepthStencilState state) {
+        if (state == null) return "(none)";
+        return "test=" + state.depthTest() + " write=" + state.writeDepth()
+                + " biasC=" + state.depthBiasConstant() + " biasS=" + state.depthBiasScaleFactor();
+    }
+
+    /** 每个颜色目标的写掩码与混合，按声明顺序；水面的颜色能不能写出来全看这一串。 */
+    private static String describeBlend(List<ColorTargetState> targets) {
+        StringBuilder text = new StringBuilder(64);
+        for (int i = 0; i < targets.size(); i++) {
+            ColorTargetState target = targets.get(i);
+            if (i > 0) text.append(',');
+            if (target == null) {
+                text.append("(null)");
+                continue;
+            }
+            text.append("mask=0x").append(Integer.toHexString(LavaFlowVk.colorWriteMask(target)));
+            target.blendFunction().ifPresent(blend -> text.append(' ').append(blend));
+        }
+        return text.length() == 0 ? "(none)" : text.toString();
+    }
+
     // 顶点布局是这行的重点：binding 的 stride 和 attribute 的 offset/format 决定顶点怎么被读，
     // 布局与真正绑定的缓冲对不上，画面就是"顶点读偏"。管线懒创建且带缓存，一条只打一次，不会刷屏。
     private static final boolean DEBUG_PIPELINES = Boolean.getBoolean("lavaflow.debugPipelines");
@@ -144,7 +166,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 .append(" polygon=").append(info.polygonMode())
                 .append(" pushConstants=").append(info.pushConstantsSize())
                 .append(" depthFormat=").append(info.depthStencilFormat())
+                .append(" depth=").append(describeDepth(info.depthStencilState()))
                 .append(" colorTargets=").append(info.colorTargetStates().size())
+                .append(" blend=").append(describeBlend(info.colorTargetStates()))
                 .append(" vbufs=[");
         for (CompiledRenderPipeline.CreateInfo.VertexBuffer vb : info.vertexBuffers()) {
             line.append("{slot=").append(vb.bufferSlot())

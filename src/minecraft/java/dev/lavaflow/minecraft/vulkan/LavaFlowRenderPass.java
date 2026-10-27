@@ -119,7 +119,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 .append(" indexCount=").append(indexCount).append(" firstIndex=").append(firstIndex)
                 .append(" baseVertex=").append(baseVertex)
                 .append(" vbuf0=").append(Long.toHexString(encoder.boundVertexHandle(0)))
-                .append(" ibuf=").append(Long.toHexString(encoder.boundIndexHandle()));
+                .append("+").append(encoder.boundVertexOffset(0))
+                .append(" ibuf=").append(Long.toHexString(encoder.boundIndexHandle()))
+                .append(" itype=").append(encoder.boundIndexType());
         for (int i = 0; i < uniforms.size(); i++) {
             if (uniforms.get(i) instanceof GpuBufferSlice slice) {
                 line.append(" u").append(i).append('=')
