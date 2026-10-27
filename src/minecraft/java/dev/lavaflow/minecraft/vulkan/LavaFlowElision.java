@@ -38,6 +38,8 @@ final class LavaFlowElision {
     /** 允许把 UBO 偏移当作动态偏移在绑定时给出。关掉它（-Dlavaflow.bakeUniform=true）就是官方那种做法：
      * 把偏移烘焙进描述符集合、按资源+偏移去缓存集合，绑定时不给动态偏移。 */
     static final boolean DYNAMIC_UNIFORM_OFFSETS = !Boolean.getBoolean("lavaflow.bakeUniform");
+    /** 允许在描述符没有变化时跳过重新绑定。 */
+    static final boolean DESCRIPTORS = !DISABLED.contains("descriptors");
 
     private LavaFlowElision() {}
 
