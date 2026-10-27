@@ -533,7 +533,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (!(pipeline instanceof LavaFlowRenderPipeline lavaPipeline)) {
             throw new IllegalArgumentException("Pipeline must be a LavaFlowRenderPipeline");
         }
-        if (this.pipeline == lavaPipeline) {
+        if (LavaFlowElision.PIPELINE && this.pipeline == lavaPipeline) {
             // Elided here is only the vkCmdBindPipeline recording, not the accounting: the counters
             // describe what the frontend does, and hiding repeat calls would paint rebind_ratio as 0.
             LavaFlowFrameStats.pipelineBind(true);
@@ -558,7 +558,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             throw new IllegalStateException("Uniform index " + index + " is outside the bound pipeline's "
                     + uniforms.size() + " uniforms");
         }
-        if (Objects.equals(uniforms.get(index), value)) {
+        if (LavaFlowElision.UNIFORM && Objects.equals(uniforms.get(index), value)) {
             return;
         }
         uniforms.set(index, value);
@@ -608,7 +608,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
         // command is dropped — but the question has to be asked against the encoder's record rather than the
         // pass's, because a binding outlives the pass it was recorded in.
-        boolean repeated = encoder.vertexBound(slot, handle, offset);
+        boolean repeated = LavaFlowElision.VERTEX && encoder.vertexBound(slot, handle, offset);
         LavaFlowFrameStats.vertexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
@@ -630,7 +630,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // Same bargain as setVertexBuffer: the request is not hidden from the frontend's counters, only
         // the redundant vkCmdBindIndexBuffer is dropped. The binding outlives the pass it was recorded
         // in, so the question goes to the encoder.
-        boolean repeated = encoder.indexBound(handle, vkType);
+        boolean repeated = LavaFlowElision.INDEX && encoder.indexBound(handle, vkType);
         LavaFlowFrameStats.indexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
@@ -781,7 +781,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private void pushDescriptors() {
         if (pipeline == null) throw new IllegalStateException("No graphics pipeline is bound");
         ensureBegun();
-        if (!descriptorsDirty) return;
+        if (LavaFlowElision.DESCRIPTORS && !descriptorsDirty) return;
         List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
         if (entries.isEmpty()) {
             descriptorsDirty = false;
