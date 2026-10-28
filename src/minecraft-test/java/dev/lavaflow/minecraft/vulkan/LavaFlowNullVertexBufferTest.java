@@ -15,6 +15,7 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPassLayout;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
@@ -100,11 +101,11 @@ class LavaFlowNullVertexBufferTest {
                     GpuBuffer.USAGE_VERTEX, 64);
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "null vertex test pass")
-                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1), Optional.of(new Vector4f(0, 0, 0, 1)))
-                    .withDepthAttachment(depthView = device.createTextureView(depth, 0, 1), OptionalDouble.of(1.0))
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
-                    .build();
+            RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT);
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> "null vertex test pass", passLayout);
+            passBuilder.withAttachment(colorView = device.createTextureView(color, 0, 1), new Vector4f(0, 0, 0, 1));
+            passBuilder.withAttachment(depthView = device.createTextureView(depth, 0, 1), 1.0f);
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
 
             long vertexBindsBefore = LavaFlowFrameStats.vertexBufferBindsTotal();
@@ -176,11 +177,10 @@ class LavaFlowNullVertexBufferTest {
                 List.of(),   // no uniforms: nothing to set before the draw
                 0,           // push constants size
                 DepthStencilState.DEFAULT,
-                null,        // depthStencilFormat: this test pipelines draw without a depth attachment
                 PolygonMode.FILL,
                 false,       // cull
-                List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
+                List.of(new ColorTargetState(Optional.empty(),
                         ColorTargetState.WRITE_ALL)),
-                PrimitiveTopology.TRIANGLES);
+                PrimitiveTopology.TRIANGLES, RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT).subpass(0));
     }
 }

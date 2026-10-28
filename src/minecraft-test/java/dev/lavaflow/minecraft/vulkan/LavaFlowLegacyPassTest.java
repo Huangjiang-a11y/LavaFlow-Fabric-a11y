@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPassLayout;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
@@ -100,11 +101,11 @@ class LavaFlowLegacyPassTest {
             colorView = device.createTextureView(color, 0, 1);
             depthView = device.createTextureView(depth, 0, 1);
 
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "legacy pass test")
-                    .withColorAttachment(colorView, Optional.of(new Vector4f(0, 0, 0, 1)))
-                    .withDepthAttachment(depthView, OptionalDouble.of(1.0))
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
-                    .build();
+            RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT);
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> "legacy pass test", passLayout);
+            passBuilder.withAttachment(colorView, new Vector4f(0, 0, 0, 1));
+            passBuilder.withAttachment(depthView, 1.0f);
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
 
             RenderPassBackend first = encoder.createRenderPass(descriptor);
             first.setPipeline(pipeline);
@@ -164,11 +165,10 @@ class LavaFlowLegacyPassTest {
                 List.of(),   // no uniforms: the fragment shader writes a constant
                 0,
                 DepthStencilState.DEFAULT,
-                GpuFormat.D32_FLOAT,
                 PolygonMode.FILL,
                 false,
-                List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
+                List.of(new ColorTargetState(Optional.empty(),
                         ColorTargetState.WRITE_ALL)),
-                PrimitiveTopology.TRIANGLES);
+                PrimitiveTopology.TRIANGLES, RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT).subpass(0));
     }
 }

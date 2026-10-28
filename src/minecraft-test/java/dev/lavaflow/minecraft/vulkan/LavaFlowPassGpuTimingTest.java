@@ -1,6 +1,7 @@
 package dev.lavaflow.minecraft.vulkan;
 
 import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.pipeline.RenderPassLayout;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
 import com.mojang.renderpearl.api.textures.GpuTexture;
@@ -59,10 +60,10 @@ class LavaFlowPassGpuTimingTest {
                     GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING,
                     "pass timing target", GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
             view = device.createTextureView(target, 0, 1);
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> LABEL)
-                    .withColorAttachment(view, Optional.of(new Vector4f(0.0f, 0.0f, 0.0f, 1.0f)))
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
-                    .build();
+            RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1);
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> LABEL, passLayout);
+            passBuilder.withAttachment(view, new Vector4f(0.0f, 0.0f, 0.0f, 1.0f));
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
 
             long samplesBefore = LavaFlowFrameStats.timedPassSamples();
             CommandEncoderBackend encoder = device.createCommandEncoder();
@@ -112,10 +113,10 @@ class LavaFlowPassGpuTimingTest {
                     GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING,
                     "pass timing off target", GpuFormat.RGBA8_UNORM, SIZE, SIZE, 1, 1);
             view = device.createTextureView(target, 0, 1);
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> LABEL)
-                    .withColorAttachment(view, Optional.of(new Vector4f(0.0f, 0.0f, 0.0f, 1.0f)))
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
-                    .build();
+            RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1);
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> LABEL, passLayout);
+            passBuilder.withAttachment(view, new Vector4f(0.0f, 0.0f, 0.0f, 1.0f));
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
 
             long samplesBefore = LavaFlowFrameStats.timedPassSamples();
             CommandEncoderBackend encoder = device.createCommandEncoder();

@@ -137,6 +137,28 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 + " biasC=" + state.depthBiasConstant() + " biasS=" + state.depthBiasScaleFactor();
     }
 
+    /**
+     * snapshot-6 起管线本身不再带附件格式：格式统一由它所属 subpass 的 {@code RenderPassLayout} 声明，
+     * {@code ColorTargetState} 也与 {@code DeviceLimits.maxColorAttachments} 一并去掉了格式分量。
+     * 这里按 subpass 的下标把格式查回来；{@code ATTACHMENT_UNUSED} 表示该槽没有附件。
+     */
+    private static com.mojang.renderpearl.api.GpuFormat colorFormatOf(CompiledRenderPipeline.CreateInfo info, int slot) {
+        var subpass = info.subpass();
+        var layout = subpass.renderPassLayout();
+        if (slot >= subpass.colorAttachments().size()) return null;
+        int attachment = subpass.colorAttachments().getByte(slot);
+        return attachment == com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED
+                ? null : layout.attachmentFormats().get(attachment);
+    }
+
+    private static com.mojang.renderpearl.api.GpuFormat depthFormatOf(CompiledRenderPipeline.CreateInfo info) {
+        var subpass = info.subpass();
+        var layout = subpass.renderPassLayout();
+        int attachment = subpass.depthStencilAttachment();
+        return attachment == com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED
+                ? null : layout.attachmentFormats().get(attachment);
+    }
+
     /** 每个颜色目标的写掩码与混合，按声明顺序；水面的颜色能不能写出来全看这一串。 */
     private static String describeBlend(List<ColorTargetState> targets) {
         StringBuilder text = new StringBuilder(64);
@@ -165,7 +187,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 .append(" cull=").append(info.cull())
                 .append(" polygon=").append(info.polygonMode())
                 .append(" pushConstants=").append(info.pushConstantsSize())
-                .append(" depthFormat=").append(info.depthStencilFormat())
+                .append(" depthFormat=").append(depthFormatOf(info))
                 .append(" depth=").append(describeDepth(info.depthStencilState()))
                 .append(" colorTargets=").append(info.colorTargetStates().size())
                 .append(" blend=").append(describeBlend(info.colorTargetStates()))
@@ -186,6 +208,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         LOGGER.log(System.Logger.Level.INFO, line.toString());
     }
 
+    private static final java.util.concurrent.atomic.AtomicBoolean INPUT_ATTACHMENT_WARNED = new java.util.concurrent.atomic.AtomicBoolean();
+
     /**
      * One entry per {@code createInfo.uniforms()}, in that exact order.
      *
@@ -205,6 +229,18 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 case UNIFORM_BUFFER -> EntryType.UNIFORM_BUFFER;
                 case COMBINED_IMAGE_SAMPLER -> EntryType.SAMPLED_IMAGE;
                 case TEXEL_BUFFER -> EntryType.TEXEL_BUFFER;
+                // 6 新增：subpass 的 input attachment（片元着色器里按 subpass input 采样，Vulkan 上
+                // 需要 VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT，与采样图不是同一种描述符）。LavaFlow
+                // 目前没有这条路径，先按采样图绑定并在第一次遇到时告警——宁可画面可疑也不要静默
+                // 错绑；真用上了，补一个输入附件描述符类型即可。
+                case INPUT_ATTACHMENT -> {
+                    if (INPUT_ATTACHMENT_WARNED.compareAndSet(false, true)) {
+                        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                                "pipeline uniform " + uniform.name() + " is an input attachment; "
+                                        + "bound as a sampled image (input attachments are not implemented yet)");
+                    }
+                    yield EntryType.SAMPLED_IMAGE;
+                }
             };
             result.add(new Entry(type, uniform.name(), uniform.gpuFormat()));
         }
@@ -446,7 +482,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             IntBuffer colorFormats = stack.mallocInt(targets.size());
             for (int i = 0; i < targets.size(); i++) {
                 colorFormats.put(i, targets.get(i) == null ? VK_FORMAT_UNDEFINED
-                        : LavaFlowVk.format(targets.get(i).format()));
+                        : LavaFlowVk.format(colorFormatOf(info, i)));
             }
             VkGraphicsPipelineCreateInfo.Buffer create = VkGraphicsPipelineCreateInfo.calloc(1, stack).sType$Default()
                     .pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(assembly)

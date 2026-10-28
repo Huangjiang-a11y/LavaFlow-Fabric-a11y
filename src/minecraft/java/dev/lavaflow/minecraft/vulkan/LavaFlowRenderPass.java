@@ -6,6 +6,7 @@ import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.api.pipeline.IndexType;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPassLayout;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
@@ -206,10 +207,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         this.context = encoder.device().context();
         this.descriptor = descriptor;
 
-        List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
-        RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
+        int colorSlots = colorSlotCount();
+        RenderPassDescriptor.Attachment depth = depthAttachment();
         GpuTextureView extentView = null;
-        for (RenderPassDescriptor.Attachment<Optional<Vector4fc>> attachment : colors) {
+        for (int slot = 0; slot < colorSlots; slot++) {
+            RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
             if (attachment != null) extentView = attachment.textureView();
         }
         if (extentView == null && depth != null) extentView = depth.textureView();
@@ -217,36 +219,35 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         outputWidth = extentView.getWidth(0);
         outputHeight = extentView.getHeight(0);
 
-        colorViews = new LavaFlowGpuTextureView[colors.size()];
-        boolean clears = depth != null && depth.clearValue().isPresent();
-        for (int i = 0; i < colors.size(); i++) {
-            RenderPassDescriptor.Attachment<Optional<Vector4fc>> attachment = colors.get(i);
+        colorViews = new LavaFlowGpuTextureView[colorSlots];
+        boolean clearAny = clears(depth, false);
+        for (int slot = 0; slot < colorSlots; slot++) {
+            RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
             if (attachment == null) continue;
-            colorViews[i] = view(attachment.textureView());
-            clears |= attachment.clearValue().isPresent();
+            colorViews[slot] = view(attachment.textureView());
+            clearAny |= clears(attachment, false);
         }
         depthView = depth == null ? null : view(depth.textureView());
-        hasClears = clears;
+        hasClears = clearAny;
 
         if (context.dynamicRendering()) {
             renderPass = 0;
         } else {
-            colorFormats = new int[colors.size()];
-            colorLoadOps = new int[colors.size()];
-            for (int i = 0; i < colors.size(); i++) {
-                if (colorViews[i] == null) {
-                    colorFormats[i] = VK_FORMAT_UNDEFINED;
-                    colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorFormats = new int[colorSlots];
+            colorLoadOps = new int[colorSlots];
+            for (int slot = 0; slot < colorSlots; slot++) {
+                RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
+                if (colorViews[slot] == null) {
+                    colorFormats[slot] = VK_FORMAT_UNDEFINED;
+                    colorLoadOps[slot] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
                 } else {
-                    colorFormats[i] = LavaFlowVk.format(colorViews[i].texture().getFormat());
-                    colorLoadOps[i] = colors.get(i).clearValue().isPresent()
-                            ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colorFormats[slot] = LavaFlowVk.format(colorViews[slot].texture().getFormat());
+                    colorLoadOps[slot] = loadOp(attachment, false);
                 }
             }
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                     : LavaFlowVk.format(depthView.texture().getFormat());
-            int depthLoadOp = depth == null || depth.clearValue().isEmpty()
-                    ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            int depthLoadOp = depth == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, false);
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
         }
 
@@ -334,37 +335,36 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     private void beginDynamic(MemoryStack stack, boolean resume) {
-        List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
-        RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
-        VkRenderingAttachmentInfo.Buffer colorAttachments = VkRenderingAttachmentInfo.calloc(colors.size(), stack);
-        for (int i = 0; i < colors.size(); i++) {
-            RenderPassDescriptor.Attachment<Optional<Vector4fc>> attachment = colors.get(i);
-            VkRenderingAttachmentInfo renderingAttachment = colorAttachments.get(i).sType$Default();
+        int colorSlots = colorSlotCount();
+        RenderPassDescriptor.Attachment depth = depthAttachment();
+        VkRenderingAttachmentInfo.Buffer colorAttachments = VkRenderingAttachmentInfo.calloc(colorSlots, stack);
+        for (int slot = 0; slot < colorSlots; slot++) {
+            RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
+            VkRenderingAttachmentInfo renderingAttachment = colorAttachments.get(slot).sType$Default();
             if (attachment == null) {
                 renderingAttachment.imageView(0).imageLayout(VK_IMAGE_LAYOUT_UNDEFINED)
                         .loadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE).storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
                 continue;
             }
-            boolean clear = !resume && attachment.clearValue().isPresent();
-            renderingAttachment.imageView(colorViews[i].handle())
+            boolean clear = clears(attachment, resume);
+            renderingAttachment.imageView(colorViews[slot].handle())
                     .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                    .loadOp(clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD)
-                    .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
-            if (clear) {
-                Vector4fc value = attachment.clearValue().get();
+                    .loadOp(loadOp(attachment, resume))
+                    .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            if (clear && attachment.clearValue().color() != null) {
+                Vector4fc value = attachment.clearValue().color();
                 renderingAttachment.clearValue().color()
                         .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
             }
         }
         VkRenderingAttachmentInfo depthAttachment = null;
         if (depthView != null) {
-            boolean clear = !resume && depth.clearValue().isPresent();
             depthAttachment = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
                     .imageView(depthView.handle()).imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                    .loadOp(clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD)
-                    .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
-            if (clear) depthAttachment.clearValue().depthStencil()
-                    .depth((float) depth.clearValue().getAsDouble()).stencil(0);
+                    .loadOp(loadOp(depth, resume))
+                    .storeOp(depth.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            if (clears(depth, resume)) depthAttachment.clearValue().depthStencil()
+                    .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());
         }
         RenderPass.RenderArea area = descriptor.renderArea();
         VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default()
@@ -376,21 +376,21 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     private void beginLegacy(MemoryStack stack, boolean resume) {
-        List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
-        RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
+        int colorSlots = colorSlotCount();
+        RenderPassDescriptor.Attachment depth = depthAttachment();
         int attachmentCount = depthView == null ? 0 : 1;
         for (LavaFlowGpuTextureView view : colorViews) if (view != null) attachmentCount++;
         if (attachmentScratch.length != attachmentCount) attachmentScratch = new long[attachmentCount];
         long[] views = attachmentScratch;
         VkClearValue.Buffer clearValues = VkClearValue.calloc(attachmentCount, stack);
         int attachmentIndex = 0;
-        for (int i = 0; i < colorViews.length; i++) {
-            LavaFlowGpuTextureView view = colorViews[i];
+        for (int slot = 0; slot < colorViews.length; slot++) {
+            LavaFlowGpuTextureView view = colorViews[slot];
             if (view == null) continue;
             views[attachmentIndex] = view.handle();
-            Optional<Vector4fc> clear = resume ? Optional.empty() : colors.get(i).clearValue();
-            if (clear.isPresent()) {
-                Vector4fc value = clear.get();
+            RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
+            if (clears(attachment, resume) && attachment.clearValue().color() != null) {
+                Vector4fc value = attachment.clearValue().color();
                 clearValues.get(attachmentIndex).color()
                         .float32(stack.floats(value.x(), value.y(), value.z(), value.w()));
             }
@@ -398,8 +398,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         if (depthView != null) {
             views[attachmentIndex] = depthView.handle();
-            if (!resume && depth.clearValue().isPresent()) clearValues.get(attachmentIndex).depthStencil()
-                    .depth((float) depth.clearValue().getAsDouble()).stencil(0);
+            if (clears(depth, resume)) clearValues.get(attachmentIndex).depthStencil()
+                    .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());
         }
         long beginRenderPass = resume ? resumeRenderPass() : renderPass;
         long framebuffer = context.legacyFramebuffer(beginRenderPass, views, outputWidth, outputHeight);
@@ -512,7 +512,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // 旧版渲染通道的子通道颜色附件数是写死的，VkPipelineColorBlendStateCreateInfo 必须正好
         // 报这么多。数量能对上就不必多说；对不上时驱动可能读越界（Mali 上是空指针），这一行是
         // 崩溃前唯一能落盘的证词，所以只说一次、直接 WARNING。
-        int passColorTargets = descriptor.colorAttachments().size();
+        int passColorTargets = colorSlotCount();
         if (passColorTargets != pipeline.colorTargetCount() && !colorTargetMismatchReported) {
             colorTargetMismatchReported = true;
             System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
@@ -524,7 +524,51 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 pipeline.pipelineFor(depthVkFormat, renderPass, passColorTargets));
     }
 
-    boolean hasDepth() { return descriptor.depthAttachment() != null; }
+    // ---- snapshot-6 的附件模型 ------------------------------------------------------------
+    // 6 里渲染通道不再分"颜色列表 / 深度附件"，而是由 RenderPassLayout 的 subpass 声明附件下标：
+    // colorAttachments() 是每个颜色槽对应的附件下标（ByteList，槽位顺序即绘制顺序），
+    // depthStencilAttachment() 是深度槽的附件下标，ATTACHMENT_UNUSED 表示该槽空着。
+    // 附件本身是 RenderPassDescriptor.Attachment(textureView, load, store, clearValue)。
+    private RenderPassLayout.Subpass subpass0() { return descriptor.layout().subpass(0); }
+
+    private RenderPassDescriptor.Attachment attachmentAt(int index) {
+        return index == RenderPassLayout.ATTACHMENT_UNUSED || index >= descriptor.attachments().size()
+                ? null : descriptor.attachments().get(index);
+    }
+
+    private RenderPassDescriptor.Attachment colorAttachment(int slot) {
+        return slot >= subpass0().colorAttachments().size()
+                ? null : attachmentAt(subpass0().colorAttachments().getByte(slot));
+    }
+
+    private RenderPassDescriptor.Attachment depthAttachment() {
+        return attachmentAt(subpass0().depthStencilAttachment());
+    }
+
+    private int colorSlotCount() { return subpass0().colorAttachments().size(); }
+
+    /** 该附件这一帧要不要清：有 clear 值且不是续录。 */
+    private static boolean clears(RenderPassDescriptor.Attachment attachment, boolean resume) {
+        return !resume && attachment != null && attachment.clearValue() != null;
+    }
+
+    /** 该附件的 load op：能清就清，否则按 load 标志决定是保留还是不用。 */
+    private static int loadOp(RenderPassDescriptor.Attachment attachment, boolean resume) {
+        if (clears(attachment, resume)) return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        return attachment != null && attachment.load() ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    }
+
+    @Override public void nextSubpass() {
+        // LavaFlow 按单子通道录制：旧的 VkRenderPass 只声明一个 subpass，动态渲染本来也没有 subpass。
+        // 单子通道布局下这一步是无操作；真出现多子通道布局，在旧路径上如实推进一步，动态渲染明确拒绝。
+        if (descriptor.layout().subpasses().size() <= 1 || !begun) return;
+        if (context.dynamicRendering()) {
+            throw new IllegalStateException("nextSubpass is not supported with dynamic rendering");
+        }
+        vkCmdNextSubpass(encoder.commandBuffer(), VK_SUBPASS_CONTENTS_INLINE);
+    }
+
+    boolean hasDepth() { return depthAttachment() != null; }
 
 
     @Override public void pushDebugGroup(Supplier<String> label) {}
