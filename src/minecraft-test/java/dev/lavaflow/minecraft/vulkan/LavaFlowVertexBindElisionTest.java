@@ -101,10 +101,10 @@ class LavaFlowVertexBindElisionTest {
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
             RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT);
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "vertex bind test pass", passLayout)
-                    .withAttachment(colorView = device.createTextureView(color, 0, 1), new Vector4f(0, 0, 0, 1))
-                    .withAttachment(depthView = device.createTextureView(depth, 0, 1), 1.0f)
-                    .build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> "vertex bind test pass", passLayout);
+            passBuilder.withAttachment(colorView = device.createTextureView(color, 0, 1), new Vector4f(0, 0, 0, 1));
+            passBuilder.withAttachment(depthView = device.createTextureView(depth, 0, 1), 1.0f);
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
 
             long callsBefore = LavaFlowFrameStats.vertexBufferBindCallsTotal();
             long repeatsBefore = LavaFlowFrameStats.vertexBufferBindRepeatsTotal();

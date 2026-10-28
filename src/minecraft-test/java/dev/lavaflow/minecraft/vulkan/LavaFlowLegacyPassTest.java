@@ -102,10 +102,10 @@ class LavaFlowLegacyPassTest {
             depthView = device.createTextureView(depth, 0, 1);
 
             RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT);
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "legacy pass test", passLayout)
-                    .withAttachment(colorView, new Vector4f(0, 0, 0, 1))
-                    .withAttachment(depthView, 1.0f)
-                    .build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
+            RenderPassDescriptor.Builder passBuilder = RenderPassDescriptor.builder(() -> "legacy pass test", passLayout);
+            passBuilder.withAttachment(colorView, new Vector4f(0, 0, 0, 1));
+            passBuilder.withAttachment(depthView, 1.0f);
+            RenderPassDescriptor descriptor = passBuilder.build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
 
             RenderPassBackend first = encoder.createRenderPass(descriptor);
             first.setPipeline(pipeline);
