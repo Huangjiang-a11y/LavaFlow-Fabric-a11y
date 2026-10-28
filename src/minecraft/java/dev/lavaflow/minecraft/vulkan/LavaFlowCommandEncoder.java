@@ -520,11 +520,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                             destination.buffer(), destination.offset(), bytes);
                 }
             }
-            if (LavaFlowSync.BROAD_BARRIER) {
-                // 官方式：全局屏障，两侧都是 ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE。不依赖对目标
-                // 用途位的任何推断，因而不会漏掉某一种用法。
-                memoryBarrier(stack);
-            } else {
+            if (LavaFlowSync.NARROW_BARRIER) {
+                // 旧写法，留作对照：按目标缓冲的用途位推出 dst stage/access，并限定在那一段字节上。
                 int usage = destination.buffer().usage();
                 int destinationStages = bufferDestinationStages(usage);
                 int destinationAccess = bufferDestinationAccess(usage);
@@ -534,6 +531,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                         .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
                 vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                         destinationStages, 0, null, barrier, null);
+            } else {
+                // 默认：官方式全局屏障（ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE，两侧相同）。
+                // 真机 A/B 证明窄屏障会漏同步，画面表现为半透明表面的几何扭曲，见 LavaFlowSync 的说明。
+                memoryBarrier(stack);
             }
         }
     }
