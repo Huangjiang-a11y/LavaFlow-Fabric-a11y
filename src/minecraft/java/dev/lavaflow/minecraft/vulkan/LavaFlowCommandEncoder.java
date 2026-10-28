@@ -497,15 +497,22 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
             // copy 只是记录，录制时目标的主机内存还是旧内容：不能再用主机捷径读它。
             if (destination.buffer() instanceof LavaFlowGpuBuffer written) written.markGpuWritten();
-            int usage = destination.buffer().usage();
-            int destinationStages = bufferDestinationStages(usage);
-            int destinationAccess = bufferDestinationAccess(usage);
-            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(destinationAccess)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    destinationStages, 0, null, barrier, null);
+            if (LavaFlowSync.NARROW_BARRIER) {
+                // 旧写法，留作对照：按目标缓冲的用途位推出 dst stage/access，并限定在那一段字节上。
+                int usage = destination.buffer().usage();
+                int destinationStages = bufferDestinationStages(usage);
+                int destinationAccess = bufferDestinationAccess(usage);
+                VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(destinationAccess)
+                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        destinationStages, 0, null, barrier, null);
+            } else {
+                // 默认：官方式全局屏障（ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE，两侧相同）。
+                // 见 LavaFlowSync 的说明：窄屏障在真机上会漏同步，表现为半透明表面的几何扭曲。
+                memoryBarrier(stack);
+            }
         }
     }
     @Override public void writeToTexture(GpuTexture target, ByteBuffer source, int mip, int layer, int x, int y, int width, int height) {
