@@ -54,6 +54,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     public LavaFlowDevice() {
         // 启动时说明这一局用哪种绑定去重组合：日志自己回答"这是开着去重跑的，还是关着跑的"。
         LavaFlowElision.logConfiguration();
+        LavaFlowSync.logConfiguration();
         this.context = new LavaFlowVulkanContext();
         this.descriptorCache = new LavaFlowDescriptorCache(context, this);
         VkPhysicalDeviceLimits limits = context.properties().limits();

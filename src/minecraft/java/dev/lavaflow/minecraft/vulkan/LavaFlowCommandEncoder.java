@@ -355,7 +355,24 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         slot.serial = recordingSerial++;
         slot.inFlight = true;
         waitSemaphore = signalSemaphore = NULL;
+        int submittedSlot = slotIndex;
         prepareSlot((slotIndex + 1) % SUBMIT_SLOTS);
+        // 官方在提交后立刻 awaitSubmitCompletion(currentSubmitIndex - 2) 把在飞提交压住；这里是更
+        // 强的一档：等这一次跑完再返回，于是"上一次提交里写的、下一次提交要读的"绝无重叠可能。
+        if (LavaFlowSync.SERIALIZE_SUBMIT) awaitSlotCompletion(submittedSlot);
+    }
+
+    /** 等某个提交槽真正跑完，并把它的资源交还给设备（与 prepareSlot 里复用槽时做的事一致）。 */
+    private void awaitSlotCompletion(int index) {
+        SubmitSlot target = slots[index];
+        if (!target.inFlight) return;
+        check(vkWaitForFences(context.device(), target.fence, true, 5_000_000_000L), "vkWaitForFences(serialize submit)");
+        check(vkResetFences(context.device(), target.fence), "vkResetFences(serialize submit)");
+        completedSerial = Math.max(completedSerial, target.serial);
+        target.inFlight = false;
+        device.completeSubmit(target.batch);
+        target.batch = null;
+        readPassGpuTimes(index);
     }
 
     /**
@@ -503,14 +520,21 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                             destination.buffer(), destination.offset(), bytes);
                 }
             }
-            int usage = destination.buffer().usage();
-            int destinationStages = bufferDestinationStages(usage);
-            int destinationAccess = bufferDestinationAccess(usage);
-            VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(destinationAccess)
-                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            if (LavaFlowSync.BROAD_BARRIER) {
+                // 官方式：全局屏障，两侧都是 ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE。不依赖对目标
+                // 用途位的任何推断，因而不会漏掉某一种用法。
+                memoryBarrier(stack);
+            } else {
+                int usage = destination.buffer().usage();
+                int destinationStages = bufferDestinationStages(usage);
+                int destinationAccess = bufferDestinationAccess(usage);
+                VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(destinationAccess)
+                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        destinationStages, 0, null, barrier, null);
+            }
                     destinationStages, 0, null, barrier, null);
         }
     }
