@@ -137,6 +137,28 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 + " biasC=" + state.depthBiasConstant() + " biasS=" + state.depthBiasScaleFactor();
     }
 
+    /**
+     * snapshot-6 起管线本身不再带附件格式：格式统一由它所属 subpass 的 {@code RenderPassLayout} 声明，
+     * {@code ColorTargetState} 也与 {@code DeviceLimits.maxColorAttachments} 一并去掉了格式分量。
+     * 这里按 subpass 的下标把格式查回来；{@code ATTACHMENT_UNUSED} 表示该槽没有附件。
+     */
+    private static com.mojang.renderpearl.api.GpuFormat colorFormatOf(CompiledRenderPipeline.CreateInfo info, int slot) {
+        var subpass = info.subpass();
+        var layout = subpass.renderPassLayout();
+        if (slot >= subpass.colorAttachments().size()) return null;
+        int attachment = subpass.colorAttachments().getByte(slot);
+        return attachment == com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED
+                ? null : layout.attachmentFormats().get(attachment);
+    }
+
+    private static com.mojang.renderpearl.api.GpuFormat depthFormatOf(CompiledRenderPipeline.CreateInfo info) {
+        var subpass = info.subpass();
+        var layout = subpass.renderPassLayout();
+        int attachment = subpass.depthStencilAttachment();
+        return attachment == com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED
+                ? null : layout.attachmentFormats().get(attachment);
+    }
+
     /** 每个颜色目标的写掩码与混合，按声明顺序；水面的颜色能不能写出来全看这一串。 */
     private static String describeBlend(List<ColorTargetState> targets) {
         StringBuilder text = new StringBuilder(64);
@@ -165,7 +187,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 .append(" cull=").append(info.cull())
                 .append(" polygon=").append(info.polygonMode())
                 .append(" pushConstants=").append(info.pushConstantsSize())
-                .append(" depthFormat=").append(info.depthStencilFormat())
+                .append(" depthFormat=").append(depthFormatOf(info))
                 .append(" depth=").append(describeDepth(info.depthStencilState()))
                 .append(" colorTargets=").append(info.colorTargetStates().size())
                 .append(" blend=").append(describeBlend(info.colorTargetStates()))
@@ -446,7 +468,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             IntBuffer colorFormats = stack.mallocInt(targets.size());
             for (int i = 0; i < targets.size(); i++) {
                 colorFormats.put(i, targets.get(i) == null ? VK_FORMAT_UNDEFINED
-                        : LavaFlowVk.format(targets.get(i).format()));
+                        : LavaFlowVk.format(colorFormatOf(info, i)));
             }
             VkGraphicsPipelineCreateInfo.Buffer create = VkGraphicsPipelineCreateInfo.calloc(1, stack).sType$Default()
                     .pStages(stages).pVertexInputState(vertexInput).pInputAssemblyState(assembly)
