@@ -117,6 +117,9 @@ final class LavaFlowGpuTexture implements GpuTexture {
      * and the texture would never be destroyed.
      */
     synchronized LavaFlowGpuTextureView cachedClearView(int mipLevel) {
+        if (closed) throw new IllegalStateException("Texture is closed");
+        return clearViews.computeIfAbsent(mipLevel, mip -> new LavaFlowGpuTextureView(device, this, mip, 1));
+    }
 
     /**
      * Returns the view for {@code (baseMip, mips)}, creating and caching it on first use. A view is an
@@ -131,9 +134,6 @@ final class LavaFlowGpuTexture implements GpuTexture {
         if (closed) throw new IllegalStateException("Texture is closed");
         long key = ((long)baseMip << 32) | (mips & 0xFFFFFFFFL);
         return sharedViews.computeIfAbsent(key, k -> new LavaFlowGpuTextureView(device, this, baseMip, mips).cached());
-    }
-        if (closed) throw new IllegalStateException("Texture is closed");
-        return clearViews.computeIfAbsent(mipLevel, mip -> new LavaFlowGpuTextureView(device, this, mip, 1));
     }
 
     synchronized void retainView() {
