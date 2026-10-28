@@ -26,6 +26,7 @@ import static dev.lavaflow.minecraft.vulkan.LavaFlowTestSupport.setSwitches;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.lwjgl.sdl.SDLInit.SDL_INIT_VIDEO;
 import static org.lwjgl.sdl.SDLInit.SDL_Init;
@@ -241,8 +242,13 @@ class LavaFlowDescriptorPathTest {
             // buildWrites refuses to write a sampled image that is not in GENERAL, so this is the
             // state it would see in production by the time a descriptor is pushed.
             texture.layout(VK_IMAGE_LAYOUT_GENERAL);
-            LavaFlowGpuTextureView firstView = (LavaFlowGpuTextureView) device.createTextureView(texture);
-            LavaFlowGpuTextureView secondView = (LavaFlowGpuTextureView) device.createTextureView(texture);
+            // Constructed directly rather than through device.createTextureView: that factory hands out
+            // a cached view per (baseMip, mips) now, so two calls return one and the same handle and
+            // neither dies when the caller closes it (see cachedTextureViewsSurviveTheCallersClose...).
+            // This test is about a view that really dies, which is what a directly constructed one and
+            // the texture's own clear views do.
+            LavaFlowGpuTextureView firstView = new LavaFlowGpuTextureView(device, texture, 0, 1);
+            LavaFlowGpuTextureView secondView = new LavaFlowGpuTextureView(device, texture, 0, 1);
             LavaFlowGpuSampler sampler = (LavaFlowGpuSampler) device.createSampler(
                     AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE,
                     FilterMode.NEAREST, FilterMode.NEAREST, 1, OptionalDouble.empty());
@@ -281,6 +287,81 @@ class LavaFlowDescriptorPathTest {
             // 写在整个回收阶段之前的话，对 set layout/descriptor pool 的归还是瞎的。这里把 finally
             // 干的收尾原样搬到体里，关完设备再断言，finally 仍作为失败路径的兜底。
             if (layout != 0L) device.descriptorCache().invalidate(layout);
+            device.completePending();
+            if (layout != 0L) vkDestroyDescriptorSetLayout(vkDevice, layout, null);
+            layout = 0L;
+            device.completePending();
+            device.close();
+            device = null;
+
+            assertNoValidationFindings(context);
+        } finally {
+            if (device != null) {
+                if (layout != 0L) device.descriptorCache().invalidate(layout);
+                device.completePending();
+                if (layout != 0L) vkDestroyDescriptorSetLayout(device.context().device(), layout, null);
+                device.close();
+            }
+            SDL_Quit();
+            restore(saved);
+        }
+    }
+
+    /**
+     * 缓存视图的契约跟"调用方关掉的视图"不一样：{@code device.createTextureView} 交出去的是纹理持有的
+     * 那一份，而 MC 会 close 每一个拿到的视图，所以这里的 close 只放弃调用方的那份声明——视图还活着，
+     * 描述符集也还得继续能交出来，直到纹理自己关闭时才一起退役。
+     *
+     * <p>上面那条用例走的是"视图真死"的那条路（直接构造的视图，以及纹理自己的 clear 视图）；
+     * 这条补的是缓存那条路，两条合起来才说明退役机制在两种生命周期下都成立。
+     */
+    @Test
+    void cachedTextureViewsSurviveTheCallersCloseAndRetireWithTheirTexture() throws Exception {
+        Map<String, String> saved = setSwitches(Map.of(
+                "lavaflow.baselineDevice", "true",
+                "lavaflow.validation", "true"));
+        assumeTrue(displayAvailable(), "需要显示服务器才能初始化 SDL 视频子系统（本地可用 xvfb-run）");
+        LavaFlowDevice device = null;
+        long layout = 0L;
+        try {
+            assumeTrue(SDL_Init(SDL_INIT_VIDEO), "SDL 视频子系统初始化失败");
+            exposeVulkanLoaderToLwjgl();
+            device = new LavaFlowDevice();
+            LavaFlowVulkanContext context = device.context();
+            VkDevice vkDevice = context.device();
+            LavaFlowDescriptorCache cache = device.descriptorCache();
+            layout = createSetLayout(vkDevice, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+            LavaFlowGpuTexture texture = (LavaFlowGpuTexture) device.createTexture("cached view test",
+                    GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.RGBA8_UNORM, 16, 16, 1, 1);
+            texture.layout(VK_IMAGE_LAYOUT_GENERAL);
+            LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) device.createTextureView(texture);
+            LavaFlowGpuTextureView again = (LavaFlowGpuTextureView) device.createTextureView(texture);
+            assertSame(view, again, "同一对 (baseMip, mips) 必须交出同一份缓存视图");
+
+            LavaFlowGpuSampler sampler = (LavaFlowGpuSampler) device.createSampler(
+                    AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE,
+                    FilterMode.NEAREST, FilterMode.NEAREST, 1, OptionalDouble.empty());
+
+            LavaFlowDescriptorCache.Key key = new LavaFlowDescriptorCache.Key(layout,
+                    new long[]{view.handle(), sampler.handle()});
+            long set = cache.allocateAndStore(key, layout, new long[]{view.handle(), sampler.handle()});
+            assertNotEquals(0L, set, "缓存未分配出 sampled image 的 descriptor set");
+            writeSampledImage(vkDevice, set, view.handle(), sampler.handle());
+
+            view.close();
+            device.completePending();
+            assertEquals(set, cache.lookup(key), "缓存视图被调用方关掉后仍然有效，写有它的 set 必须继续交出");
+            assertFalse(view.isClosed(), "缓存视图不因调用方的 close 而失效");
+
+            texture.close();
+            device.completePending();
+            assertEquals(0L, cache.lookup(key), "纹理关闭后，它的缓存视图才算真死，写有它的 set 必须退役");
+
+            sampler.close();
+            device.completePending();
+
+            if (layout != 0L) cache.invalidate(layout);
             device.completePending();
             if (layout != 0L) vkDestroyDescriptorSetLayout(vkDevice, layout, null);
             layout = 0L;
