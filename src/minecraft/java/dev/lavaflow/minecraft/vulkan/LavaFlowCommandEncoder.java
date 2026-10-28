@@ -667,6 +667,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void noteBufferWritten(GpuBufferSlice destination) {
         recentlyWrittenBuffers.add(buffer(destination).handle());
         bufferWriteBarrierPending = true;
+        // 通道开着的时候不能等"下一个落账点"——那个点（下一次 createRenderPass）已经在下一个通道
+        // 里了，而这个通道后面的绘制随手就可能读这份刚写的数据。这是"通道中途上传"（索引、顶点、
+        // uniform 环都可能），以前每笔拷贝立刻发屏障天然覆盖得到，改成延迟之后必须就地补上，
+        // 否则表现就是偶尔被拉长的三角形那类顶点/索引错位。屏障记在通道里是合法的。
+        if (renderPassOpen) flushBufferWriteBarrier();
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
