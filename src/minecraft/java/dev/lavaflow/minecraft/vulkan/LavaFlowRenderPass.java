@@ -366,6 +366,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (clears(depth, resume)) depthAttachment.clearValue().depthStencil()
                     .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());
         }
+        RenderPass.RenderArea area = descriptor.renderArea();
         VkRenderingInfo rendering = VkRenderingInfo.calloc(stack).sType$Default()
                 .layerCount(1).viewMask(0).pColorAttachments(colorAttachments);
         rendering.renderArea().offset().set(area.x(), area.y());
