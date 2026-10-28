@@ -503,13 +503,20 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         long size = source.remaining();
         if (size == 0) return;
         if (size > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
-        // 诊断：写进缓冲的这段字节先扫一遍，看有没有非有限值或量级离谱的坐标。
-        LavaFlowDataWatch.onUpload("writeToBuffer", destination.buffer().usage(),
-                destination.buffer(), destination.offset(), source);
+        // 自检交给 copyToBuffer 那一侧做：它读的是暂存区里即将被拷走的同一段字节。以前两头都扫，
+        // 同一份顶点数据每笔上传被解析两遍，而区块网格的上传正在热路径上。
         GpuBufferSlice staging = transientMemory.uploadStaging(source, 1);
-        copyToBuffer(staging, destination.slice(0, size));
+        copyToBuffer(staging, destination.slice(0, size), "writeToBuffer");
     }
     @Override public void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination) {
+        copyToBuffer(source, destination, "copyToBuffer");
+    }
+
+    /**
+     * @param origin 记进诊断日志的来源名：{@code writeToBuffer} 会走到这里做实际拷贝，日志里要能分清
+     *               是主机写入还是纯拷贝。
+     */
+    private void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination, String origin) {
         if (source.length() > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
         if (!LavaFlowSync.NARROW_BARRIER) {
             long sourceHandle = buffer(source).handle();
@@ -531,7 +538,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (source.buffer() instanceof LavaFlowGpuBuffer readback) {
                 ByteBuffer bytes = readback.mappedView(source.offset(), source.length());
                 if (bytes != null) {
-                    LavaFlowDataWatch.onUpload("copyToBuffer", destination.buffer().usage(),
+                    LavaFlowDataWatch.onUpload(origin, destination.buffer().usage(),
                             destination.buffer(), destination.offset(), bytes);
                 }
             }

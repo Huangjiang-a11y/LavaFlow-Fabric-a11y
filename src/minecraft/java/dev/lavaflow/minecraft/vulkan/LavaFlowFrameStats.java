@@ -56,9 +56,7 @@ public final class LavaFlowFrameStats {
     private static long retiredViews;
     private static long retiredSamplers;
     private static long retiredTextures;
-    // private static long partialClears; // dead code: partialClear() is never called in production
     private static long retiredTexturesAtReport;
-    // private static long partialClearsAtReport; // dead code: paired with partialClears
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -377,15 +375,6 @@ public final class LavaFlowFrameStats {
      */
     public static boolean enabled() { return ENABLED; }
 
-    /**
-     * Counts one {@code clearColorAndDepthTextures} call. Those create two texture views that are
-     * destroyed again immediately, so this is the one place LavaFlow itself manufactures view churn
-     * and it is worth being able to rule in or out by number rather than by reading the call graph.
-     */
-    // public static void partialClear() { // dead code: never called in production
-    //     if (!ENABLED) return;
-    //     partialClears++;
-    // }
 
     /** Counts one retired sampler. */
     public static void samplerRetired() {
@@ -478,7 +467,6 @@ public final class LavaFlowFrameStats {
         retiredViewsAtReport = retiredViews;
         retiredSamplersAtReport = retiredSamplers;
         retiredTexturesAtReport = retiredTextures;
-        // partialClearsAtReport = partialClears; // dead code: paired with partialClears
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
@@ -549,7 +537,6 @@ public final class LavaFlowFrameStats {
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
-        double clearsPerFrame = 0.0; // was: framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
         updateReportBaselines();
         LOGGER.log(System.Logger.Level.INFO,
@@ -559,10 +546,10 @@ public final class LavaFlowFrameStats {
                         + " binds_per_frame={12} rebind_ratio={13} bind_records_per_frame={14} vertex_binds_per_frame={15}"
                         + " pushes_per_frame={16} uniform_changes_per_frame={17}"
                         + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
-                        + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
-                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
-                        + " index_binds_per_frame={27} index_bind_calls_per_frame={28} index_rebind_ratio={29}"
-                        + " copy_barriers_per_frame={30}",
+                        + " pass_splits_per_frame={22} top_retired_view={23}"
+                        + " vertex_bind_calls_per_frame={24} vertex_rebind_ratio={25}"
+                        + " index_binds_per_frame={26} index_bind_calls_per_frame={27} index_rebind_ratio={28}"
+                        + " copy_barriers_per_frame={29}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -585,7 +572,6 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", viewsPerFrame),
                 String.format("%.2f", samplersPerFrame),
                 String.format("%.2f", texturesPerFrame),
-                String.format("%.1f", clearsPerFrame),
                 String.format("%.2f", passSplitsPerFrame),
                 topViewLabels,
                 String.format("%.1f", vertexBindCallsPerFrame),
