@@ -208,6 +208,8 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         LOGGER.log(System.Logger.Level.INFO, line.toString());
     }
 
+    private static final java.util.concurrent.atomic.AtomicBoolean INPUT_ATTACHMENT_WARNED = new java.util.concurrent.atomic.AtomicBoolean();
+
     /**
      * One entry per {@code createInfo.uniforms()}, in that exact order.
      *
@@ -227,6 +229,18 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 case UNIFORM_BUFFER -> EntryType.UNIFORM_BUFFER;
                 case COMBINED_IMAGE_SAMPLER -> EntryType.SAMPLED_IMAGE;
                 case TEXEL_BUFFER -> EntryType.TEXEL_BUFFER;
+                // 6 新增：subpass 的 input attachment（片元着色器里按 subpass input 采样，Vulkan 上
+                // 需要 VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT，与采样图不是同一种描述符）。LavaFlow
+                // 目前没有这条路径，先按采样图绑定并在第一次遇到时告警——宁可画面可疑也不要静默
+                // 错绑；真用上了，补一个输入附件描述符类型即可。
+                case INPUT_ATTACHMENT -> {
+                    if (INPUT_ATTACHMENT_WARNED.compareAndSet(false, true)) {
+                        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                                "pipeline uniform " + uniform.name() + " is an input attachment; "
+                                        + "bound as a sampled image (input attachments are not implemented yet)");
+                    }
+                    yield EntryType.SAMPLED_IMAGE;
+                }
             };
             result.add(new Entry(type, uniform.name(), uniform.gpuFormat()));
         }
