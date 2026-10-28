@@ -17,6 +17,7 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPassLayout;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
@@ -106,11 +107,11 @@ class LavaFlowRebindElisionTest {
             indices = device.createBuffer(() -> "rebind test indices", GpuBuffer.USAGE_INDEX, 12);
             pipeline = (LavaFlowRenderPipeline) device.compilePipeline(createInfo()).finishCompile();
 
-            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "rebind test pass")
-                    .withColorAttachment(colorView = device.createTextureView(color, 0, 1), Optional.of(new Vector4f(0, 0, 0, 1)))
-                    .withDepthAttachment(depthView = device.createTextureView(depth, 0, 1), OptionalDouble.of(1.0))
-                    .withRenderArea(new RenderPass.RenderArea(0, 0, SIZE, SIZE))
-                    .build();
+            RenderPassLayout passLayout = RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT);
+            RenderPassDescriptor descriptor = RenderPassDescriptor.builder(() -> "rebind test pass", passLayout)
+                    .withAttachment(colorView = device.createTextureView(color, 0, 1), new Vector4f(0, 0, 0, 1))
+                    .withAttachment(depthView = device.createTextureView(depth, 0, 1), 1.0f)
+                    .build(new RenderPass.RenderArea(0, 0, SIZE, SIZE));
             RenderPassBackend pass = encoder.createRenderPass(descriptor);
 
             long bindsBefore = LavaFlowFrameStats.pipelineBindsTotal();
@@ -218,14 +219,13 @@ class LavaFlowRebindElisionTest {
                                         ShaderType.FRAGMENT)),
                 List.of(),   // no vertex buffers: the shaders read no attributes
                 List.of(),   // no attribute bindings
-                List.of(new CompiledRenderPipeline.CreateInfo.Uniform("u", 0, UniformType.UNIFORM_BUFFER, null)),
+                List.of(new CompiledRenderPipeline.CreateInfo.Uniform("u", -1, 0, UniformType.UNIFORM_BUFFER, null)),
                 0,           // push constants size
                 DepthStencilState.DEFAULT,
-                null,        // depthStencilFormat: this test pipelines draw without a depth attachment
                 PolygonMode.FILL,
                 false,       // cull
-                List.of(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM,
+                List.of(new ColorTargetState(Optional.empty(),
                         ColorTargetState.WRITE_ALL)),
-                PrimitiveTopology.TRIANGLES);
+                PrimitiveTopology.TRIANGLES, passLayout.subpass(0));
     }
 }
