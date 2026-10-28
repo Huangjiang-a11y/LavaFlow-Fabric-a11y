@@ -535,7 +535,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                         destinationStages, 0, null, barrier, null);
             }
-                    destinationStages, 0, null, barrier, null);
         }
     }
     @Override public void writeToTexture(GpuTexture target, ByteBuffer source, int mip, int layer, int x, int y, int width, int height) {
