@@ -32,6 +32,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
     private boolean renderPassOpen;
+    /** 有缓冲被拷贝写过、但还没发屏障。 */
+    private boolean bufferWriteBarrierPending;
+    /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
@@ -436,6 +440,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public TransientMemory transientMemory() { return transientMemory; }
     @Override public RenderPassBackend createRenderPass(RenderPassDescriptor descriptor) {
         if (renderPassOpen) throw new IllegalStateException("A render pass is already open");
+        flushBufferWriteBarrier();
         renderPassOpen = true;
         activeRenderPass = new LavaFlowRenderPass(this, descriptor);
         return activeRenderPass;
@@ -506,6 +511,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination) {
         if (source.length() > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
+        if (!LavaFlowSync.NARROW_BARRIER) {
+            long sourceHandle = buffer(source).handle();
+            long destinationHandle = buffer(destination).handle();
+            // 连续拷贝整段只需要一条屏障：只有这笔真的会读到刚写过的东西（同缓冲、或源/目标在
+            // 本段里已经写过）时，才先把账落成屏障。
+            if (sourceHandle == destinationHandle || recentlyWrittenBuffers.contains(sourceHandle)
+                    || recentlyWrittenBuffers.contains(destinationHandle)) {
+                flushBufferWriteBarrier();
+            }
+        }
         try (MemoryStack stack = stackPush()) {
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(source.offset())
                     .dstOffset(destination.offset()).size(source.length());
@@ -534,7 +549,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             } else {
                 // 默认：官方式全局屏障（ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE，两侧相同）。
                 // 真机 A/B 证明窄屏障会漏同步，画面表现为半透明表面的几何扭曲，见 LavaFlowSync 的说明。
-                memoryBarrier(stack);
+                noteBufferWritten(destination);
             }
         }
     }
@@ -548,6 +563,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         copyBufferToTexture(staging, 0, 0, width, height, target, x, y, width, height, mip, layer);
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(target); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         long offset = source.offset() + (long)(rowOffset + imageOffset * rowLength) * target.getFormat().blockSize();
         try (MemoryStack stack = stackPush()) {
@@ -565,6 +581,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // a readback that needs to be waited on now goes through GpuFence (createFence), so there is nothing
     // left for the backend to notify. Only the rectangle form is still abstract.
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, int mip, int x, int y, int width, int height) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(source); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack).bufferOffset(offset);
@@ -576,6 +593,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         restoreSampledLayout(texture);
     }
     @Override public void copyTextureToTexture(GpuTexture source, GpuTexture target, int mip, int targetX, int targetY, int sourceX, int sourceY, int width, int height) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture src = texture(source), dst = texture(target);
         transition(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); transition(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
@@ -625,6 +643,30 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
+    }
+
+    /**
+     * 把攒下的"缓冲刚被拷贝写过"落成一条全局屏障。
+     *
+     * <p>原来是每笔 writeToBuffer / copyToBuffer 之后立刻发一条全局屏障。可一帧里常常连着写十几份
+     * 索引，而它们全要等到下一次绘制才被读，中间那些屏障纯属白等——全局屏障的代价是整条流水线刷一遍
+     * （tiled GPU 上还包括 tile 状态），不是白给的。改成记账 + 延迟：只有在这笔拷贝可能读到刚写过的
+     * 东西、或者要开始录绘制时，才发一条，整段只付一次。
+     */
+    private void flushBufferWriteBarrier() {
+        if (!bufferWriteBarrierPending) return;
+        try (MemoryStack stack = stackPush()) {
+            memoryBarrier(stack);
+        }
+        bufferWriteBarrierPending = false;
+        recentlyWrittenBuffers.clear();
+        LavaFlowFrameStats.copyBarrierRecorded();
+    }
+
+    /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
+    private void noteBufferWritten(GpuBufferSlice destination) {
+        recentlyWrittenBuffers.add(buffer(destination).handle());
+        bufferWriteBarrierPending = true;
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }

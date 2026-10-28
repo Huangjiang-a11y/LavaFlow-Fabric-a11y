@@ -44,6 +44,8 @@ public final class LavaFlowFrameStats {
     private static long descriptorInvalidationsAtReport;
     private static long barriers;
     private static long barriersAtReport;
+    private static long copyBarriers;
+    private static long copyBarriersAtReport;
     private static long submits;
     private static long submitsAtReport;
     private static long framesAtReport;
@@ -131,6 +133,12 @@ public final class LavaFlowFrameStats {
     public static void barrierRecorded() {
         if (!ENABLED) return;
         barriers++;
+    }
+
+    /** Counts one wide memory barrier emitted after buffer copies. */
+    public static void copyBarrierRecorded() {
+        if (!ENABLED) return;
+        copyBarriers++;
     }
 
     /** Counts one queue submission. */
@@ -464,6 +472,7 @@ public final class LavaFlowFrameStats {
         descriptorHitsAtReport = descriptorHits;
         descriptorInvalidationsAtReport = descriptorInvalidations;
         barriersAtReport = barriers;
+        copyBarriersAtReport = copyBarriers;
         submitsAtReport = submits;
         retiredBuffersAtReport = retiredBuffers;
         retiredViewsAtReport = retiredViews;
@@ -504,6 +513,7 @@ public final class LavaFlowFrameStats {
         double hitRate = setsSince + hitsSince == 0 ? 0 : hitsSince / (double) (setsSince + hitsSince);
         double invalidationsPerFrame = framesSince == 0 ? 0 : invalidationsSince / (double) framesSince;
         double barriersPerFrame = framesSince == 0 ? 0 : (barriers - barriersAtReport) / (double) framesSince;
+        double copyBarriersPerFrame = framesSince == 0 ? 0 : (copyBarriers - copyBarriersAtReport) / (double) framesSince;
         double submitsPerFrame = framesSince == 0 ? 0 : (submits - submitsAtReport) / (double) framesSince;
         long bindsSince = pipelineBinds - pipelineBindsAtReport;
         long rebindsSince = pipelineRebinds - pipelineRebindsAtReport;
@@ -551,7 +561,8 @@ public final class LavaFlowFrameStats {
                         + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
                         + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
                         + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
-                        + " index_binds_per_frame={27} index_bind_calls_per_frame={28} index_rebind_ratio={29}",
+                        + " index_binds_per_frame={27} index_bind_calls_per_frame={28} index_rebind_ratio={29}"
+                        + " copy_barriers_per_frame={30}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -581,7 +592,8 @@ public final class LavaFlowFrameStats {
                 String.format("%.3f", vertexRebindRatio),
                 String.format("%.1f", indexBindsPerFrame),
                 String.format("%.1f", indexBindCallsPerFrame),
-                String.format("%.3f", indexRebindRatio));
+                String.format("%.3f", indexRebindRatio),
+                String.format("%.1f", copyBarriersPerFrame));
         if (timedPasses != timedPassesAtReport) {
             double passMillisPerFrame = gpuSamplesSince == 0 ? 0
                     : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
