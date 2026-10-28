@@ -226,6 +226,6 @@ class LavaFlowRebindElisionTest {
                 false,       // cull
                 List.of(new ColorTargetState(Optional.empty(),
                         ColorTargetState.WRITE_ALL)),
-                PrimitiveTopology.TRIANGLES, passLayout.subpass(0));
+                PrimitiveTopology.TRIANGLES, RenderPassLayout.simple("lavaflow test", GpuFormat.RGBA8_UNORM, 1, GpuFormat.D32_FLOAT).subpass(0));
     }
 }
