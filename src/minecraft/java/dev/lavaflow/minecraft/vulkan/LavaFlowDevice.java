@@ -93,6 +93,9 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // is what actually gates PolygonMode.LINE pipelines in LavaFlowRenderPipeline.
         DeviceFeatures features = new DeviceFeatures(false, context.fillModeNonSolid(), false,
                 multiDrawDirectInterleaved, false, true, true, false, true);
+        // Reported to Minecraft as HintsAndWorkarounds.writeToBufferIsSlow: it is what makes StagingBuffer
+        // choose its persistently mapped ring buffer over its CPU staging buffer. See the argument below.
+        boolean writeToBufferIsSlow = !Boolean.getBoolean("lavaflow.forceCpuStagingBuffer");
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -118,14 +121,22 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
                 "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
-                // All four hints stay false. The third is 26.4's isExplicitDepthRequired: LavaFlow's
-                // legacy render-pass path accepts a pass with no depth attachment, which is exactly the
-                // case that hint exists to flag. The indirect-draw hint stays false too, because that
-                // emulation is exercised by the baselineDevice switch rather than being a known-bad path.
+                // The first hint is the one that decides where vertex uploads go. StagingBuffer.create
+                // reads it together with DeviceFeatures.persistentMapping and only then picks its
+                // persistently mapped ring buffer; with it false Minecraft falls back to its CPU staging
+                // buffer, which calls writeToBuffer for every upload — a transient allocation plus a
+                // device-side copy each time. LavaFlow's mappable memory is HOST_COHERENT and the ring
+                // buffer path is the cheaper one here, so the hint is now true by default
+                // (-Dlavaflow.forceCpuStagingBuffer=true restores the old answer for comparison).
+                //
+                // The third is 26.4's isExplicitDepthRequired: LavaFlow's legacy render-pass path accepts
+                // a pass with no depth attachment, which is exactly the case that hint exists to flag. The
+                // indirect-draw hint stays false too, because that emulation is exercised by the
+                // baselineDevice switch rather than being a known-bad path.
                 // 26.4-snapshot-5 dropped needsImeFullscreenWorkaround, the one that used to be
                 // first: it flags that the IME needs a fullscreen workaround, a Windows input
                 // concern a Vulkan backend never reports.
-                new HintsAndWorkarounds(false, false, false, false), type);
+                new HintsAndWorkarounds(writeToBufferIsSlow, false, false, false), type);
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
