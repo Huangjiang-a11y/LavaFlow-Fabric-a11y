@@ -759,22 +759,36 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .colorAttachmentCount(colorReferences.remaining())
                     .pColorAttachments(colorReferences);
             if (depthReference != null) subpass.get(0).pDepthStencilAttachment(depthReference);
-            VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
-            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);
-            dependency.dstSubpass(0);
-            dependency.srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            // The second dependency is the self-dependency VUID-vkCmdPipelineBarrier-None-07889 asks for: a
+            // barrier recorded inside a render pass is only legal when the pass was created with a dependency from
+            // the current subpass to itself whose scopes are a superset of the barrier's. Without it every in-pass
+            // barrier was illegal whatever its masks said, which is why the earlier attempts to fix this (an
+            // immediate ALL_COMMANDS barrier, then a TRANSFER source stage) kept failing validation. The official
+            // backend does the same: its RenderPassCache builds subpass dependencies, and its encoder has a single
+            // vkCmdPipelineBarrier site. Both masks are ALL_GRAPHICS because for a non-EXTERNAL srcSubpass every
+            // stage bit must be one the graphics pipeline supports (00837/00838); ALL_GRAPHICS covers DRAW_INDIRECT
+            // as well, so indirect parameters written inside a pass are covered too.
+            VkSubpassDependency.Buffer dependencies = VkSubpassDependency.calloc(2, stack);
+            dependencies.get(0).srcSubpass(VK_SUBPASS_EXTERNAL);
+            dependencies.get(0).dstSubpass(0);
+            dependencies.get(0).srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
             // NOT ALL_COMMANDS here: the dependency targets subpass 0, and for a non-EXTERNAL
             // dstSubpass every bit of dstStageMask has to be a stage the graphics pipeline supports
             // (VUID-VkRenderPassCreateInfo-pDependencies-00838). The validation layer flagged it the
             // moment a test drove this path for the first time. ALL_GRAPHICS keeps the intent: every
             // graphics stage in the subpass waits for what came before, and this backend issues its
             // transfers outside render passes, so no transfer stage is left uncovered.
-            dependency.dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
-            dependency.srcAccessMask(0);
-            dependency.dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            dependencies.get(0).dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
+            dependencies.get(0).srcAccessMask(0);
+            dependencies.get(0).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            dependencies.get(1).srcSubpass(0).dstSubpass(0)
+                    .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
             VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
-                    .pAttachments(attachments).pSubpasses(subpass).pDependencies(dependency);
+                    .pAttachments(attachments).pSubpasses(subpass).pDependencies(dependencies);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateRenderPass(device, info, null, out), "vkCreateRenderPass(fallback)");
             long renderPass = out.get(0);

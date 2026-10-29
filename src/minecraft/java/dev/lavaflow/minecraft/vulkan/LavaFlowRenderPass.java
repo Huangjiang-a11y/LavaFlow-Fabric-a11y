@@ -448,24 +448,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     private void flushPendingBufferBarrier() {
         if (!encoder.bufferWriteBarrierPending()) return;
-        if (!begun) {
-            encoder.flushBufferWriteBarrier();
-            return;
-        }
-        splitForBufferBarrier();
+        encoder.flushBufferWriteBarrier();
     }
 
     /** Ends the pass, flushes the buffer-write barrier outside it, and resumes with load ops. */
-    private void splitForBufferBarrier() {
-        LavaFlowFrameStats.passSplit();
-        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
-        else vkCmdEndRenderPass(encoder.commandBuffer());
-        encoder.flushBufferWriteBarrier();
-        try (MemoryStack stack = stackPush()) {
-            if (context.dynamicRendering()) beginDynamic(stack, true);
-            else beginLegacy(stack, true);
-        }
-    }
 
     private void splitForSampledTransitions(List<LavaFlowGpuTexture> sampled) {
         LavaFlowFrameStats.passSplit();

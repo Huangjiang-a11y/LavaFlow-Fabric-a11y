@@ -691,29 +691,27 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     /**
-    /**
      * Records the barrier that makes the pending buffer writes visible to the next draw.
      *
-     * <p>Must run outside a render pass. Inside one the barrier may only use graphics stages
-     * (VUID-vkCmdPipelineBarrier-None-07892) and, on the legacy path, needs a subpass self-dependency
-     * the render pass does not have (VUID-vkCmdPipelineBarrier-None-07889). A device copy is a transfer,
-     * which is not a graphics stage, so there is no legal in-pass form for "the copy finished, now read
-     * those bytes": LavaFlowRenderPass splits the pass instead. Reaching the in-pass branch is a bug —
-     * warned about once, and the pending flag is left set so the next pass boundary still establishes
-     * the dependency.
+     * <p>Outside a render pass this is the global barrier the official backend uses (ALL_COMMANDS with
+     * MEMORY_READ|MEMORY_WRITE on both sides). Inside one it may only name graphics stages
+     * (VUID-vkCmdPipelineBarrier-None-07892) and the pass has to have been created with a subpass self-dependency
+     * whose scopes are a superset (VUID-vkCmdPipelineBarrier-None-07889) — LavaFlowVulkanContext creates that
+     * one, so this form is legal here. BOTTOM_OF_PIPE as the source waits for every prior command including the
+     * transfer stage the copy ran as, which TRANSFER as a source stage is not allowed to name inside a pass.
      */
     void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
-        if (renderPassOpen) {
-            if (!warnedInPassBufferBarrier) {
-                warnedInPassBufferBarrier = true;
-                LOGGER.log(System.Logger.Level.WARNING, "buffer-write barrier requested inside a render"
-                        + " pass; deferring it to the next pass boundary, where it is legal");
-            }
-            return;
-        }
         try (MemoryStack stack = stackPush()) {
-            memoryBarrier(stack);
+            if (renderPassOpen) {
+                VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, barrier, null, null);
+            } else {
+                memoryBarrier(stack);
+            }
         }
         bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
@@ -721,15 +719,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
 
+
     /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
     private void noteBufferWritten(GpuBufferSlice destination) {
         recentlyWrittenBuffers.add(buffer(destination).handle());
         bufferWriteBarrierPending = true;
-        // 这里不发屏障，哪怕通道正开着：通道中途常常连着写十几份顶点/索引，而它们全都要等下一笔
-        // 绘制才被读，逐笔发就是白付——上一版正是在这里就地补的，能修好错位，但每条屏障在 tiled
-        // GPU 上都要刷一遍 tile 状态。真正的读取点只有三处：开始录绘制（createRenderPass）、每一笔
-        // 绘制之前（LavaFlowRenderPass 的绘制入口调 flushBufferWriteBarrier）、以及可能读到刚写过
-        // 东西的下一笔拷贝。账只在这三处落，中间那串写就只剩一条屏障。
+        // A write inside a pass cannot wait for the next flush point: the barrier would land in a later
+        // command buffer (or outside the pass altogether) while the draw in this one already reads it —
+        // for indirect draws that means the command processor reading parameters the copy has not written
+        // yet, which is a garbage index count in the hands of the GPU. The in-pass barrier is legal now that
+        // the render pass carries its self-dependency, so flush here.
+        if (renderPassOpen) flushBufferWriteBarrier();
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
