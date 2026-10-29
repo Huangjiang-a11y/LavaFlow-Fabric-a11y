@@ -151,7 +151,7 @@ jobs:
       # canary skips itself without the validation layer — so either skip would leave the descriptor
       # writes covered nowhere, which is exactly the situation this test was added to end. The five
       # methods are named rather than counted so the step says which coverage is missing when it
-      # fails, and the canary is one of them because without it the other three assert nothing.
+      # fails, and the canary is one of them because without it the others assert nothing.
       - name: Assert the descriptor path test ran rather than skipped
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowDescriptorPathTest.xml
