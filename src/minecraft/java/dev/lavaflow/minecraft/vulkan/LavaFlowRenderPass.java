@@ -687,6 +687,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexed");
         if (LavaFlowDrawCheck.ENABLED) {
@@ -719,6 +720,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
         if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
@@ -752,6 +754,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexedIndirect");
         if (DEBUG_DRAWS) logIndirectDraw(buffer, count);
@@ -798,6 +801,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         noteDrawKind("draw");
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
@@ -805,6 +809,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         noteDrawKind("drawIndirect");
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();

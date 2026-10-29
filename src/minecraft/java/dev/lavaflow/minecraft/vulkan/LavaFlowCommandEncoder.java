@@ -659,8 +659,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      * 索引，而它们全要等到下一次绘制才被读，中间那些屏障纯属白等——全局屏障的代价是整条流水线刷一遍
      * （tiled GPU 上还包括 tile 状态），不是白给的。改成记账 + 延迟：只有在这笔拷贝可能读到刚写过的
      * 东西、或者要开始录绘制时，才发一条，整段只付一次。
+     * <p>落账点有三处：开始录绘制、每一笔绘制之前（{@code LavaFlowRenderPass} 的绘制入口调本方法）、
+     * 以及可能读到刚写过东西的下一笔拷贝。
      */
-    private void flushBufferWriteBarrier() {
+    void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
         try (MemoryStack stack = stackPush()) {
             memoryBarrier(stack);
@@ -674,11 +676,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void noteBufferWritten(GpuBufferSlice destination) {
         recentlyWrittenBuffers.add(buffer(destination).handle());
         bufferWriteBarrierPending = true;
-        // 通道开着的时候不能等"下一个落账点"——那个点（下一次 createRenderPass）已经在下一个通道
-        // 里了，而这个通道后面的绘制随手就可能读这份刚写的数据。这是"通道中途上传"（索引、顶点、
-        // uniform 环都可能），以前每笔拷贝立刻发屏障天然覆盖得到，改成延迟之后必须就地补上，
-        // 否则表现就是偶尔被拉长的三角形那类顶点/索引错位。屏障记在通道里是合法的。
-        if (renderPassOpen) flushBufferWriteBarrier();
+        // 这里不发屏障，哪怕通道正开着：通道中途常常连着写十几份顶点/索引，而它们全都要等下一笔
+        // 绘制才被读，逐笔发就是白付——上一版正是在这里就地补的，能修好错位，但每条屏障在 tiled
+        // GPU 上都要刷一遍 tile 状态。真正的读取点只有三处：开始录绘制（createRenderPass）、每一笔
+        // 绘制之前（LavaFlowRenderPass 的绘制入口调 flushBufferWriteBarrier）、以及可能读到刚写过
+        // 东西的下一笔拷贝。账只在这三处落，中间那串写就只剩一条屏障。
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
