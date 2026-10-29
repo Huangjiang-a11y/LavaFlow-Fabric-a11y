@@ -702,7 +702,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
         try (MemoryStack stack = stackPush()) {
-            memoryBarrier(stack);
+            // 通道内部的屏障有额外限制：内存屏障的源/目的阶段只能包含图形管线阶段
+            // （VUID-vkCmdPipelineBarrier-None-07892），所以边界处那条 ALL_COMMANDS 的形式在通道里是
+            // 违规的——之前绘制入口在通道内直接调它，Mali 上随时可能因此丢设备。这里按实际语义写：
+            // 记账的写入只有主机写（一致内存，靠提交时的隐式依赖）和设备拷贝（transfer 阶段），
+            // 消费者是取顶点的图形阶段和读间接参数的 draw indirect，TRANSFER → 图形即可，且合法。
+            if (renderPassOpen) {
+                VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_INDEX_READ_BIT
+                                | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT
+                                | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0,
+                        barrier, null, null);
+            } else {
+                memoryBarrier(stack);
+            }
         }
         bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
