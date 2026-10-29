@@ -437,6 +437,36 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * attachment layout: barriers cannot be recorded inside a render pass. Dynamic state, the bound
      * pipeline, and descriptor bindings are command-buffer state and survive the boundary untouched.
      */
+    /**
+     * Flushes a pending buffer-write dependency before a draw, keeping the barrier outside the pass.
+     *
+     * <p>Inside a render pass a barrier may only use graphics stages
+     * (VUID-vkCmdPipelineBarrier-None-07892) and, on the legacy path, needs a subpass self-dependency
+     * the render pass does not have (VUID-vkCmdPipelineBarrier-None-07889). A device copy is a transfer,
+     * which is not a graphics stage, so there is no legal in-pass form for "the copy finished, now read
+     * those vertices" — the pass has to be split instead, the same shape as splitForSampledTransitions.
+     */
+    private void flushPendingBufferBarrier() {
+        if (!encoder.bufferWriteBarrierPending()) return;
+        if (!begun) {
+            encoder.flushBufferWriteBarrier();
+            return;
+        }
+        splitForBufferBarrier();
+    }
+
+    /** Ends the pass, flushes the buffer-write barrier outside it, and resumes with load ops. */
+    private void splitForBufferBarrier() {
+        LavaFlowFrameStats.passSplit();
+        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+        else vkCmdEndRenderPass(encoder.commandBuffer());
+        encoder.flushBufferWriteBarrier();
+        try (MemoryStack stack = stackPush()) {
+            if (context.dynamicRendering()) beginDynamic(stack, true);
+            else beginLegacy(stack, true);
+        }
+    }
+
     private void splitForSampledTransitions(List<LavaFlowGpuTexture> sampled) {
         LavaFlowFrameStats.passSplit();
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
@@ -687,7 +717,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexed");
         if (LavaFlowDrawCheck.ENABLED) {
@@ -720,7 +750,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
         if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
@@ -754,7 +784,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexedIndirect");
         if (DEBUG_DRAWS) logIndirectDraw(buffer, count);
@@ -801,7 +831,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("draw");
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
@@ -809,7 +839,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("drawIndirect");
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();

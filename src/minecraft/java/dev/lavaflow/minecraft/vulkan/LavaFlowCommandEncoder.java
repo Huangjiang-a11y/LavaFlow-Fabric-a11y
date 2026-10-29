@@ -32,6 +32,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
     private boolean renderPassOpen;
+    private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
@@ -690,40 +691,35 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     /**
-     * 把攒下的"缓冲刚被拷贝写过"落成一条全局屏障。
+    /**
+     * Records the barrier that makes the pending buffer writes visible to the next draw.
      *
-     * <p>原来是每笔 writeToBuffer / copyToBuffer 之后立刻发一条全局屏障。可一帧里常常连着写十几份
-     * 索引，而它们全要等到下一次绘制才被读，中间那些屏障纯属白等——全局屏障的代价是整条流水线刷一遍
-     * （tiled GPU 上还包括 tile 状态），不是白给的。改成记账 + 延迟：只有在这笔拷贝可能读到刚写过的
-     * 东西、或者要开始录绘制时，才发一条，整段只付一次。
-     * <p>落账点有三处：开始录绘制、每一笔绘制之前（{@code LavaFlowRenderPass} 的绘制入口调本方法）、
-     * 以及可能读到刚写过东西的下一笔拷贝。
+     * <p>Must run outside a render pass. Inside one the barrier may only use graphics stages
+     * (VUID-vkCmdPipelineBarrier-None-07892) and, on the legacy path, needs a subpass self-dependency
+     * the render pass does not have (VUID-vkCmdPipelineBarrier-None-07889). A device copy is a transfer,
+     * which is not a graphics stage, so there is no legal in-pass form for "the copy finished, now read
+     * those bytes": LavaFlowRenderPass splits the pass instead. Reaching the in-pass branch is a bug —
+     * warned about once, and the pending flag is left set so the next pass boundary still establishes
+     * the dependency.
      */
     void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
-        try (MemoryStack stack = stackPush()) {
-            // 通道内部的屏障有额外限制：内存屏障的源/目的阶段只能包含图形管线阶段
-            // （VUID-vkCmdPipelineBarrier-None-07892），所以边界处那条 ALL_COMMANDS 的形式在通道里是
-            // 违规的——之前绘制入口在通道内直接调它，Mali 上随时可能因此丢设备。这里按实际语义写：
-            // 记账的写入只有主机写（一致内存，靠提交时的隐式依赖）和设备拷贝（transfer 阶段），
-            // 消费者是取顶点的图形阶段和读间接参数的 draw indirect，TRANSFER → 图形即可，且合法。
-            if (renderPassOpen) {
-                VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
-                        .srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_INDEX_READ_BIT
-                                | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT
-                                | VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
-                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0,
-                        barrier, null, null);
-            } else {
-                memoryBarrier(stack);
+        if (renderPassOpen) {
+            if (!warnedInPassBufferBarrier) {
+                warnedInPassBufferBarrier = true;
+                LOGGER.log(System.Logger.Level.WARNING, "buffer-write barrier requested inside a render"
+                        + " pass; deferring it to the next pass boundary, where it is legal");
             }
+            return;
+        }
+        try (MemoryStack stack = stackPush()) {
+            memoryBarrier(stack);
         }
         bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
-        LavaFlowFrameStats.copyBarrierRecorded();
     }
+
+    boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
 
     /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
     private void noteBufferWritten(GpuBufferSlice destination) {
