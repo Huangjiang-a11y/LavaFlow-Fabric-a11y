@@ -185,12 +185,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // 而 defer() 在 completingBatch!=null 时会向本批 resources 追加，
         // 改变 ArrayList 结构。索引遍历不触发 Iterator 的 fail-fast，
         // 且能照原意把遍历期追加的资源一并回收。
+        int closedResources = 0;
         for (int i = 0; i < batch.resources.size(); i++) {
             try {
                 batch.resources.get(i).close();
             } catch (Exception e) {
-                failure = new RuntimeException(e);
+                if (failure == null) failure = new RuntimeException(e);
             }
+            closedResources = i + 1;
         }
         try {
             for (int i = 0; i < batch.callbacks.size(); i++) {
@@ -204,6 +206,17 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
             // 必须无条件执行：回调一旦抛异常而这里被跳过，completingBatch 会永远停在非 null，
             // 之后的 defer() 会把资源塞进一个已经回收完的批次，两个列表也再不会回到池里。
             completingBatch = null;
+            // 回调里若又 defer() 了什么，它落在本批 resources 的尾部，而上面那轮遍历已经过去了；
+            // 这里补收一遍，否则下面的 clear() 会连列表一起把它们丢掉（泄漏）。先置空 completingBatch
+            // 再收，close() 期间新来的 defer 才会落到下一个批次而不是这个即将被清空的列表。今天
+            // afterSubmit 没有调用者，这一步是防住将来。
+            for (int i = closedResources; i < batch.resources.size(); i++) {
+                try {
+                    batch.resources.get(i).close();
+                } catch (Exception e) {
+                    if (failure == null) failure = new RuntimeException(e);
+                }
+            }
             // The only holder of a batch is the submit slot, and it drops its reference the moment this
             // returns, so the lists are free to hand out again. Clearing is part of that: a recycled list
             // must not carry the previous batch's contents.

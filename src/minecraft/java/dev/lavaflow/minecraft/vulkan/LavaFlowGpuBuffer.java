@@ -131,7 +131,10 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
         // VUID-VkMappedMemoryRange-size-01390。Minecraft 自带的 Vulkan 后端
         // （VMA + vmaMapMemory/vmaUnmapMemory）同样从不 flush，只靠一致内存。
         long base = ensureMapped();
-        MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + offset, source.remaining());
+        // memAddress 给的就是 buffer 在 position() 处的地址（原始基址要 memAddress0），补第二次
+        // position 就把偏移算了两遍：position 非 0 时拷走的是越过预期位置的数据。长度用的是
+        // remaining()，即 [position, limit)，地址这边同样只需要 memAddress 本身。
+        MemoryUtil.memCopy(MemoryUtil.memAddress(source), base + offset, source.remaining());
         hostAuthoritative = true;
     }
 
