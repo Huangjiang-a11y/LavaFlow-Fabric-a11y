@@ -22,6 +22,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
 final class LavaFlowGpuBuffer implements GpuBuffer {
     private final LavaFlowDevice device;
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowGpuBuffer.class.getName());
     private final LavaFlowVulkanContext context;
     // 26.3 turned GpuBuffer into an interface; these two were the former abstract base class fields.
     private final int usage;
@@ -40,6 +41,7 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     // 写进这块 buffer 都把它清掉——那条 copy 只是被“记录”，录制时主机内存还是旧内容。
     private volatile boolean hostAuthoritative;
     private boolean closed;
+    private boolean unreadableReported;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
         if (size <= 0) throw new IllegalArgumentException("Buffer size must be positive");
@@ -105,6 +107,80 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
     int memoryTypeIndex() { return memoryTypeIndex; }
     boolean hostAuthoritative() { return hostAuthoritative; }
     void markGpuWritten() { hostAuthoritative = false; }
+
+    /**
+     * Whether indirect parameters in this buffer can be read on the CPU: either a mapping is already open, or
+     * the allocation is host-visible, in which case a mapping is opened on demand.
+     *
+     * <p>Minecraft's dynamic buffers are {@code MappableRingBuffer}s: the render thread opens a mapped view,
+     * writes the frame's commands, and closes it again — the release callback unmaps, so
+     * {@code mappedPhysicalBase} is back to zero by the time the buffer reaches drawIndexedIndirect. Requiring
+     * an open mapping therefore meant the CPU expansion could never run: the 2026-10-09 device log shows 1149
+     * split commands per frame against 0 expanded ones, exactly the driver-re-validates-the-parameters-per-call
+     * pattern the expansion exists to avoid. (Recovered from the archived 26.3 branch, tag 3b854e1.)
+     */
+    static boolean canReadParameters(long mappedPhysicalBase, boolean hostVisible) {
+        return mappedPhysicalBase != 0 || hostVisible;
+    }
+
+    /**
+     * Whether the allocation behind this buffer is host-visible, which is the only thing that decides whether
+     * the CPU can read its contents.
+     *
+     * <p>Deliberately not {@code GpuBuffer.USAGE_MAP_READ}: Minecraft's usage bits are an abstraction we
+     * implement, not a Vulkan rule — {@code vkMapMemory} has no per-buffer usage restriction at all, so a
+     * buffer Minecraft only ever maps for writing ({@code USAGE_MAP_WRITE}, memory HOST_VISIBLE|HOST_COHERENT)
+     * is perfectly readable here. Requiring the read bit is what kept the CPU expansion at zero expanded
+     * commands in the 2026-10-09 device log even after the mapping-it-ourselves fix.
+     */
+    boolean hostVisible() {
+        return (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
+    }
+
+    /**
+     * Explains once per buffer why a batch cannot be read on the CPU and is therefore issued as one indirect
+     * command per draw. The alternative is a silent slowdown, and which buffer it is and why is not something
+     * a counter can say.
+     */
+    synchronized void reportUnreadableOnce(long offset, long length) {
+        if (unreadableReported) return;
+        unreadableReported = true;
+        LOGGER.log(System.Logger.Level.INFO,
+                "Indirect parameters are not CPU-readable: buffer=" + Long.toHexString(buffer)
+                        + " size=" + size + " read=" + offset + "+" + length + " usage=" + usage
+                        + " hostAuthoritative=" + hostAuthoritative
+                        + "; issuing one indirect command per draw");
+    }
+
+    /**
+     * Copies {@code length} bytes at {@code offset} into host memory for the CPU expansion path.
+     *
+     * <p>Prefers the mapping the caller already opened, and otherwise opens one for the duration of the copy:
+     * that is the case the expansion actually meets, because a ring buffer's mapping is closed long before its
+     * draw arrives. Returns false rather than throwing when the buffer cannot be read from the CPU at all,
+     * because the caller has a correct fallback (one indirect command per draw) and a device-local buffer that
+     * holds indirect parameters is not an error.
+     *
+     * <p>No invalidation is needed after mapping: host-visible allocations here require HOST_COHERENT, so the
+     * copy sees whatever the render thread wrote.
+     */
+    synchronized boolean tryReadBack(long offset, long length, long destination) {
+        if (mappedPhysicalBase != 0) {
+            MemoryUtil.memCopy(mappedPhysicalBase + offset, destination, length);
+            return true;
+        }
+        if (!hostVisible()) return false;
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            if (vkMapMemory(context.device(), memory, offset, length, 0, pointer) != VK_SUCCESS) return false;
+            try {
+                MemoryUtil.memCopy(pointer.get(0), destination, length);
+            } finally {
+                vkUnmapMemory(context.device(), memory);
+            }
+            return true;
+        }
+    }
 
     /**
      * 已映射时返回这段区间的只读视图，未映射（或区间不合法）时返回 null。
