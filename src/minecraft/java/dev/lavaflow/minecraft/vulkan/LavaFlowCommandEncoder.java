@@ -404,11 +404,36 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      * kills the game over it. The wait keeps going instead, so a real hang still shows up — as a hang
      * with a log line, which is what it is.
      */
+    /**
+     * Reports a lost device together with what was in flight when it was noticed. The loss itself always
+     * happened earlier — a wait is only where the backend finds out — so the only usable record is this:
+     * which wait noticed, and which submissions were still running at that moment. Without it the crash
+     * report says nothing about where to look, which is exactly what the first occurrence was like.
+     */
+    private void logDeviceLost(String what, long serial) {
+        StringBuilder inFlight = new StringBuilder();
+        for (SubmitSlot other : slots) {
+            if (other != null && other.inFlight) {
+                if (inFlight.length() > 0) inFlight.append(", ");
+                inFlight.append(other.serial);
+            }
+        }
+        LOGGER.log(System.Logger.Level.ERROR, "VK_ERROR_DEVICE_LOST at " + what
+                + (serial >= 0 ? " (serial=" + serial + ")" : "")
+                + ": completed=" + completedSerial + ", recording=" + recordingSerial
+                + ", in flight=[" + inFlight + "]. The device was already lost before this call; those are"
+                + " the submissions that were running when it happened.");
+    }
+
     private void awaitFence(long fence, String what) {
         while (true) {
             int result = vkWaitForFences(context.device(), fence, true, 5_000_000_000L);
             if (result == VK_SUCCESS) return;
-            if (result != VK_TIMEOUT) { check(result, what); return; }
+            if (result != VK_TIMEOUT) {
+                if (result == VK_ERROR_DEVICE_LOST) logDeviceLost(what, -1);
+                check(result, what);
+                return;
+            }
             LOGGER.log(System.Logger.Level.WARNING, what + " 已等超过 5 秒（GPU 可能被降频或卡住），继续等");
         }
     }
@@ -637,6 +662,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (submitSlot.inFlight && submitSlot.serial == serial) {
                 int result = vkWaitForFences(context.device(), submitSlot.fence, true, timeout);
                 if (result == VK_TIMEOUT) return false;
+                if (result == VK_ERROR_DEVICE_LOST) logDeviceLost("vkWaitForFences(logical fence)", serial);
                 check(result, "vkWaitForFences(logical fence)");
                 completedSerial = Math.max(completedSerial, serial);
                 return true;
