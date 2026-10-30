@@ -73,6 +73,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean dynamicRendering;
     private boolean fillModeNonSolid;
     private boolean multiDrawIndirect;
+    private boolean drawIndirectFirstInstance;
     private boolean vertexAttributeDivisor;
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
@@ -90,6 +91,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
     private record DeviceCapabilities(boolean swapchain, boolean pushDescriptors, boolean dynamicRendering,
                                       boolean fillModeNonSolid, boolean multiDrawIndirect,
+                                      boolean drawIndirectFirstInstance,
                                       boolean vertexAttributeDivisor, Set<String> extensions) {}
 
     private static final class LegacyRenderPassKey {
@@ -383,6 +385,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 dynamicRendering = selectedCapabilities.dynamicRendering();
                 fillModeNonSolid = selectedCapabilities.fillModeNonSolid();
                 multiDrawIndirect = selectedCapabilities.multiDrawIndirect();
+                drawIndirectFirstInstance = selectedCapabilities.drawIndirectFirstInstance();
                 vertexAttributeDivisor = selectedCapabilities.vertexAttributeDivisor();
                 enabledExtensions = selectedCapabilities.extensions();
             }
@@ -402,6 +405,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
 
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
+        // nonZeroFirstInstance 现在照设备真值报（VkPhysicalDeviceFeatures.drawIndirectFirstInstance），
+        // baselineDevice 与下面这个开关都能把它按回旧的 false。
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoNonZeroFirstInstance"))
+            drawIndirectFirstInstance = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
         queryMaxMemoryAllocationSize();
@@ -556,7 +563,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                     extensions.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                     dynamicFeatures != null && dynamicFeatures.dynamicRendering(),
-                    core.fillModeNonSolid(), core.multiDrawIndirect(),
+                    core.fillModeNonSolid(), core.multiDrawIndirect(), core.drawIndirectFirstInstance(),
                     divisorFeatures != null && divisorFeatures.vertexAttributeInstanceRateDivisor(),
                     Set.copyOf(extensions));
         }
@@ -714,6 +721,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
+    boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
