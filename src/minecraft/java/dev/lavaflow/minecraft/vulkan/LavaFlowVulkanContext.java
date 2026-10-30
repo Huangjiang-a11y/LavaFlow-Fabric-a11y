@@ -561,8 +561,6 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(candidate, features2);
             VkPhysicalDeviceFeatures core = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(candidate, core);
-            return new DeviceCapabilities(
-                    extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
             // 诊断（只打日志，不影响任何取值）：设备真实能力与扩展名。FCL 自检只报扩展数量，而从驱动
             // .so 里 grep 扩展名不可靠（自检时连 VK_KHR_swapchain 都命中不到），所以只能问驱动本人。
             LOGGER.log(System.Logger.Level.INFO, "LavaFlow device extensions ({0}): {1}",
@@ -577,6 +575,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                             + "variablePointers={2}, storageBuffer16BitAccess={3}",
                     vulkan11.shaderDrawParameters(), vulkan11.multiview(), vulkan11.variablePointers(),
                     vulkan11.storageBuffer16BitAccess());
+            return new DeviceCapabilities(
+                    extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                     extensions.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                     dynamicFeatures != null && dynamicFeatures.dynamicRendering(),
                     core.fillModeNonSolid(), core.multiDrawIndirect(), core.drawIndirectFirstInstance(),
