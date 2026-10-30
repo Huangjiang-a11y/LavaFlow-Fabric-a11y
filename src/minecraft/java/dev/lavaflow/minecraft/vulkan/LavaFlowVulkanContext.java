@@ -73,6 +73,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean dynamicRendering;
     private boolean fillModeNonSolid;
     private boolean multiDrawIndirect;
+    private boolean drawIndirectFirstInstance;
     private boolean vertexAttributeDivisor;
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
@@ -90,6 +91,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
     private record DeviceCapabilities(boolean swapchain, boolean pushDescriptors, boolean dynamicRendering,
                                       boolean fillModeNonSolid, boolean multiDrawIndirect,
+                                      boolean drawIndirectFirstInstance,
                                       boolean vertexAttributeDivisor, Set<String> extensions) {}
 
     private static final class LegacyRenderPassKey {
@@ -383,6 +385,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 dynamicRendering = selectedCapabilities.dynamicRendering();
                 fillModeNonSolid = selectedCapabilities.fillModeNonSolid();
                 multiDrawIndirect = selectedCapabilities.multiDrawIndirect();
+                drawIndirectFirstInstance = selectedCapabilities.drawIndirectFirstInstance();
                 vertexAttributeDivisor = selectedCapabilities.vertexAttributeDivisor();
                 enabledExtensions = selectedCapabilities.extensions();
             }
@@ -402,6 +405,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
 
 
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
+        // nonZeroFirstInstance 现在照设备真值报（VkPhysicalDeviceFeatures.drawIndirectFirstInstance），
+        // baselineDevice 与下面这个开关都能把它按回旧的 false。
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoNonZeroFirstInstance"))
+            drawIndirectFirstInstance = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
         queryMaxMemoryAllocationSize();
@@ -536,7 +543,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     ? VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default() : null;
             VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures = divisorExtension
                     ? VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT.calloc(stack).sType$Default() : null;
-            long featureChain = NULL;
+            // Vulkan 1.1 的特性位（shaderDrawParameters 等）不在 core VkPhysicalDeviceFeatures 里，
+            // 只能从 VkPhysicalDeviceVulkan11Features 读。挂在链头，下面那次查询就顺带问出来了。
+            VkPhysicalDeviceVulkan11Features vulkan11 = VkPhysicalDeviceVulkan11Features.calloc(stack)
+                    .sType$Default();
+            long featureChain = vulkan11.address();
             if (dynamicFeatures != null) {
                 dynamicFeatures.pNext(featureChain);
                 featureChain = dynamicFeatures.address();
@@ -545,11 +556,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 divisorFeatures.pNext(featureChain);
                 featureChain = divisorFeatures.address();
             }
-            if (featureChain != NULL) {
-                VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
-                        .sType$Default().pNext(featureChain);
-                org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(candidate, features2);
-            }
+            VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
+                    .sType$Default().pNext(featureChain);
+            org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(candidate, features2);
             VkPhysicalDeviceFeatures core = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(candidate, core);
             // 诊断（只打日志，不影响任何取值）：设备真实能力与扩展名。FCL 自检只报扩展数量，而从驱动
@@ -561,11 +570,16 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                             + "fillModeNonSolid={2}, wideLines={3}, depthClamp={4}",
                     core.multiDrawIndirect(), core.drawIndirectFirstInstance(), core.fillModeNonSolid(),
                     core.wideLines(), core.depthClamp());
+            LOGGER.log(System.Logger.Level.INFO,
+                    "LavaFlow device Vulkan 1.1 features: shaderDrawParameters={0}, multiview={1}, "
+                            + "variablePointers={2}, storageBuffer16BitAccess={3}",
+                    vulkan11.shaderDrawParameters(), vulkan11.multiview(), vulkan11.variablePointers(),
+                    vulkan11.storageBuffer16BitAccess());
             return new DeviceCapabilities(
                     extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                     extensions.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                     dynamicFeatures != null && dynamicFeatures.dynamicRendering(),
-                    core.fillModeNonSolid(), core.multiDrawIndirect(),
+                    core.fillModeNonSolid(), core.multiDrawIndirect(), core.drawIndirectFirstInstance(),
                     divisorFeatures != null && divisorFeatures.vertexAttributeInstanceRateDivisor(),
                     Set.copyOf(extensions));
         }
@@ -723,6 +737,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
+    boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
@@ -864,3 +879,4 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         device = null; instance = null; properties = null; debugCallback = null;
     }
 }
+

@@ -91,11 +91,15 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // and LavaFlow only ever presents a plain Vulkan swapchain, so it stays false.
         // wireframeFillMode reports the Vulkan fillModeNonSolid capability, which
         // is what actually gates PolygonMode.LINE pipelines in LavaFlowRenderPipeline.
+        // 照实报设备的 drawIndirectFirstInstance。以前这一位写死 false，而 MC 的
+        // RenderSystem.isMultidrawIndirectAvailable() 要求它为 true 才走打包的间接地形路，
+        // 所以真机 F3 一直是 Multi-draw: Off。要退回旧行为：-Dlavaflow.forceNoNonZeroFirstInstance=true。
+        boolean nonZeroFirstInstance = context.drawIndirectFirstInstance();
         DeviceFeatures features = new DeviceFeatures(false, context.fillModeNonSolid(), false,
-                multiDrawDirectInterleaved, false, true, true, false, true);
-        // 诊断（只打日志）：把我们报给 Blaze3D 的那几位原样打出来，和设备真值并列看。其中
-        // nonZeroFirstInstance 写死 false，而 MC 的 RenderSystem.isMultidrawIndirectAvailable()
-        // 要求它为 true 才走打包的间接地形路，故真机 F3 显示 Multi-draw: Off。
+                multiDrawDirectInterleaved, false, true, true, nonZeroFirstInstance, true);
+        // 诊断（只打日志）：把我们报给 Blaze3D 的那几位原样打出来，和设备真值并列看。
+        // nonZeroFirstInstance 已改为照设备真值报（见上面的声明），MC 的
+        // RenderSystem.isMultidrawIndirectAvailable() 要求它为 true 才走打包的间接地形路。
         LOGGER.log(System.Logger.Level.INFO,
                 "LavaFlow reports to Blaze3D: multiDrawIndirect={0}, nonZeroFirstInstance={1}, "
                         + "maxDrawIndirectDrawCount={2}, multiDrawDirectInterleaved={3}, persistentMapping={4}",
