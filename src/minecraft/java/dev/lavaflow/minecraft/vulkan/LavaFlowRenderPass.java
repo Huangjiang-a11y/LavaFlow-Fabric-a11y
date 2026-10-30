@@ -546,8 +546,15 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * <p>哨兵不认识地形用的缓冲，只能跟着绘制学：登记过之后，它盯的就只是这几个句柄的上传，
      * 于是菜单、GUI、贴图的上传既不会占用它的行数预算，也不会被它按 28 字节一行误读。
      */
+    /** 当前管线的名字，未绑定时为空串；名字缺失也一律回落成空串（后端不保证非空）。 */
+    private String pipelineName() {
+        if (pipeline == null) return "";
+        String name = pipeline.name();
+        return name == null ? "" : name;
+    }
+
     private void noteTerrainHandles() {
-        String name = pipeline == null ? "" : pipeline.name();
+        String name = pipelineName();
         if (!name.contains("terrain") && !name.contains("water")) return;
         LavaFlowDataWatch.watchDraw(encoder.boundVertexHandle(0), encoder.boundIndexHandle());
     }
@@ -556,7 +563,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
         if (LavaFlowDrawCheck.ENABLED) {
-            LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipeline == null ? "" : pipeline.name(),
+            LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipelineName(),
                     watchedVertexBuffer, watchedVertexOffset, baseVertex, watchedIndexBuffer,
                     encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
         }
