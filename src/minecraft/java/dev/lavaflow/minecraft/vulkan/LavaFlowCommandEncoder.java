@@ -31,6 +31,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private SubmitSlot slot;
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
+    private boolean renderPassOpen;
     private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
