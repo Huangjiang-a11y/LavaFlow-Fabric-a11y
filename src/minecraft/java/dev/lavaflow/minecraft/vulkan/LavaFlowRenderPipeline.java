@@ -414,6 +414,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         };
     }
 
+    String name() { return info.name(); }
     boolean dynamicUniforms() { return dynamicUniforms; }
 
     private static void check(int result, String operation) {
