@@ -144,7 +144,7 @@ final class LavaFlowGpuTexture implements GpuTexture {
             owned = new ArrayList<>(clearViews.values());
             clearViews.clear();
         }
-        for (LavaFlowGpuTextureView view : owned) view.destroyCached();
+        for (LavaFlowGpuTextureView view : owned) view.close();
         synchronized (this) { destroyIfUnreferenced(); }
     }
 
