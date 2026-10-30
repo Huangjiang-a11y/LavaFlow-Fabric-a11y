@@ -31,7 +31,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private SubmitSlot slot;
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
-    private boolean renderPassOpen;
+    private boolean warnedInPassBufferBarrier;
+    /** 有缓冲被拷贝写过、但还没发屏障。 */
+    private boolean bufferWriteBarrierPending;
+    /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers =
+            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
@@ -145,8 +150,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         slotIndex = index;
         slot = slots[index];
         if (slot.inFlight) {
-            check(vkWaitForFences(context.device(), slot.fence, true, 5_000_000_000L),
-                    "vkWaitForFences(submit slot)");
+            awaitFence(slot.fence, "vkWaitForFences(submit slot)");
             check(vkResetFences(context.device(), slot.fence), "vkResetFences(submit slot)");
             completedSerial = Math.max(completedSerial, slot.serial);
             slot.inFlight = false;
@@ -289,6 +293,26 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boundVertexOffsets[slot] = offset;
     }
 
+    /** 记录里当前绑在 {@code slot} 上的顶点缓冲句柄；0 表示这个 command buffer 里还没录过。 */
+    long boundVertexHandle(int slot) {
+        return vertexSlotBound[slot] ? boundVertexHandles[slot] : 0;
+    }
+
+    /** 记录里当前绑定的索引缓冲句柄；0 表示这个 command buffer 里还没录过。 */
+    long boundIndexHandle() {
+        return boundIndexHandle;
+    }
+
+    /** 记录里 slot 上顶点绑定的字节偏移；未绑定时为 0。 */
+    long boundVertexOffset(int slot) {
+        return vertexSlotBound[slot] ? boundVertexOffsets[slot] : 0;
+    }
+
+    /** 记录里索引绑定的 VkIndexType；-1 表示还没录过。 */
+    int boundIndexType() {
+        return boundIndexType;
+    }
+
     boolean indexBound(long handle, int type) {
         return boundIndexType == type && boundIndexHandle == handle;
     }
@@ -335,7 +359,24 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         slot.serial = recordingSerial++;
         slot.inFlight = true;
         waitSemaphore = signalSemaphore = NULL;
+        int submittedSlot = slotIndex;
         prepareSlot((slotIndex + 1) % SUBMIT_SLOTS);
+        // 官方在提交后立刻 awaitSubmitCompletion(currentSubmitIndex - 2) 把在飞提交压住；这里是更
+        // 强的一档：等这一次跑完再返回，于是"上一次提交里写的、下一次提交要读的"绝无重叠可能。
+        if (LavaFlowSync.SERIALIZE_SUBMIT) awaitSlotCompletion(submittedSlot);
+    }
+
+    /** 等某个提交槽真正跑完，并把它的资源交还给设备（与 prepareSlot 里复用槽时做的事一致）。 */
+    private void awaitSlotCompletion(int index) {
+        SubmitSlot target = slots[index];
+        if (!target.inFlight) return;
+        awaitFence(target.fence, "vkWaitForFences(serialize submit)");
+        check(vkResetFences(context.device(), target.fence), "vkResetFences(serialize submit)");
+        completedSerial = Math.max(completedSerial, target.serial);
+        target.inFlight = false;
+        device.completeSubmit(target.batch);
+        target.batch = null;
+        readPassGpuTimes(index);
     }
 
     /**
@@ -358,6 +399,46 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         return readbackScratch;
     }
 
+    /**
+     * Waits for a submit fence, logging rather than throwing when it takes a long while. A fence can
+     * genuinely need seconds on a thermally throttled phone, and turning a slow frame into an exception
+     * kills the game over it. The wait keeps going instead, so a real hang still shows up — as a hang
+     * with a log line, which is what it is.
+     */
+    private void awaitFence(long fence, String what) {
+        while (true) {
+            int result = vkWaitForFences(context.device(), fence, true, 5_000_000_000L);
+            if (result == VK_SUCCESS) return;
+            if (result != VK_TIMEOUT) {
+                if (result == VK_ERROR_DEVICE_LOST) logDeviceLost(what, -1);
+                check(result, what);
+                return;
+            }
+            LOGGER.log(System.Logger.Level.WARNING, what + " 已等超过 5 秒（GPU 可能被降频或卡住），继续等");
+        }
+    }
+
+    /**
+     * Reports a lost device together with what was in flight when it was noticed. The loss itself always
+     * happened earlier — a wait is only where the backend finds out — so the only usable record is this:
+     * which wait noticed, and which submissions were still running at that moment. Without it the crash
+     * report says nothing about where to look, which is exactly what the first occurrence was like.
+     */
+    private void logDeviceLost(String what, long serial) {
+        StringBuilder inFlight = new StringBuilder();
+        for (SubmitSlot other : slots) {
+            if (other != null && other.inFlight) {
+                if (inFlight.length() > 0) inFlight.append(", ");
+                inFlight.append(other.serial);
+            }
+        }
+        LOGGER.log(System.Logger.Level.ERROR, "VK_ERROR_DEVICE_LOST at " + what
+                + (serial >= 0 ? " (serial=" + serial + ")" : "")
+                + ": completed=" + completedSerial + ", recording=" + recordingSerial
+                + ", in flight=[" + inFlight + "]. The device was already lost before this call; those are"
+                + " the submissions that were running when it happened.");
+    }
+
     void destroy() {
         if (destroyed) return;
         if (renderPassOpen) submitRenderPass();
@@ -370,10 +451,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (SubmitSlot submitSlot : slots) {
             if (submitSlot == null) continue;
             if (submitSlot.inFlight) {
-                check(vkWaitForFences(context.device(), submitSlot.fence, true, 5_000_000_000L),
-                        "vkWaitForFences(destroy)");
-                completedSerial = Math.max(completedSerial, submitSlot.serial);
-                submitSlot.inFlight = false;
+                awaitFence(submitSlot.fence, "vkWaitForFences(destroy)");
                 device.completeSubmit(submitSlot.batch);
                 submitSlot.batch = null;
             }
@@ -399,6 +477,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public TransientMemory transientMemory() { return transientMemory; }
     @Override public RenderPassBackend createRenderPass(RenderPassDescriptor descriptor) {
         if (renderPassOpen) throw new IllegalStateException("A render pass is already open");
+        // 开启新通道前先把欠的缓冲写屏障发掉：通道外那条是官方式的全局屏障。
+        flushBufferWriteBarrier();
         renderPassOpen = true;
         activeRenderPass = new LavaFlowRenderPass(this, descriptor);
         return activeRenderPass;
@@ -502,17 +582,45 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         long size = source.remaining();
         if (size == 0) return;
         if (size > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
+        // 自检交给 copyToBuffer 那一侧做：它读的是暂存区里即将被拷走的同一段字节。以前两头都扫，
+        // 同一份顶点数据每笔上传被解析两遍，而区块网格的上传正在热路径上。
         GpuBufferSlice staging = transientMemory.uploadStaging(source, 1);
-        copyToBuffer(staging, destination.slice(0, size));
+        copyToBuffer(staging, destination.slice(0, size), "writeToBuffer");
     }
     @Override public void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination) {
+        copyToBuffer(source, destination, "copyToBuffer");
+    }
+
+    /**
+     * @param origin 记进诊断日志的来源名：{@code writeToBuffer} 会走到这里做实际拷贝，日志里要能分清
+     *               是主机写入还是纯拷贝。
+     */
+    private void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination, String origin) {
         if (source.length() > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
+        if (!LavaFlowSync.NARROW_BARRIER) {
+            long sourceHandle = buffer(source).handle();
+            long destinationHandle = buffer(destination).handle();
+            // 连续拷贝整段只需要一条屏障：只有这笔真的会读到刚写过的东西（同缓冲、或源/目标在
+            // 本段里已经写过）时，才先把账落成屏障。
+            if (sourceHandle == destinationHandle || recentlyWrittenBuffers.contains(sourceHandle)
+                    || recentlyWrittenBuffers.contains(destinationHandle)) {
+                flushBufferWriteBarrier();
+            }
+        }
         try (MemoryStack stack = stackPush()) {
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(source.offset())
                     .dstOffset(destination.offset()).size(source.length());
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
             // copy 只是记录，录制时目标的主机内存还是旧内容：不能再用主机捷径读它。
             if (destination.buffer() instanceof LavaFlowGpuBuffer written) written.markGpuWritten();
+            // 诊断：源若是已映射的（transient staging 就是），直接读它即将被拷走的那段字节查一次。
+            if (source.buffer() instanceof LavaFlowGpuBuffer readback) {
+                ByteBuffer bytes = readback.mappedView(source.offset(), source.length());
+                if (bytes != null) {
+                    LavaFlowDataWatch.onUpload(origin, destination.buffer().usage(),
+                            destination.buffer(), destination.offset(), bytes);
+                }
+            }
             if (LavaFlowSync.NARROW_BARRIER) {
                 // 旧写法，留作对照：按目标缓冲的用途位推出 dst stage/access，并限定在那一段字节上。
                 int usage = destination.buffer().usage();
@@ -526,8 +634,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                         destinationStages, 0, null, barrier, null);
             } else {
                 // 默认：官方式全局屏障（ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE，两侧相同）。
-                // 见 LavaFlowSync 的说明：窄屏障在真机上会漏同步，表现为半透明表面的几何扭曲。
-                memoryBarrier(stack);
+                // 默认：不再当场发全局屏障，只记下这笔写过的缓冲；下一个落账点（开通道、各类拷贝、
+                // 或通道内立刻补）再发。真机 A/B 证明窄屏障会漏同步，画面表现为半透明表面的几何
+                // 扭曲，见 LavaFlowSync 的说明。
+                noteBufferWritten(destination);
             }
         }
     }
@@ -541,6 +651,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         copyBufferToTexture(staging, 0, 0, width, height, target, x, y, width, height, mip, layer);
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(target); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         long offset = source.offset() + (long)(rowOffset + imageOffset * rowLength) * target.getFormat().blockSize();
         try (MemoryStack stack = stackPush()) {
@@ -558,6 +669,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         copyTextureToBuffer(source, target, offset, callback, mip, 0, 0, source.getWidth(mip), source.getHeight(mip));
     }
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, Runnable callback, int mip, int x, int y, int width, int height) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(source); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack).bufferOffset(offset);
@@ -570,6 +682,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (callback != null) device.afterSubmit(callback);
     }
     @Override public void copyTextureToTexture(GpuTexture source, GpuTexture target, int mip, int targetX, int targetY, int sourceX, int sourceY, int width, int height) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture src = texture(source), dst = texture(target);
         transition(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); transition(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
@@ -595,6 +708,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (submitSlot.inFlight && submitSlot.serial == serial) {
                 int result = vkWaitForFences(context.device(), submitSlot.fence, true, timeout);
                 if (result == VK_TIMEOUT) return false;
+                if (result == VK_ERROR_DEVICE_LOST) logDeviceLost("vkWaitForFences(logical fence)", serial);
                 check(result, "vkWaitForFences(logical fence)");
                 completedSerial = Math.max(completedSerial, serial);
                 return true;
@@ -619,6 +733,47 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
+    }
+
+    /**
+     * Records the barrier that makes the pending buffer writes visible to the next draw.
+     *
+     * <p>Outside a render pass this is the global barrier the official backend uses (ALL_COMMANDS with
+     * MEMORY_READ|MEMORY_WRITE on both sides). Inside one it may only name graphics stages
+     * (VUID-vkCmdPipelineBarrier-None-07892) and the pass has to have been created with a subpass self-dependency
+     * whose scopes are a superset (VUID-vkCmdPipelineBarrier-None-07889) — LavaFlowVulkanContext creates that
+     * one, so this form is legal here. BOTTOM_OF_PIPE as the source waits for every prior command including the
+     * transfer stage the copy ran as, which TRANSFER as a source stage is not allowed to name inside a pass.
+     */
+    void flushBufferWriteBarrier() {
+        if (!bufferWriteBarrierPending) return;
+        try (MemoryStack stack = stackPush()) {
+            if (renderPassOpen) {
+                VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, barrier, null, null);
+            } else {
+                memoryBarrier(stack);
+            }
+        }
+        bufferWriteBarrierPending = false;
+        recentlyWrittenBuffers.clear();
+    }
+
+    boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
+
+    /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
+    private void noteBufferWritten(GpuBufferSlice destination) {
+        recentlyWrittenBuffers.add(buffer(destination).handle());
+        bufferWriteBarrierPending = true;
+        // A write inside a pass cannot wait for the next flush point: the barrier would land in a later
+        // command buffer (or outside the pass altogether) while the draw in this one already reads it —
+        // for indirect draws that means the command processor reading parameters the copy has not written
+        // yet, which is a garbage index count in the hands of the GPU. The in-pass barrier is legal now that
+        // the render pass carries its self-dependency, so flush here.
+        if (renderPassOpen) flushBufferWriteBarrier();
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
