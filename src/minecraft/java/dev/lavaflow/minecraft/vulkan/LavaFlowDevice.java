@@ -95,6 +95,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         boolean nonZeroFirstInstance = context.drawIndirectFirstInstance();
         DeviceFeatures features = new DeviceFeatures(context.fillModeNonSolid(), false, multiDrawDirectInterleaved,
                 false, true, true, nonZeroFirstInstance, true);
+        // 第一个提示位决定顶点上传走哪条路：StagingBuffer.create 会连同 DeviceFeatures.persistentMapping
+        // 一起读它，为真才选常驻映射的环形缓冲；为假则 MC 用自身的 CPU staging 缓冲，每次上传都走
+        // writeToBuffer——一次临时分配加一次设备侧拷贝。LavaFlow 的可映射内存是 HOST_COHERENT，理论上
+        // 环形缓冲更省；但第一次开着它跑的那局进世界几秒就丢了设备，成因尚未定位，所以默认关，
+        // -Dlavaflow.persistentStaging=true 是那次 A/B 的开关。
+        // 后三位保持 false：26.4 的 isExplicitDepthRequired 描述的"通道没有深度附件"正是 LavaFlow 的
+        // 旧通道路径接受的形态；间接绘制那条模拟则由 baselineDevice 开关来跑，不是已知坏路径。
+        boolean writeToBufferIsSlow = Boolean.getBoolean("lavaflow.persistentStaging");
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -125,7 +133,10 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // The two new 26.3 fields stay false: LavaFlow's legacy render-pass path accepts a
                 // pass with no depth attachment, and its indirect-draw emulation is exercised by the
                 // baselineDevice switch rather than being a known-bad path.
-                new HintsAndWorkarounds(false, false, false, false), type);
+                new HintsAndWorkarounds(writeToBufferIsSlow, false, false, false), type);
+        LOGGER.log(System.Logger.Level.INFO, "LavaFlow hints: writeToBufferIsSlow=" + writeToBufferIsSlow
+                + " (enable with -Dlavaflow.persistentStaging=true), anisotropyHasKnownIssues=false,"
+                + " isExplicitDepthRequired=false, multiDrawIndirectHasKnownIssues=false");
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
@@ -185,12 +196,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // 而 defer() 在 completingBatch!=null 时会向本批 resources 追加，
         // 改变 ArrayList 结构。索引遍历不触发 Iterator 的 fail-fast，
         // 且能照原意把遍历期追加的资源一并回收。
+        int closedResources = 0;
         for (int i = 0; i < batch.resources.size(); i++) {
             try {
                 batch.resources.get(i).close();
             } catch (Exception e) {
-                failure = new RuntimeException(e);
+                if (failure == null) failure = new RuntimeException(e);
             }
+            closedResources = i + 1;
         }
         try {
             for (int i = 0; i < batch.callbacks.size(); i++) {
@@ -204,6 +217,17 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
             // 必须无条件执行：回调一旦抛异常而这里被跳过，completingBatch 会永远停在非 null，
             // 之后的 defer() 会把资源塞进一个已经回收完的批次，两个列表也再不会回到池里。
             completingBatch = null;
+            // 回调里若又 defer() 了什么，它落在本批 resources 的尾部，而上面那轮遍历已经过去了；
+            // 这里补收一遍，否则下面的 clear() 会连列表一起把它们丢掉（泄漏）。先置空 completingBatch
+            // 再收，close() 期间新来的 defer 才会落到下一个批次而不是这个即将被清空的列表。今天
+            // afterSubmit 没有调用者，这一步是防住将来。
+            for (int i = closedResources; i < batch.resources.size(); i++) {
+                try {
+                    batch.resources.get(i).close();
+                } catch (Exception e) {
+                    if (failure == null) failure = new RuntimeException(e);
+                }
+            }
             // The only holder of a batch is the submit slot, and it drops its reference the moment this
             // returns, so the lists are free to hand out again. Clearing is part of that: a recycled list
             // must not carry the previous batch's contents.
@@ -247,6 +271,18 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         return buffer;
     }
     @Override public List<String> getLastDebugMessages() { return List.of(); }
+
+    public static synchronized void recordDebug(String message) {
+        if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
+        debugMessages.addLast(message);
+    }
+
+    /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
+    public static synchronized List<String> debugMessages() {
+        return new ArrayList<>(debugMessages);
+    }
+
+    public static synchronized void clearDebugMessages() { debugMessages.clear(); }
     /**
      * Whether the frontend resolves the names of the objects it asks us to create.
      *
@@ -289,18 +325,6 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
      */
     @Override public long getTimestampCalibrationOffset() { return 0L; }
     @Override public DeviceInfo getDeviceInfo() { return deviceInfo; }
-
-    public static synchronized void recordDebug(String message) {
-        if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
-        debugMessages.addLast(message);
-    }
-
-    /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
-    public static synchronized List<String> debugMessages() {
-        return new ArrayList<>(debugMessages);
-    }
-
-    public static synchronized void clearDebugMessages() { debugMessages.clear(); }
 
     private void ensureOpen() { if (closed) throw new IllegalStateException("LavaFlow device is closed"); }
     @Override public synchronized void close() {

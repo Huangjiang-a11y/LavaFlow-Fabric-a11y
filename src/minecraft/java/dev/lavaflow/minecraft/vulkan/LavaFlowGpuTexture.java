@@ -9,7 +9,9 @@ import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 
 import java.nio.LongBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import dev.lavaflow.vulkan.VulkanException;
 
@@ -128,15 +130,22 @@ final class LavaFlowGpuTexture implements GpuTexture {
         destroyIfUnreferenced();
     }
 
-    @Override public synchronized void close() {
-        if (closed) return;
-        closed = true;
-        // Release the views this class holds first: each carries a view reference, and while one lives,
-        // destroyIfUnreferenced can never see views == 0. Image and view are destroyed by the same
-        // deferred batch in insertion order, so the view goes before the image it viewed.
-        for (LavaFlowGpuTextureView view : clearViews.values()) view.close();
-        clearViews.clear();
-        destroyIfUnreferenced();
+    @Override public void close() {
+        // 先在本对象的锁内把 clear 视图摘下来并置空，销毁放到锁外：视图销毁会回调 releaseView()（要拿本
+        // 对象的锁），而视图自己的 close() 是先拿视图锁、再拿本对象锁——持着本对象锁去销毁就是反序，
+        // 两个线程反向操作时会互等。
+        List<LavaFlowGpuTextureView> owned;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            // Release the views this class holds first: each carries a view reference, and while one lives,
+            // destroyIfUnreferenced can never see views == 0. Image and view are destroyed by the same
+            // deferred batch in insertion order, so the view goes before the image it viewed.
+            owned = new ArrayList<>(clearViews.values());
+            clearViews.clear();
+        }
+        for (LavaFlowGpuTextureView view : owned) view.close();
+        synchronized (this) { destroyIfUnreferenced(); }
     }
 
     private void destroyIfUnreferenced() {

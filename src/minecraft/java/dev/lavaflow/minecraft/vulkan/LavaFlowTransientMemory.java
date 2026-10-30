@@ -94,7 +94,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
 
     GpuBufferSlice uploadStaging(ByteBuffer source, long alignment) {
         GpuBufferSlice.MappedView allocation = allocateMapped(source.remaining(), alignment);
-        MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(),
+        MemoryUtil.memCopy(MemoryUtil.memAddress(source),
                 MemoryUtil.memAddress(allocation.data()), source.remaining());
         return allocation.slice();
     }
@@ -130,7 +130,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
         for (ByteBuffer source : sources) {
             off = alignUp(off, reqAlign);
             int len = source.remaining();
-            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), base + off, len);
+            MemoryUtil.memCopy(MemoryUtil.memAddress(source), base + off, len);
             GpuBufferSlice deviceLocal = allocateDeviceLocal(len, alignment);
             GpuBufferSlice srcSlice = staging.slice().slice(off, len);
             encoder.copyToBuffer(srcSlice, deviceLocal);
@@ -199,7 +199,7 @@ final class LavaFlowTransientMemory implements TransientMemory {
         long offset = 0;
         for (ByteBuffer source : sources) {
             int length = source.remaining();
-            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), destination + offset, length);
+            MemoryUtil.memCopy(MemoryUtil.memAddress(source), destination + offset, length);
             offset += length;
         }
         return allocation.slice();
