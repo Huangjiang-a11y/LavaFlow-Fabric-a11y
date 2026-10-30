@@ -67,6 +67,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private final ArrayList<Object> uniforms = new ArrayList<>();
     private LavaFlowRenderPipeline pipeline;
     private boolean descriptorsDirty = true;
+    private LavaFlowGpuBuffer watchedVertexBuffer;
+    private long watchedVertexOffset;
+    private LavaFlowGpuBuffer watchedIndexBuffer;
     private boolean begun;
     private boolean ended;
 
@@ -429,7 +432,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (!(pipeline instanceof LavaFlowRenderPipeline lavaPipeline)) {
             throw new IllegalArgumentException("Pipeline must be a LavaFlowRenderPipeline");
         }
-        if (this.pipeline == lavaPipeline) {
+        if (LavaFlowElision.PIPELINE && this.pipeline == lavaPipeline) {
             // Elided here is only the vkCmdBindPipeline recording, not the accounting: the counters
             // describe what the frontend does, and hiding repeat calls would paint rebind_ratio as 0.
             LavaFlowFrameStats.pipelineBind(true);
@@ -453,7 +456,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             throw new IllegalStateException("Uniform index " + index + " is outside the bound pipeline's "
                     + uniforms.size() + " uniforms");
         }
-        if (Objects.equals(uniforms.get(index), value)) {
+        if (LavaFlowElision.UNIFORM && Objects.equals(uniforms.get(index), value)) {
             return;
         }
         uniforms.set(index, value);
@@ -494,12 +497,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         long offset = buffer.offset();
+        if (slot == 0) {
+            watchedVertexBuffer = (LavaFlowGpuBuffer) buffer.buffer();
+            watchedVertexOffset = offset;
+        }
         // A device run measured 92.8 recorded vertex binds per frame against 92.8 draws: the frontend asks for
         // the same slot over and over, and each request that matches what is already bound would change
         // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
         // command is dropped — but the question has to be asked against the encoder's record rather than the
         // pass's, because a binding outlives the pass it was recorded in.
-        boolean repeated = encoder.vertexBound(slot, handle, offset);
+        boolean repeated = LavaFlowElision.VERTEX && encoder.vertexBound(slot, handle, offset);
         LavaFlowFrameStats.vertexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
@@ -516,11 +523,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void setIndexBuffer(GpuBuffer buffer, IndexType type) {
         long handle = ((LavaFlowGpuBuffer) buffer).handle();
+        watchedIndexBuffer = (LavaFlowGpuBuffer) buffer;
         int vkType = type == IndexType.SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
         // Same bargain as setVertexBuffer: the request is not hidden from the frontend's counters, only
         // the redundant vkCmdBindIndexBuffer is dropped. The binding outlives the pass it was recorded
         // in, so the question goes to the encoder.
-        boolean repeated = encoder.indexBound(handle, vkType);
+        boolean repeated = LavaFlowElision.INDEX && encoder.indexBound(handle, vkType);
         LavaFlowFrameStats.indexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
@@ -532,9 +540,27 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             pendingIndexType = vkType;
         }
     }
+    /**
+     * 把这一笔绘制正在用的顶点/索引缓冲登记给上传哨兵。
+     *
+     * <p>哨兵不认识地形用的缓冲，只能跟着绘制学：登记过之后，它盯的就只是这几个句柄的上传，
+     * 于是菜单、GUI、贴图的上传既不会占用它的行数预算，也不会被它按 28 字节一行误读。
+     */
+    private void noteTerrainHandles() {
+        String name = pipeline == null ? "" : pipeline.name();
+        if (!name.contains("terrain") && !name.contains("water")) return;
+        LavaFlowDataWatch.watchDraw(encoder.boundVertexHandle(0), encoder.boundIndexHandle());
+    }
+
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
+        if (LavaFlowDrawCheck.ENABLED) {
+            LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipeline == null ? "" : pipeline.name(),
+                    watchedVertexBuffer, watchedVertexOffset, baseVertex, watchedIndexBuffer,
+                    encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
+        }
+        if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
     /**
@@ -725,7 +751,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private void pushDescriptors() {
         if (pipeline == null) throw new IllegalStateException("No graphics pipeline is bound");
         ensureBegun();
-        if (!descriptorsDirty) return;
+        if (LavaFlowElision.DESCRIPTORS && !descriptorsDirty) return;
         List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
         if (entries.isEmpty()) {
             descriptorsDirty = false;
