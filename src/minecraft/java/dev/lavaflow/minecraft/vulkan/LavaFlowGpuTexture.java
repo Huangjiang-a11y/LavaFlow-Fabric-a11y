@@ -40,9 +40,6 @@ final class LavaFlowGpuTexture implements GpuTexture {
     private boolean destroyed;
     // Views kept for the partial-clear path, one per mip. See cachedClearView.
     private final Map<Integer, LavaFlowGpuTextureView> clearViews = new HashMap<>();
-    // Views handed out by LavaFlowDevice.createTextureView, one per (baseMip, mips) pair. Bounded by
-    // the mip count: the pairs that fit in a texture are at most mipLevels*(mipLevels+1)/2. See cachedView.
-    private final Map<Long, LavaFlowGpuTextureView> sharedViews = new HashMap<>();
 
     LavaFlowGpuTexture(LavaFlowDevice device, int usage, String label, GpuFormat format,
                        int width, int height, int depthOrLayers, int mipLevels) {
@@ -119,21 +116,6 @@ final class LavaFlowGpuTexture implements GpuTexture {
      * and the texture would never be destroyed.
      */
     synchronized LavaFlowGpuTextureView cachedClearView(int mipLevel) {
-
-    /**
-     * Returns the view for {@code (baseMip, mips)}, creating and caching it on first use. A view is an
-     * immutable handle over an image — only the mip range differs between calls — but Minecraft closes
-     * every view it is handed, so each use used to create one and destroy it again, and each
-     * destruction also invalidated the descriptor sets that referenced it.
-     *
-     * <p>Like the clear views above, a cached view holds a view reference and is destroyed by
-     * {@link #close()} rather than by the caller; closing it only drops the caller's claim.
-     */
-    synchronized LavaFlowGpuTextureView cachedView(int baseMip, int mips) {
-        if (closed) throw new IllegalStateException("Texture is closed");
-        long key = ((long)baseMip << 32) | (mips & 0xFFFFFFFFL);
-        return sharedViews.computeIfAbsent(key, k -> new LavaFlowGpuTextureView(device, this, baseMip, mips).cached());
-    }
         if (closed) throw new IllegalStateException("Texture is closed");
         return clearViews.computeIfAbsent(mipLevel, mip -> new LavaFlowGpuTextureView(device, this, mip, 1));
     }
@@ -149,9 +131,9 @@ final class LavaFlowGpuTexture implements GpuTexture {
     }
 
     @Override public void close() {
-        // 先在本对象的锁内把两份缓存摘下来并置空，销毁放到锁外：视图销毁会回调 releaseView()（要拿本
+        // 先在本对象的锁内把 clear 视图摘下来并置空，销毁放到锁外：视图销毁会回调 releaseView()（要拿本
         // 对象的锁），而视图自己的 close() 是先拿视图锁、再拿本对象锁——持着本对象锁去销毁就是反序，
-        // 两个线程反向操作时会互等。clear 视图只在内部流转，交给 MC 的 shared 视图才真会并发关闭。
+        // 两个线程反向操作时会互等。
         List<LavaFlowGpuTextureView> owned;
         synchronized (this) {
             if (closed) return;
@@ -159,11 +141,8 @@ final class LavaFlowGpuTexture implements GpuTexture {
             // Release the views this class holds first: each carries a view reference, and while one lives,
             // destroyIfUnreferenced can never see views == 0. Image and view are destroyed by the same
             // deferred batch in insertion order, so the view goes before the image it viewed.
-            owned = new ArrayList<>(clearViews.size() + sharedViews.size());
-            owned.addAll(clearViews.values());
-            owned.addAll(sharedViews.values());
+            owned = new ArrayList<>(clearViews.values());
             clearViews.clear();
-            sharedViews.clear();
         }
         for (LavaFlowGpuTextureView view : owned) view.destroyCached();
         synchronized (this) { destroyIfUnreferenced(); }
