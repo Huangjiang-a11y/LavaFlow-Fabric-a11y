@@ -20,8 +20,6 @@ final class LavaFlowGpuTextureView implements GpuTextureView {
     private final int mipLevels;
     private final long view;
     private boolean closed;
-    // Set when this view lives in its texture's view cache: close() then only drops the caller's claim.
-    private boolean cached;
 
     LavaFlowGpuTextureView(LavaFlowDevice device, LavaFlowGpuTexture texture, int baseMipLevel, int mipLevels) {
         if (baseMipLevel < 0 || mipLevels <= 0 || baseMipLevel + mipLevels > texture.getMipLevels())
@@ -48,9 +46,6 @@ final class LavaFlowGpuTextureView implements GpuTextureView {
         texture.retainView();
     }
 
-
-    /** Marks this view as owned by its texture's cache, then returns it. */
-    LavaFlowGpuTextureView cached() { cached = true; return this; }
     long handle() { return view; }
     @Override public LavaFlowGpuTexture texture() { return texture; }
     @Override public int baseMipLevel() { return baseMipLevel; }
@@ -62,18 +57,6 @@ final class LavaFlowGpuTextureView implements GpuTextureView {
     @Override public synchronized boolean isClosed() { return closed; }
 
     @Override public synchronized void close() {
-        // A cached view belongs to its texture (see LavaFlowGpuTexture.cachedView): Minecraft closes
-        // every view it is handed, so honouring that here would destroy a handle that is still in the
-        // cache and still referenced by live descriptor sets. Dropping the caller's claim is all this
-        // can mean; the texture destroys it for real in LavaFlowGpuTexture.close().
-        if (cached) return;
-        destroy();
-    }
-
-    /** Destroys the image view for real. Only the owning texture calls this, for cached views. */
-    synchronized void destroyCached() { destroy(); }
-
-    private synchronized void destroy() {
         if (closed) return;
         closed = true;
         // Ask first: identity() builds a string for a texture that has no label, and viewRetired()

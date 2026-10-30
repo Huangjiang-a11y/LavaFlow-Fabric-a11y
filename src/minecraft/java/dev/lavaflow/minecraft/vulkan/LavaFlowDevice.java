@@ -286,8 +286,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     // but LavaFlowCommandEncoder still calls it, so it stays as an ordinary method.
     public GpuTextureView createTextureView(GpuTexture texture) { return createTextureView(texture, 0, texture.getMipLevels()); }
     @Override public GpuTextureView createTextureView(GpuTexture texture, int baseMip, int mips) {
-        // Cached on the texture: see LavaFlowGpuTexture.cachedView.
-        ensureOpen(); return ((LavaFlowGpuTexture)texture).cachedView(baseMip, mips);
+        ensureOpen(); return new LavaFlowGpuTextureView(this, (LavaFlowGpuTexture)texture, baseMip, mips);
     }
     @Override public GpuBuffer createBuffer(Supplier<String> label, int usage, long size) {
         ensureOpen(); return new LavaFlowGpuBuffer(this, usage, size);
