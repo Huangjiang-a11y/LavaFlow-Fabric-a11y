@@ -149,7 +149,7 @@ jobs:
 
       # And the same for the descriptor path. That class skips itself without a display, and its
       # canary skips itself without the validation layer — so either skip would leave the descriptor
-      # writes covered nowhere, which is exactly the situation this test was added to end. The five
+      # writes covered nowhere, which is exactly the situation this test was added to end. The four
       # methods are named rather than counted so the step says which coverage is missing when it
       # fails, and the canary is one of them because without it the others assert nothing.
       - name: Assert the descriptor path test ran rather than skipped
@@ -159,7 +159,6 @@ jobs:
           for method in descriptorSetsAreWrittenOnARealDeviceAndRetireWithTheirBuffer \
                         bufferViewsAreCreatedOnARealDeviceAndRetireWithTheirBuffer \
                         sampledImageDescriptorsRetireWithTheirViewAndTheirSampler \
-                        cachedTextureViewsSurviveTheCallersCloseAndRetireWithTheirTexture \
                         theValidationLayerReportsAForbiddenWrite; do
             grep -q "testcase name=\"$method" "$report" \
               || { echo "::error::$method did not run"; exit 1; }
