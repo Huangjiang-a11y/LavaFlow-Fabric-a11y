@@ -149,7 +149,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         slotIndex = index;
         slot = slots[index];
         if (slot.inFlight) {
-            awaitFence(slot.fence, "vkWaitForFences(submit slot)");
+            check(vkWaitForFences(context.device(), slot.fence, true, 5_000_000_000L),
+                    "vkWaitForFences(submit slot)");
             check(vkResetFences(context.device(), slot.fence), "vkResetFences(submit slot)");
             completedSerial = Math.max(completedSerial, slot.serial);
             slot.inFlight = false;
@@ -369,7 +370,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void awaitSlotCompletion(int index) {
         SubmitSlot target = slots[index];
         if (!target.inFlight) return;
-        awaitFence(target.fence, "vkWaitForFences(serialize submit)");
+        check(vkWaitForFences(context.device(), target.fence, true, 5_000_000_000L), "vkWaitForFences(serialize submit)");
         check(vkResetFences(context.device(), target.fence), "vkResetFences(serialize submit)");
         completedSerial = Math.max(completedSerial, target.serial);
         target.inFlight = false;
@@ -398,21 +399,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         return readbackScratch;
     }
 
-    /**
-     * Waits for a submit fence, logging rather than throwing when it takes a long while. A fence can
-     * genuinely need seconds on a thermally throttled phone, and turning a slow frame into an exception
-     * kills the game over it. The wait keeps going instead, so a real hang still shows up — as a hang
-     * with a log line, which is what it is.
-     */
-    private void awaitFence(long fence, String what) {
-        while (true) {
-            int result = vkWaitForFences(context.device(), fence, true, 5_000_000_000L);
-            if (result == VK_SUCCESS) return;
-            if (result != VK_TIMEOUT) { check(result, what); return; }
-            LOGGER.log(System.Logger.Level.WARNING, what + " 已等超过 5 秒（GPU 可能被降频或卡住），继续等");
-        }
-    }
-
     void destroy() {
         if (destroyed) return;
         if (renderPassOpen) submitRenderPass();
@@ -425,7 +411,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (SubmitSlot submitSlot : slots) {
             if (submitSlot == null) continue;
             if (submitSlot.inFlight) {
-                awaitFence(submitSlot.fence, "vkWaitForFences(destroy)");
+                check(vkWaitForFences(context.device(), submitSlot.fence, true, 5_000_000_000L),
+                        "vkWaitForFences(destroy)");
+                completedSerial = Math.max(completedSerial, submitSlot.serial);
+                submitSlot.inFlight = false;
                 device.completeSubmit(submitSlot.batch);
                 submitSlot.batch = null;
             }
