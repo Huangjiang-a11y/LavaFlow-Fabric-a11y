@@ -552,6 +552,15 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             }
             VkPhysicalDeviceFeatures core = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(candidate, core);
+            // 诊断（只打日志，不影响任何取值）：设备真实能力与扩展名。FCL 自检只报扩展数量，而从驱动
+            // .so 里 grep 扩展名不可靠（自检时连 VK_KHR_swapchain 都命中不到），所以只能问驱动本人。
+            LOGGER.log(System.Logger.Level.INFO, "LavaFlow device extensions ({0}): {1}",
+                    count.get(0), String.join(", ", new java.util.TreeSet<>(extensions)));
+            LOGGER.log(System.Logger.Level.INFO,
+                    "LavaFlow device core features: multiDrawIndirect={0}, drawIndirectFirstInstance={1}, "
+                            + "fillModeNonSolid={2}, wideLines={3}, depthClamp={4}",
+                    core.multiDrawIndirect(), core.drawIndirectFirstInstance(), core.fillModeNonSolid(),
+                    core.wideLines(), core.depthClamp());
             return new DeviceCapabilities(
                     extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                     extensions.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
