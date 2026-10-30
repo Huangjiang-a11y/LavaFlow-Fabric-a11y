@@ -35,6 +35,7 @@ public final class LavaFlowFrameStats {
     private static long previousFrameNanos;
     private static long lastReportNanos;
     private static long totalFrames;
+    public static long totalFrames() { return totalFrames; }
     private static long descriptorSets;
     private static long descriptorSetsAtReport;
     private static long descriptorHits;
@@ -43,6 +44,16 @@ public final class LavaFlowFrameStats {
     private static long descriptorInvalidationsAtReport;
     private static long barriers;
     private static long barriersAtReport;
+    private static long copyBarriers;
+    private static long copyBarriersAtReport;
+    private static long indirectNative;
+    private static long indirectExpanded;
+    private static long indirectSplit;
+    private static long indirectSkipped;
+    private static long indirectNativeAtReport;
+    private static long indirectExpandedAtReport;
+    private static long indirectSplitAtReport;
+    private static long indirectSkippedAtReport;
     private static long submits;
     private static long submitsAtReport;
     private static long framesAtReport;
@@ -53,9 +64,7 @@ public final class LavaFlowFrameStats {
     private static long retiredViews;
     private static long retiredSamplers;
     private static long retiredTextures;
-    // private static long partialClears; // dead code: partialClear() is never called in production
     private static long retiredTexturesAtReport;
-    // private static long partialClearsAtReport; // dead code: paired with partialClears
     private static long retiredBuffersAtReport;
     private static long retiredViewsAtReport;
     private static long retiredSamplersAtReport;
@@ -130,6 +139,41 @@ public final class LavaFlowFrameStats {
     public static void barrierRecorded() {
         if (!ENABLED) return;
         barriers++;
+    }
+
+    /** Counts one wide memory barrier emitted after buffer copies. */
+
+    /**
+     * Indirect draws issued as one native command. Which of the four indirect counters moves says where a
+     * batch went: native (multiDrawIndirect), expanded (read on the CPU and recorded as plain draws), split
+     * (one indirect command per draw, because the parameters could not be read), skipped (a command that draws
+     * nothing). The units are draw commands, so the four sum to the number of draws the frame asked for.
+     */
+    public static void indirectNative(int commands) {
+        if (!ENABLED) return;
+        indirectNative += commands;
+    }
+
+    /** Indirect draws expanded on the CPU into plain draws. See {@link #indirectNative(int)}. */
+    public static void indirectExpanded(int commands) {
+        if (!ENABLED) return;
+        indirectExpanded += commands;
+    }
+
+    /** Indirect draws issued as one indirect command each. See {@link #indirectNative(int)}. */
+    public static void indirectSplit(int commands) {
+        if (!ENABLED) return;
+        indirectSplit += commands;
+    }
+
+    /** Indirect commands dropped because they draw nothing. See {@link #indirectNative(int)}. */
+    public static void indirectSkipped(int commands) {
+        if (!ENABLED) return;
+        indirectSkipped += commands;
+    }
+    public static void copyBarrierRecorded() {
+        if (!ENABLED) return;
+        copyBarriers++;
     }
 
     /** Counts one queue submission. */
@@ -293,7 +337,6 @@ public final class LavaFlowFrameStats {
     }
 
     /** Number of pass samples recorded so far; 0 when per-pass timing is off or nothing has finished. */
-    static long totalFrames() { return totalFrames; }
     static long timedPassSamples() { return timedPasses; }
 
     /** Lifetime sum of per-frame pass durations in milliseconds; 0 when pass timing is off. */
@@ -369,15 +412,6 @@ public final class LavaFlowFrameStats {
      */
     public static boolean enabled() { return ENABLED; }
 
-    /**
-     * Counts one {@code clearColorAndDepthTextures} call. Those create two texture views that are
-     * destroyed again immediately, so this is the one place LavaFlow itself manufactures view churn
-     * and it is worth being able to rule in or out by number rather than by reading the call graph.
-     */
-    // public static void partialClear() { // dead code: never called in production
-    //     if (!ENABLED) return;
-    //     partialClears++;
-    // }
 
     /** Counts one retired sampler. */
     public static void samplerRetired() {
@@ -464,12 +498,16 @@ public final class LavaFlowFrameStats {
         descriptorHitsAtReport = descriptorHits;
         descriptorInvalidationsAtReport = descriptorInvalidations;
         barriersAtReport = barriers;
+        copyBarriersAtReport = copyBarriers;
+        indirectNativeAtReport = indirectNative;
+        indirectExpandedAtReport = indirectExpanded;
+        indirectSplitAtReport = indirectSplit;
+        indirectSkippedAtReport = indirectSkipped;
         submitsAtReport = submits;
         retiredBuffersAtReport = retiredBuffers;
         retiredViewsAtReport = retiredViews;
         retiredSamplersAtReport = retiredSamplers;
         retiredTexturesAtReport = retiredTextures;
-        // partialClearsAtReport = partialClears; // dead code: paired with partialClears
         pipelineBindsAtReport = pipelineBinds;
         pipelineRebindsAtReport = pipelineRebinds;
         pipelineBindsRecordedAtReport = pipelineBindsRecorded;
@@ -504,6 +542,11 @@ public final class LavaFlowFrameStats {
         double hitRate = setsSince + hitsSince == 0 ? 0 : hitsSince / (double) (setsSince + hitsSince);
         double invalidationsPerFrame = framesSince == 0 ? 0 : invalidationsSince / (double) framesSince;
         double barriersPerFrame = framesSince == 0 ? 0 : (barriers - barriersAtReport) / (double) framesSince;
+        double copyBarriersPerFrame = framesSince == 0 ? 0 : (copyBarriers - copyBarriersAtReport) / (double) framesSince;
+        double indirectNativePerFrame = framesSince == 0 ? 0 : (indirectNative - indirectNativeAtReport) / (double) framesSince;
+        double indirectExpandedPerFrame = framesSince == 0 ? 0 : (indirectExpanded - indirectExpandedAtReport) / (double) framesSince;
+        double indirectSplitPerFrame = framesSince == 0 ? 0 : (indirectSplit - indirectSplitAtReport) / (double) framesSince;
+        double indirectSkippedPerFrame = framesSince == 0 ? 0 : (indirectSkipped - indirectSkippedAtReport) / (double) framesSince;
         double submitsPerFrame = framesSince == 0 ? 0 : (submits - submitsAtReport) / (double) framesSince;
         long bindsSince = pipelineBinds - pipelineBindsAtReport;
         long rebindsSince = pipelineRebinds - pipelineRebindsAtReport;
@@ -539,7 +582,6 @@ public final class LavaFlowFrameStats {
         double viewsPerFrame = framesSince == 0 ? 0 : (retiredViews - retiredViewsAtReport) / (double) framesSince;
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
-        double clearsPerFrame = 0.0; // was: framesSince == 0 ? 0 : (partialClears - partialClearsAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
         updateReportBaselines();
         LOGGER.log(System.Logger.Level.INFO,
@@ -549,9 +591,12 @@ public final class LavaFlowFrameStats {
                         + " binds_per_frame={12} rebind_ratio={13} bind_records_per_frame={14} vertex_binds_per_frame={15}"
                         + " pushes_per_frame={16} uniform_changes_per_frame={17}"
                         + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
-                        + " partial_clears={22} pass_splits_per_frame={23} top_retired_view={24}"
-                        + " vertex_bind_calls_per_frame={25} vertex_rebind_ratio={26}"
-                        + " index_binds_per_frame={27} index_bind_calls_per_frame={28} index_rebind_ratio={29}",
+                        + " pass_splits_per_frame={22} top_retired_view={23}"
+                        + " vertex_bind_calls_per_frame={24} vertex_rebind_ratio={25}"
+                        + " index_binds_per_frame={26} index_bind_calls_per_frame={27} index_rebind_ratio={28}"
+                        + " copy_barriers_per_frame={29}"
+                        + " indirect_native_per_frame={30} indirect_expanded_per_frame={31}"
+                        + " indirect_split_per_frame={32} indirect_skipped_per_frame={33}",
                 Long.toString(totalFrames),
                 String.format("%.1f", 1000.0 / medianMillis),
                 String.format("%.3f", medianMillis),
@@ -574,14 +619,18 @@ public final class LavaFlowFrameStats {
                 String.format("%.2f", viewsPerFrame),
                 String.format("%.2f", samplersPerFrame),
                 String.format("%.2f", texturesPerFrame),
-                String.format("%.1f", clearsPerFrame),
                 String.format("%.2f", passSplitsPerFrame),
                 topViewLabels,
                 String.format("%.1f", vertexBindCallsPerFrame),
                 String.format("%.3f", vertexRebindRatio),
                 String.format("%.1f", indexBindsPerFrame),
                 String.format("%.1f", indexBindCallsPerFrame),
-                String.format("%.3f", indexRebindRatio));
+                String.format("%.3f", indexRebindRatio),
+                String.format("%.1f", copyBarriersPerFrame),
+                String.format("%.1f", indirectNativePerFrame),
+                String.format("%.1f", indirectExpandedPerFrame),
+                String.format("%.1f", indirectSplitPerFrame),
+                String.format("%.1f", indirectSkippedPerFrame));
         if (timedPasses != timedPassesAtReport) {
             double passMillisPerFrame = gpuSamplesSince == 0 ? 0
                     : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
