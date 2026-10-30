@@ -703,15 +703,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
         try (MemoryStack stack = stackPush()) {
-            if (renderPassOpen) {
-                VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
-                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, barrier, null, null);
-            } else {
-                memoryBarrier(stack);
-            }
+            // 20e7c8a 的形态：通道内外都发官方那条 ALL_COMMANDS -> ALL_COMMANDS 全局屏障。
+            // 90c3aa2 把它在通道内改成 BOTTOM_OF_PIPE -> ALL_GRAPHICS 以求合法，但设备丢失照旧：
+            // crash-2026-10-30_00.14.44 是 90c3aa2、crash-2026-10-30_13.08.18 是 e177765，两版都丢设备；
+            // 而 20e7c8a（同一条全局屏障）连进两次世界都不丢。BOTTOM_OF_PIPE 作源只等执行完成、
+            // 自身不产生访问，srcAccessMask 非 0 却是伪阶段，传输阶段那次拷贝的写入并没被做成可用。
+            // 自依赖（LavaFlowVulkanContext 里那条 0->0）保留，通道内这条屏障的范围因此有据可依。
+            memoryBarrier(stack);
         }
         bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
