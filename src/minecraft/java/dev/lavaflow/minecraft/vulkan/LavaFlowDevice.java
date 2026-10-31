@@ -102,7 +102,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // -Dlavaflow.persistentStaging=true 是那次 A/B 的开关。
         // 后三位保持 false：26.4 的 isExplicitDepthRequired 描述的"通道没有深度附件"正是 LavaFlow 的
         // 旧通道路径接受的形态；间接绘制那条模拟则由 baselineDevice 开关来跑，不是已知坏路径。
-        boolean writeToBufferIsSlow = Boolean.getBoolean("lavaflow.persistentStaging");
+        // 默认让 MC 走常驻映射的环形缓冲（快路）：只有这一位为 true 且 DeviceFeatures.persistentMapping
+        // 也为 true，StagingBuffer 才会选它；否则每笔顶点上传都走 MC 自己的 CPU 暂存缓冲，一次临时分配
+        // 加一次设备侧拷贝。26.4 曾因怀疑它与设备丢失有关而收回默认，后查明真凶是纹理视图缓存
+        // （26.3/26.2 从无此物，见 33650dc 那条回退），故两边统一恢复为默认开。
+        // 退回旧路：-Dlavaflow.forceCpuStagingBuffer=true（26.3 发布过的开关名），
+        // -Dlavaflow.persistentStaging=true 亦认（26.4 用的名字，显式置 true 即维持默认）。
+        boolean writeToBufferIsSlow = !Boolean.getBoolean("lavaflow.forceCpuStagingBuffer")
+                || Boolean.getBoolean("lavaflow.persistentStaging");
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -135,7 +142,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // baselineDevice switch rather than being a known-bad path.
                 new HintsAndWorkarounds(writeToBufferIsSlow, false, false, false), type);
         LOGGER.log(System.Logger.Level.INFO, "LavaFlow hints: writeToBufferIsSlow=" + writeToBufferIsSlow
-                + " (enable with -Dlavaflow.persistentStaging=true), anisotropyHasKnownIssues=false,"
+                + " (快路已开；退回旧路 -Dlavaflow.forceCpuStagingBuffer=true), anisotropyHasKnownIssues=false,"
                 + " isExplicitDepthRequired=false, multiDrawIndirectHasKnownIssues=false");
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
