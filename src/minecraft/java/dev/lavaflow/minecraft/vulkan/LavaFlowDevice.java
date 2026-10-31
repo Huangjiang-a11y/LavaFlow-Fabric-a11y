@@ -117,8 +117,8 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (context.vertexAttributeDivisor()) backendExtensions.add("VK_EXT_vertex_attribute_divisor");
         LOGGER.log(System.Logger.Level.INFO,
                 "Vulkan capabilities: dynamicRendering={0}, pushDescriptors={1}, multiDrawIndirect={2}, "
-                        + "nonZeroFirstInstance={5}, "
-                        + "fillModeNonSolid={3}, vertexAttributeDivisor={4}",
+                        + "nonZeroFirstInstance={3}, "
+                        + "fillModeNonSolid={4}, vertexAttributeDivisor={5}",
                 context.dynamicRendering(), context.pushDescriptors(), context.multiDrawIndirect(),
                 context.drawIndirectFirstInstance(),
                 context.fillModeNonSolid(), context.vertexAttributeDivisor());
