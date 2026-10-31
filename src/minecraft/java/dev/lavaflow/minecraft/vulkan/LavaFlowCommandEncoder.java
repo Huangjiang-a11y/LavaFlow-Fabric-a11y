@@ -172,6 +172,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
+        boundIndexHandle = 0;
+        boundIndexType = -1;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -282,7 +284,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private long boundIndexHandle;
     private int boundIndexType = -1;
 
-/^        for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;$/a
         boundIndexHandle = 0;
         boundIndexType = -1;
     /** 记录里当前绑在 {@code slot} 上的顶点缓冲句柄；0 表示这个 command buffer 里还没录过。 */
