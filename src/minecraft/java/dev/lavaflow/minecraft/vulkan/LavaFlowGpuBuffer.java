@@ -85,6 +85,16 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     boolean hostAuthoritative() { return hostAuthoritative; }
     void markGpuWritten() { hostAuthoritative = false; }
 
+    /**
+     * 主机侧视图，只给诊断用：常驻映射是同一块 VkDeviceMemory 的地址，主机能读回自己刚写进去的字节，
+     * 于是拷贝进 GPU 缓冲之前就能把源字节查一遍，不必等一次 GPU 回读。
+     */
+    ByteBuffer mappedView(long offset, long length) {
+        long base = mappedPhysicalBase;
+        if (base == 0 || offset < 0 || length < 0 || offset + length > size()) return null;
+        return MemoryUtil.memByteBuffer(base + offset, (int) length);
+    }
+
     synchronized void write(long offset, ByteBuffer source) {
         if (closed) throw new IllegalStateException("Buffer is closed");
         if ((usage() & USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not host writable");
