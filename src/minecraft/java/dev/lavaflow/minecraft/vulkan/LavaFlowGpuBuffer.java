@@ -22,6 +22,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
 final class LavaFlowGpuBuffer extends GpuBuffer {
     private final LavaFlowDevice device;
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowGpuBuffer.class.getName());
     private final LavaFlowVulkanContext context;
     private final long buffer;
     private final long memory;
@@ -35,6 +36,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     // 写进这块 buffer 都把它清掉——那条 copy 只是被“记录”，录制时主机内存还是旧内容。
     private volatile boolean hostAuthoritative;
     private boolean closed;
+    private boolean unreadableReported;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
         super(usage, size);
@@ -83,6 +85,79 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     long handle() { return buffer; }
     long memory() { return memory; }
     boolean hostAuthoritative() { return hostAuthoritative; }
+
+    /**
+     * Whether indirect parameters in this buffer can be read on the CPU: either a mapping is already open, or
+     * the allocation is host-visible, in which case a mapping is opened on demand.
+     *
+     * <p>Minecraft's dynamic buffers are {@code MappableRingBuffer}s: the render thread opens a mapped view,
+     * writes the frame's commands, and closes it again - the release callback unmaps, so
+     * {@code mappedPhysicalBase} is back to zero by the time the buffer reaches drawIndexedIndirect. Requiring
+     * an open mapping therefore meant the CPU expansion could never run: the 2026-10-09 device log shows 1149
+     * split commands per frame against 0 expanded ones. (Recovered from the archived 26.3 branch, tag 3b854e1.)
+     */
+    static boolean canReadParameters(long mappedPhysicalBase, boolean hostVisible) {
+        return mappedPhysicalBase != 0 || hostVisible;
+    }
+
+    /**
+     * Whether the allocation behind this buffer is host-visible, which is the only thing that decides whether
+     * the CPU can read its contents.
+     *
+     * <p>Deliberately not {@code GpuBuffer.USAGE_MAP_READ}: Minecraft's usage bits are an abstraction we
+     * implement, not a Vulkan rule - {@code vkMapMemory} has no per-buffer usage restriction at all, so a
+     * buffer Minecraft only ever maps for writing ({@code USAGE_MAP_WRITE}, memory HOST_VISIBLE|HOST_COHERENT)
+     * is perfectly readable here. Requiring the read bit is what kept the CPU expansion at zero expanded
+     * commands in the 2026-10-09 device log even after the mapping-it-ourselves fix.
+     */
+    boolean hostVisible() {
+        return (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
+    }
+
+    /**
+     * Explains once per buffer why a batch cannot be read on the CPU and is therefore issued as one indirect
+     * command per draw. The alternative is a silent slowdown, and which buffer it is and why is not something
+     * a counter can say.
+     */
+    synchronized void reportUnreadableOnce(long offset, long length) {
+        if (unreadableReported) return;
+        unreadableReported = true;
+        LOGGER.log(System.Logger.Level.INFO,
+                "Indirect parameters are not CPU-readable: buffer=" + Long.toHexString(buffer)
+                        + " size=" + size() + " read=" + offset + "+" + length + " usage=" + usage
+                        + " hostAuthoritative=" + hostAuthoritative
+                        + "; issuing one indirect command per draw");
+    }
+
+    /**
+     * Copies {@code length} bytes at {@code offset} into host memory for the CPU expansion path.
+     *
+     * <p>Prefers the mapping the caller already opened, and otherwise opens one for the duration of the copy:
+     * that is the case the expansion actually meets, because a ring buffer's mapping is closed long before its
+     * draw arrives. Returns false rather than throwing when the buffer cannot be read from the CPU at all,
+     * because the caller has a correct fallback (one indirect command per draw) and a device-local buffer that
+     * holds indirect parameters is not an error.
+     *
+     * <p>No invalidation is needed after mapping: host-visible allocations here require HOST_COHERENT, so the
+     * copy sees whatever the render thread wrote.
+     */
+    synchronized boolean tryReadBack(long offset, long length, long destination) {
+        if (mappedPhysicalBase != 0) {
+            MemoryUtil.memCopy(mappedPhysicalBase + offset, destination, length);
+            return true;
+        }
+        if (!hostVisible()) return false;
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            if (vkMapMemory(context.device(), memory, offset, length, 0, pointer) != VK_SUCCESS) return false;
+            try {
+                MemoryUtil.memCopy(pointer.get(0), destination, length);
+            } finally {
+                vkUnmapMemory(context.device(), memory);
+            }
+            return true;
+        }
+    }
     void markGpuWritten() { hostAuthoritative = false; }
 
     /**
@@ -102,7 +177,10 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         try (MemoryStack stack = stackPush()) {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
-            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
+            // memAddress 给的就是 buffer 在 position() 处的地址（原始基址要 memAddress0），再补一次
+            // position 就把偏移算了两遍：position 非 0 时拷走的是越过预期位置的数据。长度用 remaining()，
+            // 即 [position, limit)，地址这边同样只需要 memAddress 本身。
+            MemoryUtil.memCopy(MemoryUtil.memAddress(source), pointer.get(0), source.remaining());
             hostAuthoritative = true;
             // 不做手工 flush：映射型 buffer 的 memory type 被 findMemoryType 强制要求
             // HOST_COHERENT，一致内存上的 vkFlushMappedMemoryRanges 按规范是 no-op，而它的
@@ -128,7 +206,11 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             mappedPhysicalBase = pointer.get(0) - offset;
             ByteBuffer data = MemoryUtil.memByteBuffer(pointer.get(0), (int)length);
             AtomicBoolean released = new AtomicBoolean();
+            int watchedUsage = usage();
             return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
+                // 诊断：主机写完这一段后再扫一遍，查非有限值与量级离谱的坐标。
+                if (write) LavaFlowDataWatch.onUpload("mapped write", watchedUsage, LavaFlowGpuBuffer.this, offset,
+                        data.duplicate().position(0).limit(data.capacity()));
                 if (released.compareAndSet(false, true)) unmap();
             });
         }
