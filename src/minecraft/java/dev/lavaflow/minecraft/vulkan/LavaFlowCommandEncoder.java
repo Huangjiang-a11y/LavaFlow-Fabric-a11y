@@ -277,6 +277,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private final long[] boundVertexOffsets = new long[RenderPass.MAX_VERTEX_BUFFERS];
     private final boolean[] vertexSlotBound = new boolean[RenderPass.MAX_VERTEX_BUFFERS];
 
+    // Index bindings are command buffer state too, and 26.2 binds them from LavaFlowRenderPass. The record
+    // lives here so diagnostics can ask what the current command buffer has bound.
+    private long boundIndexHandle;
+    private int boundIndexType = -1;
+
+/^        for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;$/a
+        boundIndexHandle = 0;
+        boundIndexType = -1;
     /** 记录里当前绑在 {@code slot} 上的顶点缓冲句柄；0 表示这个 command buffer 里还没录过。 */
     long boundVertexHandle(int slot) {
         return vertexSlotBound[slot] ? boundVertexHandles[slot] : 0;
@@ -296,6 +304,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     int boundIndexType() {
         return boundIndexType;
     }
+
+    boolean indexBound(long handle, int type) {
+        return boundIndexType == type && boundIndexHandle == handle;
+    }
+
+    void recordIndexBound(long handle, int type) {
+        boundIndexHandle = handle;
+        boundIndexType = type;
+    }
+
 
     /** Whether recording this binding would change what the command buffer already has in that slot. */
     boolean vertexBound(int slot, long handle, long offset) {

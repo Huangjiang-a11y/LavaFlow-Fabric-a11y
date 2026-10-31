@@ -212,6 +212,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             pendingVertexMask = 0;
         }
         if (pendingIndexType >= 0) {
+            encoder.recordIndexBound(pendingIndexBuffer, pendingIndexType);
             vkCmdBindIndexBuffer(encoder.commandBuffer(), pendingIndexBuffer, 0, pendingIndexType);
             pendingIndexType = -1;
         }
@@ -522,6 +523,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         long handle = ((LavaFlowGpuBuffer) buffer).handle();
         int vkType = type == IndexType.SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
         if (begun) {
+            encoder.recordIndexBound(handle, vkType);
             vkCmdBindIndexBuffer(encoder.commandBuffer(), handle, 0, vkType);
         } else {
             pendingIndexBuffer = handle;
