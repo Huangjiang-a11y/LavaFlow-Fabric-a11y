@@ -425,8 +425,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 + " the submissions that were running when it happened.");
     }
 
-/^                check(vkWaitForFences(context.device(), submitSlot.fence, true, 5_000_000_000L),$/,/^                submitSlot.inFlight = false;$/c
-                awaitFence(submitSlot.fence, "vkWaitForFences(destroy)");
     void destroy() {
         if (destroyed) return;
         if (renderPassOpen) submitRenderPass();
@@ -439,10 +437,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (SubmitSlot submitSlot : slots) {
             if (submitSlot == null) continue;
             if (submitSlot.inFlight) {
-                check(vkWaitForFences(context.device(), submitSlot.fence, true, 5_000_000_000L),
-                        "vkWaitForFences(destroy)");
-                completedSerial = Math.max(completedSerial, submitSlot.serial);
-                submitSlot.inFlight = false;
+                awaitFence(submitSlot.fence, "vkWaitForFences(destroy)");
                 device.completeSubmit(submitSlot.batch);
                 submitSlot.batch = null;
             }
@@ -633,6 +628,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         device.defer(staging);
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
+        flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(target); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         long offset = source.offset() + (long)(rowOffset + imageOffset * rowLength) * target.getFormat().blockSize();
         try (MemoryStack stack = stackPush()) {
@@ -756,7 +752,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen) flushBufferWriteBarrier();
     }
 
-/^    @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {$/a
         flushBufferWriteBarrier();
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
     private static LavaFlowGpuTexture texture(GpuTexture texture) { return (LavaFlowGpuTexture)texture; }
