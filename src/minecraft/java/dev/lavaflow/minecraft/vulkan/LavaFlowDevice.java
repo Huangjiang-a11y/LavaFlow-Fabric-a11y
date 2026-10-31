@@ -94,6 +94,12 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         boolean nonZeroFirstInstance = context.drawIndirectFirstInstance();
         DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true,
                 nonZeroFirstInstance, true);
+        // 第一个提示位决定顶点上传走哪条路：MC 的 StagingBuffer.create 会连同 DeviceFeatures.persistentMapping
+        // 一起读它，为真才选常驻映射的环形缓冲（memcpy 进环形缓冲 + 设备侧 copyToBuffer），为假则用 MC 自身的
+        // CPU staging 缓冲。默认开（真机验收过：70 条 vertex upload copyToBuffer、writeToBuffer 零条），
+        // 两个开关名都认：-Dlavaflow.forceCpuStagingBuffer=true 退回旧路、-Dlavaflow.persistentStaging=true 亦然。
+        boolean writeToBufferIsSlow = !Boolean.getBoolean("lavaflow.forceCpuStagingBuffer")
+                || Boolean.getBoolean("lavaflow.persistentStaging");
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -121,7 +127,9 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
                 "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
-                new HintsAndWorkarounds(false, false), type);
+                new HintsAndWorkarounds(writeToBufferIsSlow, false), type);
+        LOGGER.log(System.Logger.Level.INFO, "LavaFlow hints: writeToBufferIsSlow=" + writeToBufferIsSlow
+                + " (快路已开；退回旧路 -Dlavaflow.forceCpuStagingBuffer=true), anisotropyHasKnownIssues=false");
         commandEncoder = new LavaFlowCommandEncoder(this);
     }
 
