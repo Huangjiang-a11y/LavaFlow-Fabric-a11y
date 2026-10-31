@@ -59,6 +59,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
 
     public LavaFlowDevice(long window, ShaderSource shaderSource) {
         // 启动时说明这一局用的是哪种拷贝后屏障：日志自己回答"这是开着旧窄屏障跑的，还是默认的全局屏障"。
+        LavaFlowElision.logConfiguration();
         LavaFlowSync.logConfiguration();
         this.context = new LavaFlowVulkanContext(window);
         this.shaderSource = shaderSource;
@@ -86,7 +87,13 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         // draws into a plain CPU array instead of an indirect-parameter buffer, which on tile-based GPUs
         // is host-visible memory the GPU has to read back once per draw.
         boolean multiDrawDirectInterleaved = !Boolean.getBoolean("lavaflow.forceNoMultiDrawDirect");
-        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true, false, true);
+        // 照实报设备的 drawIndirectFirstInstance。以前这一位写死 false，而 MC 的
+        // RenderSystem.isMultidrawIndirectAvailable() 要求它为 true 才走打包的间接地形路，
+        // 所以真机 F3 一直是 Multi-draw: Off，间接参数的 CPU 展开也就永远等不到多命令批次。
+        // 要退回旧行为：-Dlavaflow.forceNoNonZeroFirstInstance=true。
+        boolean nonZeroFirstInstance = context.drawIndirectFirstInstance();
+        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true,
+                nonZeroFirstInstance, true);
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -101,8 +108,10 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (context.vertexAttributeDivisor()) backendExtensions.add("VK_EXT_vertex_attribute_divisor");
         LOGGER.log(System.Logger.Level.INFO,
                 "Vulkan capabilities: dynamicRendering={0}, pushDescriptors={1}, multiDrawIndirect={2}, "
-                        + "fillModeNonSolid={3}, vertexAttributeDivisor={4}",
+                        + "nonZeroFirstInstance={3}, "
+                        + "fillModeNonSolid={4}, vertexAttributeDivisor={5}",
                 context.dynamicRendering(), context.pushDescriptors(), context.multiDrawIndirect(),
+                context.drawIndirectFirstInstance(),
                 context.fillModeNonSolid(), context.vertexAttributeDivisor());
         deviceInfo = new DeviceInfo(context.deviceName(), vendorName(context.properties().vendorID()),
                 driverInfo(context), true,
