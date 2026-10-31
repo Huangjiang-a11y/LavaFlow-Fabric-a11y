@@ -111,7 +111,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
      * commands in the 2026-10-09 device log even after the mapping-it-ourselves fix.
      */
     boolean hostVisible() {
-        return (usage & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
+        return (usage() & (GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_MAP_WRITE)) != 0;
     }
 
     /**
@@ -124,7 +124,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         unreadableReported = true;
         LOGGER.log(System.Logger.Level.INFO,
                 "Indirect parameters are not CPU-readable: buffer=" + Long.toHexString(buffer)
-                        + " size=" + size() + " read=" + offset + "+" + length + " usage=" + usage
+                        + " size=" + size() + " read=" + offset + "+" + length + " usage=" + usage()
                         + " hostAuthoritative=" + hostAuthoritative
                         + "; issuing one indirect command per draw");
     }
