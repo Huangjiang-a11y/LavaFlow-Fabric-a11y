@@ -752,7 +752,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen) flushBufferWriteBarrier();
     }
 
-        flushBufferWriteBarrier();
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
     private static LavaFlowGpuTexture texture(GpuTexture texture) { return (LavaFlowGpuTexture)texture; }
 
