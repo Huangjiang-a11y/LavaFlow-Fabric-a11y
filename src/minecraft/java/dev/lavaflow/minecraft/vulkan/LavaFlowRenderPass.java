@@ -531,6 +531,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
@@ -543,6 +544,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
      * host-visible memory the GPU has to read back per draw.
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
+        encoder.flushBufferWriteBarrier();
         if (drawCount <= 0) return;
         pushDescriptors();
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
@@ -575,47 +577,73 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
             vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(), buffer.offset(), count,
                     VkDrawIndexedIndirectCommand.SIZEOF);
+            LavaFlowFrameStats.indirectNative(count);
             return;
         }
-        // Without multiDrawIndirect the batch has to be split. Issuing one indirect command per draw
-        // makes the driver re-validate the parameter buffer every time, which costs far more than the
-        // draw itself. When the parameters are in host memory that is currently mapped, read them here
-        // and record plain indexed draws instead, which is the same command count on a cheaper path.
-        long hostBase = parameters.hostAuthoritative() ? parameters.mappedPhysicalBase : 0;
+        // Without multiDrawIndirect the batch has to be split. Issuing one indirect command per draw makes the
+        // driver re-validate the parameter buffer every time, which costs far more than the draw itself. When
+        // the parameters can be read from host memory, read them here and record plain indexed draws instead:
+        // the same command count on a cheaper path. The read needs the host copy to be authoritative as well
+        // (no device-side copy since the last CPU write), or it would expand commands the GPU has not written
+        // yet — that is the bug fixed in 4b877f6, and it stays a precondition here.
+        long hostBase = parameters.mappedPhysicalBase;
+        boolean readable = parameters.hostAuthoritative()
+                && LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible());
         if (LavaFlowDevice.DEBUG_BUFFERS) {
             LavaFlowDevice.recordDebug("indirect h=" + Long.toHexString(parameters.handle())
-                    + " hostBase=" + hostBase + " f=" + LavaFlowFrameStats.totalFrames());
+                    + " hostBase=" + hostBase + " readable=" + readable
+                    + " f=" + LavaFlowFrameStats.totalFrames());
         }
-        if (hostBase == 0) {
+        if (forceIndirectSplit() || !readable) {
+            if (!forceIndirectSplit()) {
+                parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndexedIndirectCommand.SIZEOF);
+            }
             for (int draw = 0; draw < count; draw++) {
                 vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
                         buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
                         1, VkDrawIndexedIndirectCommand.SIZEOF);
             }
+            LavaFlowFrameStats.indirectSplit(count);
             return;
         }
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
         // Copy the range out in one sequential pass before reading fields from it. The allocation asks
         // for host-cached memory, but that is a preference: where the device offers only uncached host
         // memory this keeps the cost of reading it to one streaming copy instead of many narrow reads.
+        // tryReadBack prefers a mapping the caller already opened and otherwise opens one for the copy,
+        // which is the case this path actually meets: a ring buffer's mapping is closed long before its
+        // draw arrives.
         int bytes = count * VkDrawIndexedIndirectCommand.SIZEOF;
         long base = encoder.readbackScratch(bytes);
-        MemoryUtil.memCopy(hostBase + buffer.offset(), base, bytes);
+        if (!parameters.tryReadBack(buffer.offset(), bytes, base)) {
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndexedIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF,
+                        1, VkDrawIndexedIndirectCommand.SIZEOF);
+            }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
         for (int draw = 0; draw < count; draw++) {
             long command = base + (long) draw * VkDrawIndexedIndirectCommand.SIZEOF;
-            vkCmdDrawIndexed(commandBuffer,
-                    MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INDEXCOUNT),
-                    MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INSTANCECOUNT),
+            int indexCount = MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INDEXCOUNT);
+            int instances = MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.INSTANCECOUNT);
+            if (drawsNothing(indexCount, instances)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
+            vkCmdDrawIndexed(commandBuffer, indexCount, instances,
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINDEX),
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.VERTEXOFFSET),
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINSTANCE));
+            LavaFlowFrameStats.indirectExpanded(1);
         }
-    }
     @Override public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, GpuBuffer buffer, IndexType type, Collection<String> uniformNames, T value) {
         for (RenderPass.Draw<T> draw : draws) {
             if (draw.uniformUploaderConsumer() != null) {
@@ -628,25 +656,75 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
     }
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
+        encoder.flushBufferWriteBarrier();
         pushDescriptors();
-        long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
+        LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
-            vkCmdDrawIndirect(encoder.commandBuffer(), handle, buffer.offset(), count, VkDrawIndirectCommand.SIZEOF);
-        } else {
-            for (int i = 0; i < count; i++) {
-                vkCmdDrawIndirect(encoder.commandBuffer(), handle,
-                        buffer.offset() + (long) i * VkDrawIndirectCommand.SIZEOF,
+            vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(), buffer.offset(), count,
+                    VkDrawIndirectCommand.SIZEOF);
+            LavaFlowFrameStats.indirectNative(count);
+            return;
+        }
+        // Same split-versus-expand choice as drawIndexedIndirect; see the comment there for why the host copy
+        // has to be authoritative before it can be read.
+        long hostBase = parameters.mappedPhysicalBase;
+        boolean readable = parameters.hostAuthoritative()
+                && LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible());
+        if (forceIndirectSplit() || !readable) {
+            if (!forceIndirectSplit()) {
+                parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndirectCommand.SIZEOF);
+            }
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,
                         1, VkDrawIndirectCommand.SIZEOF);
             }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
+        int bytes = count * VkDrawIndirectCommand.SIZEOF;
+        long base = encoder.readbackScratch(bytes);
+        if (!parameters.tryReadBack(buffer.offset(), bytes, base)) {
+            for (int draw = 0; draw < count; draw++) {
+                vkCmdDrawIndirect(encoder.commandBuffer(), parameters.handle(),
+                        buffer.offset() + (long) draw * VkDrawIndirectCommand.SIZEOF,
+                        1, VkDrawIndirectCommand.SIZEOF);
+            }
+            LavaFlowFrameStats.indirectSplit(count);
+            return;
+        }
+        for (int draw = 0; draw < count; draw++) {
+            long command = base + (long) draw * VkDrawIndirectCommand.SIZEOF;
+            int vertexCount = MemoryUtil.memGetInt(command + VkDrawIndirectCommand.VERTEXCOUNT);
+            int instances = MemoryUtil.memGetInt(command + VkDrawIndirectCommand.INSTANCECOUNT);
+            if (drawsNothing(vertexCount, instances)) {
+                LavaFlowFrameStats.indirectSkipped(1);
+                continue;
+            }
+            vkCmdDraw(encoder.commandBuffer(), vertexCount, instances,
+                    MemoryUtil.memGetInt(command + VkDrawIndirectCommand.FIRSTVERTEX),
+                    MemoryUtil.memGetInt(command + VkDrawIndirectCommand.FIRSTINSTANCE));
+            LavaFlowFrameStats.indirectExpanded(1);
         }
     }
     @Override public void writeTimestamp(GpuQueryPool pool, int index) { encoder.writeTimestamp(pool, index); }
+
+    /** -Dlavaflow.forceIndirectSplit=true: always one indirect command per draw, the comparison path. */
+    private static boolean forceIndirectSplit() {
+        return Boolean.getBoolean("lavaflow.forceIndirectSplit");
+    }
+
+    /** A command that draws nothing: the CPU expansion drops it instead of recording a no-op. */
+    private static boolean drawsNothing(int count, int instances) {
+        return count <= 0 || instances <= 0;
+    }
 
     private static LavaFlowGpuTextureView view(GpuTextureView view) { return (LavaFlowGpuTextureView) view; }
 
