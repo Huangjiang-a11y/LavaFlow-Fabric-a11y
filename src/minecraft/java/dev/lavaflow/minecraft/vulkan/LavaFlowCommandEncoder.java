@@ -284,8 +284,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private long boundIndexHandle;
     private int boundIndexType = -1;
 
-        boundIndexHandle = 0;
-        boundIndexType = -1;
     /** 记录里当前绑在 {@code slot} 上的顶点缓冲句柄；0 表示这个 command buffer 里还没录过。 */
     long boundVertexHandle(int slot) {
         return vertexSlotBound[slot] ? boundVertexHandles[slot] : 0;
