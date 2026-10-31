@@ -677,6 +677,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
                     MemoryUtil.memGetInt(command + VkDrawIndexedIndirectCommand.FIRSTINSTANCE));
             LavaFlowFrameStats.indirectExpanded(1);
         }
+    }
     @Override public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, GpuBuffer buffer, IndexType type, Collection<String> uniformNames, T value) {
         for (RenderPass.Draw<T> draw : draws) {
             if (draw.uniformUploaderConsumer() != null) {
