@@ -439,6 +439,8 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         };
     }
 
+    /** 向前端要名字：26.2 的 RenderPipeline 只给 location，取它的字符串形式即可（判地形靠子串）。 */
+    String name() { return info.getLocation() == null ? "" : info.getLocation().toString(); }
     boolean dynamicUniforms() { return dynamicUniforms; }
 
     private static void check(int result, String operation) {

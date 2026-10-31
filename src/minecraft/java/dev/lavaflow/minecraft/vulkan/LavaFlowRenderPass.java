@@ -63,6 +63,9 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     private final Map<String, TextureBinding> textures = new HashMap<>();
     private LavaFlowRenderPipeline pipeline;
     private boolean descriptorsDirty = true;
+    private LavaFlowGpuBuffer watchedVertexBuffer;
+    private long watchedVertexOffset;
+    private LavaFlowGpuBuffer watchedIndexBuffer;
     private boolean begun;
     private boolean ended;
 
@@ -435,7 +438,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         LavaFlowRenderPipeline resolved = encoder.device().pipeline(pipeline);
         // Counts whether this repeats the pipeline already bound: whether Minecraft re-binds a pipeline per
         // draw decides whether eliding a repeat is worth the trouble — see LavaFlowFrameStats.
-        boolean repeated = this.pipeline == resolved;
+        boolean repeated = LavaFlowElision.PIPELINE && this.pipeline == resolved;
         LavaFlowFrameStats.pipelineBind(repeated);
         this.pipeline = resolved;
         if (!this.pipeline.isValid()) throw new IllegalStateException("Pipeline is invalid: " + pipeline.getLocation());
@@ -464,7 +467,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         // A slice carries value equality (buffer, offset, length), and the frontend re-sends the same
         // uniform on every draw: re-marking the descriptors dirty for a write that would end up
         // byte-identical turns every draw into a descriptor push.
-        if (Objects.equals(uniforms.get(name), buffer)) return;
+        if (LavaFlowElision.UNIFORM && Objects.equals(uniforms.get(name), buffer)) return;
         uniforms.put(name, buffer);
         LavaFlowFrameStats.uniformChanged();
         descriptorsDirty = true;
@@ -499,12 +502,16 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
         long handle = ((LavaFlowGpuBuffer) buffer.buffer()).handle();
         long offset = buffer.offset();
+        if (slot == 0) {
+            watchedVertexBuffer = (LavaFlowGpuBuffer) buffer.buffer();
+            watchedVertexOffset = offset;
+        }
         // A device run measured 92.8 recorded vertex binds per frame against 92.8 draws: the frontend asks for
         // the same slot over and over, and each request that matches what is already bound would change
         // nothing. The same bargain as setPipeline and setUniform — the request is counted either way, only the
         // command is dropped — but the question has to be asked against the encoder's record rather than the
         // pass's, because a binding outlives the pass it was recorded in.
-        boolean repeated = encoder.vertexBound(slot, handle, offset);
+        boolean repeated = LavaFlowElision.VERTEX && encoder.vertexBound(slot, handle, offset);
         LavaFlowFrameStats.vertexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
@@ -521,6 +528,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
     @Override public void setIndexBuffer(GpuBuffer buffer, IndexType type) {
         long handle = ((LavaFlowGpuBuffer) buffer).handle();
+        watchedIndexBuffer = (LavaFlowGpuBuffer) buffer;
         int vkType = type == IndexType.SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
         if (begun) {
             encoder.recordIndexBound(handle, vkType);
@@ -530,9 +538,34 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             pendingIndexType = vkType;
         }
     }
+    /** 当前管线的名字，未绑定时为空串；名字缺失也一律回落成空串（后端不保证非空）。 */
+    private String pipelineName() {
+        if (pipeline == null) return "";
+        String name = pipeline.name();
+        return name == null ? "" : name;
+    }
+
+    /**
+     * 把这一笔绘制正在用的顶点/索引缓冲登记给上传哨兵。
+     *
+     * <p>哨兵不认识地形用的缓冲，只能跟着绘制学：登记过之后，它盯的就只是这几个句柄的上传，
+     * 于是菜单、GUI、贴图的上传既不会占用它的行数预算，也不会被它按 28 字节一行误读。
+     */
+    private void noteTerrainHandles() {
+        String name = pipelineName();
+        if (!name.contains("terrain") && !name.contains("water")) return;
+        LavaFlowDataWatch.watchDraw(encoder.boundVertexHandle(0), encoder.boundIndexHandle());
+    }
+
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
+        if (LavaFlowDrawCheck.ENABLED) {
+            LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipelineName(),
+                    watchedVertexBuffer, watchedVertexOffset, baseVertex, watchedIndexBuffer,
+                    encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
+        }
+        if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
         vkCmdDrawIndexed(encoder.commandBuffer(), indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
     }
     /**
