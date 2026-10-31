@@ -103,14 +103,22 @@ final class LavaFlowGpuTexture extends GpuTexture {
         destroyIfUnreferenced();
     }
 
-    @Override public synchronized void close() {
-        if (closed) return;
-        closed = true;
-        // Release the cached clear view first: it carries a view reference, and while one lives,
-        // destroyIfUnreferenced can never see views == 0. View and image go out through the same
-        // deferred batch in insertion order, so the view goes before the image it viewed.
-        if (clearView != null) { clearView.close(); clearView = null; }
-        destroyIfUnreferenced();
+    @Override public void close() {
+        // 先在本对象的锁内把 clear 视图摘下来并置空，销毁放到锁外：视图销毁会回调 releaseView()（要拿本
+        // 对象的锁），而视图自己的 close() 是先拿视图锁、再拿本对象锁——持着本对象锁去销毁就是反序，
+        // 两个线程反向操作时会互等。
+        LavaFlowGpuTextureView owned;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            // Release the cached clear view first: it carries a view reference, and while one lives,
+            // destroyIfUnreferenced can never see views == 0. View and image go out through the same
+            // deferred batch in insertion order, so the view goes before the image it viewed.
+            owned = clearView;
+            clearView = null;
+        }
+        if (owned != null) owned.close();
+        synchronized (this) { destroyIfUnreferenced(); }
     }
 
     private void destroyIfUnreferenced() {

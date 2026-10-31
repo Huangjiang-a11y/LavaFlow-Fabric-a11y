@@ -488,7 +488,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     ? VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default() : null;
             VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures = divisorExtension
                     ? VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT.calloc(stack).sType$Default() : null;
-            long featureChain = NULL;
+            // Vulkan 1.1 的特性位（shaderDrawParameters 等）不在 core VkPhysicalDeviceFeatures 里，
+            // 只能从 VkPhysicalDeviceVulkan11Features 读。挂在链头，下面那次查询就顺带问出来了。
+            VkPhysicalDeviceVulkan11Features vulkan11 = VkPhysicalDeviceVulkan11Features.calloc(stack)
+                    .sType$Default();
+            long featureChain = vulkan11.address();
             if (dynamicFeatures != null) {
                 dynamicFeatures.pNext(featureChain);
                 featureChain = dynamicFeatures.address();
@@ -497,13 +501,27 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 divisorFeatures.pNext(featureChain);
                 featureChain = divisorFeatures.address();
             }
-            if (featureChain != NULL) {
+            { // featureChain 现在总是非空（链头挂了 VkPhysicalDeviceVulkan11Features），无条件查询
                 VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
                         .sType$Default().pNext(featureChain);
                 org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2(candidate, features2);
             }
             VkPhysicalDeviceFeatures core = VkPhysicalDeviceFeatures.calloc(stack);
             vkGetPhysicalDeviceFeatures(candidate, core);
+            // 诊断（只打日志，不影响任何取值）：设备真实能力与扩展名。FCL 自检只报扩展数量，而从驱动
+            // .so 里 grep 扩展名不可靠（自检时连 VK_KHR_swapchain 都命中不到），所以只能问驱动本人。
+            LOGGER.log(System.Logger.Level.INFO, "LavaFlow device extensions ({0}): {1}",
+                    extensions.size(), String.join(", ", new java.util.TreeSet<>(extensions)));
+            LOGGER.log(System.Logger.Level.INFO,
+                    "LavaFlow device core features: multiDrawIndirect={0}, drawIndirectFirstInstance={1}, "
+                            + "fillModeNonSolid={2}, wideLines={3}, depthClamp={4}",
+                    core.multiDrawIndirect(), core.drawIndirectFirstInstance(), core.fillModeNonSolid(),
+                    core.wideLines(), core.depthClamp());
+            LOGGER.log(System.Logger.Level.INFO,
+                    "LavaFlow device Vulkan 1.1 features: shaderDrawParameters={0}, multiview={1}, "
+                            + "variablePointers={2}, storageBuffer16BitAccess={3}",
+                    vulkan11.shaderDrawParameters(), vulkan11.multiview(), vulkan11.variablePointers(),
+                    vulkan11.storageBuffer16BitAccess());
             return new DeviceCapabilities(
                     extensions.contains(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                     extensions.contains(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
@@ -682,22 +700,33 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .colorAttachmentCount(colorReferences.remaining())
                     .pColorAttachments(colorReferences);
             if (depthReference != null) subpass.get(0).pDepthStencilAttachment(depthReference);
-            VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
-            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);
-            dependency.dstSubpass(0);
-            dependency.srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+            // The second dependency is the self-dependency VUID-vkCmdPipelineBarrier-None-07889 asks for: a
+            // barrier recorded inside a render pass is only legal when the pass was created with a dependency from
+            // the current subpass to itself whose scopes are a superset of the barrier's. Without it every in-pass
+            // barrier was illegal whatever its masks said. The official backend does the same: its RenderPassCache
+            // builds subpass dependencies. Both masks are ALL_GRAPHICS because for a non-EXTERNAL srcSubpass every
+            // stage bit must be one the graphics pipeline supports (00837/00838).
+            VkSubpassDependency.Buffer dependencies = VkSubpassDependency.calloc(2, stack);
+            dependencies.get(0).srcSubpass(VK_SUBPASS_EXTERNAL);
+            dependencies.get(0).dstSubpass(0);
+            dependencies.get(0).srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
             // NOT ALL_COMMANDS here: the dependency targets subpass 0, and for a non-EXTERNAL
             // dstSubpass every bit of dstStageMask has to be a stage the graphics pipeline supports
             // (VUID-VkRenderPassCreateInfo-pDependencies-00838). The validation layer flagged it the
             // moment a test drove this path for the first time. ALL_GRAPHICS keeps the intent: every
             // graphics stage in the subpass waits for what came before, and this backend issues its
             // transfers outside render passes, so no transfer stage is left uncovered.
-            dependency.dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
-            dependency.srcAccessMask(0);
-            dependency.dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            dependencies.get(0).dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
+            dependencies.get(0).srcAccessMask(0);
+            dependencies.get(0).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            dependencies.get(1).srcSubpass(0).dstSubpass(0)
+                    .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
             VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
-                    .pAttachments(attachments).pSubpasses(subpass).pDependencies(dependency);
+                    .pAttachments(attachments).pSubpasses(subpass).pDependencies(dependencies);
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateRenderPass(device, info, null, out), "vkCreateRenderPass(fallback)");
             long renderPass = out.get(0);

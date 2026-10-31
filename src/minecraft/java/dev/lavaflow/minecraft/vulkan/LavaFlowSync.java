@@ -29,11 +29,14 @@ package dev.lavaflow.minecraft.vulkan;
 final class LavaFlowSync {
     /** 走旧写法：按用途位推出的窄屏障。默认 false，即使用官方那种全局屏障。 */
     static final boolean NARROW_BARRIER = Boolean.getBoolean("lavaflow.narrowBarrier");
+    /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
+    static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
 
     private LavaFlowSync() {}
 
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
-                "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)"));
+                "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)")
+                        + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
 }
