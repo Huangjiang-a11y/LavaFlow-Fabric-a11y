@@ -169,6 +169,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int scissorY;
     private int scissorWidth;
     private int scissorHeight;
+
+    // 26.4-snapshot-7 起视口由前端显式下发（RenderPassBackend.setViewport）。没下发时保持旧行为：
+    // 整块输出区域。数值原样透传、不做 y 翻转——官方 Vulkan 后端同样原样透传，GL 后端直接
+    // glViewport(x, y, w, h)，三边一致。
+    private int viewportX;
+    private int viewportY;
+    private int viewportWidth;
+    private int viewportHeight;
     private final long[] pendingVertexBuffers = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
     private final long[] pendingVertexOffsets = new long[CompiledRenderPipeline.CreateInfo.MAX_VERTEX_BUFFERS];
     // Scratch arrays for the descriptor-set path. That path runs on every descriptor change rather than
@@ -218,6 +226,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (extentView == null) throw new IllegalArgumentException("Render pass has no attachments");
         outputWidth = extentView.getWidth(0);
         outputHeight = extentView.getHeight(0);
+        viewportX = 0;
+        viewportY = 0;
+        viewportWidth = outputWidth;
+        viewportHeight = outputHeight;
 
         colorViews = new LavaFlowGpuTextureView[colorSlots];
         boolean clearAny = clears(depth, false);
@@ -286,7 +298,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, false);
             else beginLegacy(stack, false);
-            setViewport(stack);
+            applyViewport(stack);
             setScissor(stack, scissorX, scissorY, scissorWidth, scissorHeight);
         }
         if (pipeline != null) recordPipelineBind();
@@ -508,9 +520,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, full);
     }
 
-    private void setViewport(MemoryStack stack) {
-        VkViewport.Buffer viewport = VkViewport.calloc(1, stack).x(0).y(0)
-                .width(outputWidth).height(outputHeight).minDepth(0).maxDepth(1);
+    @Override public void setViewport(int x, int y, int width, int height) {
+        viewportX = x;
+        viewportY = y;
+        viewportWidth = width;
+        viewportHeight = height;
+        // 渲染通道外记录 vkCmdSetViewport 是非法的，所以通道还没开始时只记下来，begin 时一并下发。
+        if (begun) {
+            try (MemoryStack stack = stackPush()) {
+                applyViewport(stack);
+            }
+        }
+    }
+
+    private void applyViewport(MemoryStack stack) {
+        VkViewport.Buffer viewport = VkViewport.calloc(1, stack).x(viewportX).y(viewportY)
+                .width(viewportWidth).height(viewportHeight).minDepth(0).maxDepth(1);
         vkCmdSetViewport(encoder.commandBuffer(), 0, viewport);
     }
 

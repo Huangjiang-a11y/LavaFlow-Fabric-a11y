@@ -536,6 +536,19 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         restoreSampledLayout(texture);
     }
 
+    @Override public void clearStencilTexture(GpuTexture gpuTexture, byte value) {
+        LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        try (MemoryStack stack = stackPush()) {
+            // 只清 stencil 面（aspect = STENCIL），depth 字段此时被驱动忽略；官方 Vulkan 后端也是
+            // 只填 stencil、只声明 STENCIL aspect。
+            VkClearDepthStencilValue clear = VkClearDepthStencilValue.calloc(stack).depth(0f).stencil(value & 0xFF);
+            VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_STENCIL_BIT)
+                    .baseMipLevel(0).levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
+            vkCmdClearDepthStencilImage(commandBuffer, texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, range);
+        }
+        restoreSampledLayout(texture);
+    }
+
     @Override public void writeToBuffer(GpuBufferSlice destination, ByteBuffer source) {
         long size = source.remaining();
         if (size == 0) return;
