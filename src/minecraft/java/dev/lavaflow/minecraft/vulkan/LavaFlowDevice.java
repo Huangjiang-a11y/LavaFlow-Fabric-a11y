@@ -9,8 +9,15 @@ import com.mojang.renderpearl.api.buffers.*;
 import com.mojang.renderpearl.backend.api.*;
 import com.mojang.renderpearl.api.textures.*;
 import org.lwjgl.vulkan.VkPhysicalDeviceLimits;
+import net.minecraft.client.Minecraft;
 
 import java.nio.ByteBuffer;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -25,12 +32,19 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private final DeviceInfo deviceInfo;
     private final LavaFlowCommandEncoder commandEncoder;
     private List<AutoCloseable> deferred = new ArrayList<>();
-    // F3 调试读数：最近的诊断事件环形缓冲，-Dlavaflow.debugBuffers 打开时填充。
-    // 事件由 LavaFlowBufferDebugEntry 作为独立 F3 栏目读取并显示，和画面同帧，
-    // 不追加到任何现有栏目、不写主日志。环形缓冲是静态的，因为 F3 条目没有 device 引用。
+    // 诊断事件（buffer 退休/销毁、indirect 主机路径）：-Dlavaflow.debugBuffers 打开时写进
+    // logs/lavaflow-debug.log。以前是 16 条环形缓冲直接画到 F3 上，每帧被覆盖成一片刷屏，
+    // 既看不清也留不下；改成落盘后 F3 只留一行汇总（条数 + 文件路径）。
+    // 文件每次启动重建，写满 DEBUG_FILE_CAP 就停写并在末尾留一行说明，避免长时间会话把存储写爆。
     public static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
     private static final Deque<String> debugMessages = new ArrayDeque<>();
     private static final int DEBUG_MESSAGE_CAP = 16;
+    private static final long DEBUG_FILE_CAP = 32L << 20;
+    private static BufferedWriter debugWriter;
+    private static Path debugLogPath;
+    private static long debugBytes;
+    private static long debugEventCount;
+    private static boolean debugCapped;
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
     // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
@@ -309,6 +323,62 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     public static synchronized void recordDebug(String message) {
         if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
         debugMessages.addLast(message);
+        debugEventCount++;
+        appendDebugLine(message);
+    }
+
+    /** Number of diagnostic events emitted this session, for the one-line F3 summary. */
+    public static synchronized long debugEventCount() { return debugEventCount; }
+
+    /** Where this session's diagnostic events are being written. */
+    public static synchronized Path debugLogPath() { return pathOfDebugLog(); }
+
+    private static Path pathOfDebugLog() {
+        if (debugLogPath != null) return debugLogPath;
+        Path base;
+        try {
+            Minecraft minecraft = Minecraft.getInstance();
+            // 没拿到实例前不缓存：那时还没有 gameDirectory，缓存下来会让整局日志落错地方。
+            if (minecraft == null) return Path.of(".").resolve("logs").resolve("lavaflow-debug.log");
+            base = minecraft.gameDirectory.toPath();
+        } catch (Throwable ignored) {
+            return Path.of(".").resolve("logs").resolve("lavaflow-debug.log");
+        }
+        debugLogPath = base.resolve("logs").resolve("lavaflow-debug.log");
+        return debugLogPath;
+    }
+
+    private static void appendDebugLine(String message) {
+        if (debugCapped) return;
+        try {
+            if (debugWriter == null) {
+                Path path = pathOfDebugLog();
+                Files.createDirectories(path.getParent());
+                debugWriter = Files.newBufferedWriter(path, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                writeDebug("=== " + java.time.OffsetDateTime.now().withNano(0) + " debugBuffers session ===");
+            }
+            writeDebug(message);
+        } catch (IOException e) {
+            debugCapped = true;
+            LOGGER.log(System.Logger.Level.WARNING, "LavaFlow 诊断日志写入失败，后续事件改为只留在内存环形缓冲", e);
+        }
+    }
+
+    private static void writeDebug(String line) throws IOException {
+        byte[] bytes = (line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8);
+        if (debugBytes + bytes.length > DEBUG_FILE_CAP) {
+            debugCapped = true;
+            debugWriter.write("=== 已达 " + (DEBUG_FILE_CAP >> 20) + " MiB 上限，后续事件不再写入 ===" + System.lineSeparator());
+            debugWriter.flush();
+            debugWriter.close();
+            debugWriter = null;
+            return;
+        }
+        debugWriter.write(line);
+        debugWriter.write(System.lineSeparator());
+        debugWriter.flush();
+        debugBytes += bytes.length;
     }
 
     /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
