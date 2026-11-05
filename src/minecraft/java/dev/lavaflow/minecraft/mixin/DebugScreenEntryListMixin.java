@@ -1,7 +1,6 @@
 package dev.lavaflow.minecraft.mixin;
 
 import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
-import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import net.minecraft.client.core.registries.ClientRegistries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
 import net.minecraft.client.gui.components.debug.DebugScreenEntryList;
