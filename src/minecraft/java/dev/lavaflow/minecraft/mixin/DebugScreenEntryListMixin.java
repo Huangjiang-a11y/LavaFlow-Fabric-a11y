@@ -1,6 +1,5 @@
 package dev.lavaflow.minecraft.mixin;
 
-import dev.lavaflow.minecraft.LavaFlowBufferDebugEntry;
 import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
 import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import net.minecraft.client.core.registries.ClientRegistries;
@@ -18,13 +17,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Map;
 
 /**
- * Turns LavaFlow's F3 entry on by default, without overriding a choice the player already made.
+ * Turns LavaFlow's GPU-time F3 entry on by default, without overriding a choice the player already made.
  *
  * <p>An entry that is merely registered is invisible: the status of an id that no profile mentions
  * defaults to {@code NEVER}. The statuses are rebuilt by {@code resetStatuses} from whichever profile
  * or saved list applies, so that is where the default is added -- and only when the map does not
  * mention the entry at all. A map that does mention it is either the profile's or the player's, and a
  * player who switched the line off has that choice saved, so it is left alone.
+ *
+ * <p>The buffer-event entry is deliberately *not* turned on here any more. Its events go to
+ * {@code logs/lavaflow-debug.log}, so the F3 line is only a pointer; enabling it by default made a
+ * fresh instance show a line the player had never asked for (an existing instance keeps whatever
+ * status it saved, which is why the same flag used to look silent there). It stays registered and
+ * selectable through the debug options.
  *
  * <p>Registration itself is no longer done here: 26.4 replaced the private {@code register} method
  * with a registry bootstrap, so the entry is added by {@link DebugScreenEntriesMixin} and this mixin
@@ -39,11 +44,6 @@ abstract class DebugScreenEntryListMixin {
     @Inject(method = "resetStatuses", at = @At("TAIL"))
     private void lavaflow$enableGpuEntryByDefault(
             Map<ResourceKey<DebugScreenEntry>, DebugScreenEntryStatus> statuses, CallbackInfo callback) {
-        if (LavaFlowDevice.DEBUG_BUFFERS) {
-            ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
-                    LavaFlowBufferDebugEntry.ID);
-            allStatuses.putIfAbsent(bufferKey, DebugScreenEntryStatus.IN_OVERLAY);
-        }
         ResourceKey<DebugScreenEntry> key = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowGpuDebugEntry.ID);
         allStatuses.putIfAbsent(key, DebugScreenEntryStatus.IN_OVERLAY);
