@@ -76,6 +76,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean drawIndirectFirstInstance;
     private boolean vertexAttributeDivisor;
     private Set<String> enabledExtensions = Set.of();
+    // 两个启动开关的合成结果（-Dlavaflow.baselineDevice / -Dlavaflow.forceLegacyRenderPass）。以前是个方法，
+    // 每问一次做两遍 Boolean.getBoolean；而 dynamicRendering() 在每通道、每绘制路径上都会被问到。
+    private static final boolean FORCE_LEGACY_RENDER_PASS =
+            Boolean.getBoolean("lavaflow.baselineDevice") || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
     // Reverse index from an attachment view to the cached framebuffers naming it. Releasing a view
@@ -401,7 +405,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         // profiled on a desktop GPU that would otherwise take every extension path.
         boolean baselineDevice = Boolean.getBoolean("lavaflow.baselineDevice");
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
-        if (baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
+        if (FORCE_LEGACY_RENDER_PASS) dynamicRendering = false;
 
 
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
@@ -447,9 +451,6 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
     }
 
-    private boolean forceLegacyRenderPass() {
-        return Boolean.getBoolean("lavaflow.baselineDevice") || Boolean.getBoolean("lavaflow.forceLegacyRenderPass");
-    }
 
     /**
      * Reads the driver's cap on a single allocation, which is a Vulkan 1.1 core value: it comes from
@@ -600,7 +601,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .fillModeNonSolid(fillModeNonSolid)
                     .multiDrawIndirect(multiDrawIndirect);
             long featureChain = NULL;
-            if (dynamicRendering && !forceLegacyRenderPass()) {
+            if (dynamicRendering && !FORCE_LEGACY_RENDER_PASS) {
                 featureChain = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default()
                         .dynamicRendering(true).pNext(featureChain).address();
             }
@@ -613,7 +614,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             PointerBuffer extensionNames = stack.mallocPointer(extensionCount);
             extensionNames.put(stack.UTF8(VK_KHR_SWAPCHAIN_EXTENSION_NAME));
             if (pushDescriptors) extensionNames.put(stack.UTF8(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME));
-            if (dynamicRendering && !forceLegacyRenderPass()) {
+            if (dynamicRendering && !FORCE_LEGACY_RENDER_PASS) {
                 extensionNames.put(stack.UTF8(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME));
                 extensionNames.put(stack.UTF8(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME));
                 extensionNames.put(stack.UTF8(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME));
@@ -734,7 +735,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             return List.copyOf(validationMessages);
         }
     }
-    boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
+    boolean dynamicRendering() { return dynamicRendering && !FORCE_LEGACY_RENDER_PASS; }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }

@@ -73,6 +73,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 命令条数、参数缓冲偏移。配合 -Dlavaflow.debugPipelines 打出的声明行，就能把"水面那批用的是
     // 哪条管线、参数从哪个偏移开始"对上号。只在开头若干帧记录，避免刷屏。
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
+    // -Dlavaflow.forceIndirectSplit=true：每笔间接绘制只发一条命令，A/B 对照用。
+    // 值在类初始化时定下：这是启动开关，但间接绘制路径每笔都要问一次，读系统属性太亏。
+    private static final boolean FORCE_INDIRECT_SPLIT = Boolean.getBoolean("lavaflow.forceIndirectSplit");
 
     // 每种绘制入口第一次被调用时打一行，用来确定地形究竟走哪个方法——上一轮把记录器挂在
     // drawIndexedIndirect 和 drawIndexed 上都没出东西，说明猜入口不如让入口自己报名。
@@ -827,8 +830,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         long hostBase = parameters.mappedPhysicalBase;
         boolean readable = parameters.hostAuthoritative()
                 && LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible());
-        if (forceIndirectSplit() || !readable) {
-            if (!forceIndirectSplit()) {
+        if (FORCE_INDIRECT_SPLIT || !readable) {
+            if (!FORCE_INDIRECT_SPLIT) {
                 parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndexedIndirectCommand.SIZEOF);
             }
             for (int draw = 0; draw < count; draw++) {
@@ -895,8 +898,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         long hostBase = parameters.mappedPhysicalBase;
         boolean readable = parameters.hostAuthoritative()
                 && LavaFlowGpuBuffer.canReadParameters(hostBase, parameters.hostVisible());
-        if (forceIndirectSplit() || !readable) {
-            if (!forceIndirectSplit()) {
+        if (FORCE_INDIRECT_SPLIT || !readable) {
+            if (!FORCE_INDIRECT_SPLIT) {
                 parameters.reportUnreadableOnce(buffer.offset(), count * VkDrawIndirectCommand.SIZEOF);
             }
             for (int draw = 0; draw < count; draw++) {
@@ -933,10 +936,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
 
-    /** -Dlavaflow.forceIndirectSplit=true: always one indirect command per draw, the comparison path. */
-    private static boolean forceIndirectSplit() {
-        return Boolean.getBoolean("lavaflow.forceIndirectSplit");
-    }
 
     /** A command that draws nothing: the CPU expansion drops it instead of recording a no-op. */
     private static boolean drawsNothing(int count, int instances) {
