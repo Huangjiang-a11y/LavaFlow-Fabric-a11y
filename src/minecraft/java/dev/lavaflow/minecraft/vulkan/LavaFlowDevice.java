@@ -49,6 +49,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private static long debugEventCount;
     private static long debugDropped;
     private static boolean debugCapped;
+    private static boolean debugStopRequested;
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
     // simply be swapped: the replacements are recycled here instead. Only frames that actually retire
@@ -379,17 +380,28 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 long bytes = 0;
                 List<String> batch = new ArrayList<>(DEBUG_BATCH_MAX);
                 while (true) {
+                    boolean closing;
                     synchronized (LavaFlowDevice.class) {
-                        while (debugQueue.isEmpty()) LavaFlowDevice.class.wait();
+                        while (debugQueue.isEmpty() && !debugStopRequested) LavaFlowDevice.class.wait();
+                        closing = debugQueue.isEmpty();
                         while (!debugQueue.isEmpty() && batch.size() < DEBUG_BATCH_MAX) batch.add(debugQueue.pollFirst());
                     }
-                    for (String line : batch) {
-                        writer.write(line);
-                        writer.write(System.lineSeparator());
-                        bytes += line.length() + 1;
+                    if (!batch.isEmpty()) {
+                        for (String line : batch) {
+                            writer.write(line);
+                            writer.write(System.lineSeparator());
+                            bytes += line.length() + 1;
+                        }
+                        batch.clear();
+                        writer.flush();
                     }
-                    batch.clear();
-                    writer.flush();
+                    if (closing) {
+                        // 队列已空且被要求退出：留一行收尾，正常关闭时这一段总会出现在文件末尾。
+                        writer.write("=== " + java.time.OffsetDateTime.now().withNano(0) + " session end ===");
+                        writer.write(System.lineSeparator());
+                        writer.flush();
+                        return;
+                    }
                     if (bytes >= DEBUG_FILE_CAP) {
                         writer.write("=== 已达 " + (DEBUG_FILE_CAP >> 20) + " MiB 上限，后续事件不再写入 ===");
                         writer.write(System.lineSeparator());
@@ -407,6 +419,25 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
             stopDebugWriter(e);
         } catch (IOException e) {
             stopDebugWriter(e);
+        }
+    }
+
+    /**
+     * 停止写线程：让它把队列里剩下的写完再退出，最多等 2 秒——半截日志也比没有强，但不能为了
+     * 收尾把游戏关不掉。
+     */
+    private static void stopDebugWriter() {
+        Thread thread;
+        synchronized (LavaFlowDevice.class) {
+            debugStopRequested = true;
+            LavaFlowDevice.class.notifyAll();
+            thread = debugWriterThread;
+        }
+        if (thread == null) return;
+        try {
+            thread.join(2000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -467,7 +498,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     @Override public synchronized void close() {
         if (closed) return; closed = true;
         commandEncoder.destroy();
-        clearDebugMessages();
+        stopDebugWriter();
         completePending();
         descriptorCache.destroy();
         context.close();
