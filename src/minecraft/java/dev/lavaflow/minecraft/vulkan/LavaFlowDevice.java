@@ -90,9 +90,11 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         int maxIndirectDraws = context.multiDrawIndirect()
                 ? Math.max(1, limits.maxDrawIndirectCount())
                 : Integer.MAX_VALUE;
+        // 26.4-snapshot-8 给 DeviceLimits 追加了 maxTexelBufferElements（放在最后）；官方 Vulkan 后端
+        // 直接报 VkPhysicalDeviceLimits.maxTexelBufferElements，这里照做，不做裁剪。
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
                 maxTex, maxMemoryAllocationSize, maxInterleavedDraws,
-                maxIndirectDraws);
+                maxIndirectDraws, (int)limits.maxTexelBufferElements());
         // The multi-draw capabilities describe what LavaFlow's render pass accepts, not what the Vulkan
         // device exposes natively. Each is emulated with a loop of core Vulkan commands when the device
         // lacks the corresponding feature, so the Blaze3D-level capability holds on every supported
