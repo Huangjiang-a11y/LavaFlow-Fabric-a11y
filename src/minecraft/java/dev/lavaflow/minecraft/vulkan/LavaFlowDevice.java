@@ -37,13 +37,17 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     // 既看不清也留不下；改成落盘后 F3 只留一行汇总（条数 + 文件路径）。
     // 文件每次启动重建，写满 DEBUG_FILE_CAP 就停写并在末尾留一行说明，避免长时间会话把存储写爆。
     public static final boolean DEBUG_BUFFERS = Boolean.getBoolean("lavaflow.debugBuffers");
-    private static final Deque<String> debugMessages = new ArrayDeque<>();
-    private static final int DEBUG_MESSAGE_CAP = 16;
+    private static final int DEBUG_QUEUE_CAP = 8192;
+    private static final int DEBUG_BATCH_MAX = 4096;
     private static final long DEBUG_FILE_CAP = 32L << 20;
-    private static BufferedWriter debugWriter;
+    // 收件箱与写盘分开：recordDebug 在渲染线程上被每笔 buffer 关闭调用，只允许往队列里塞一行就返回；
+    // 开文件、拼接、flush 全在 DEBUG_WRITER 线程上做。这两件事以前在同一个 synchronized 方法里，
+    // 开着 debugBuffers 去量帧时间，量到的其实是渲染线程在等磁盘。
+    private static final Deque<String> debugQueue = new ArrayDeque<>();
+    private static Thread debugWriterThread;
     private static Path debugLogPath;
-    private static long debugBytes;
     private static long debugEventCount;
+    private static long debugDropped;
     private static boolean debugCapped;
     private List<Runnable> callbacks = new ArrayList<>();
     // A batch in flight keeps the lists it was handed until its fence signals, so the fields cannot
@@ -323,10 +327,22 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     @Override public List<String> getLastDebugMessages() { return List.of(); }
 
     public static synchronized void recordDebug(String message) {
-        if (debugMessages.size() >= DEBUG_MESSAGE_CAP) debugMessages.pollFirst();
-        debugMessages.addLast(message);
         debugEventCount++;
-        appendDebugLine(message);
+        if (debugCapped) return;
+        if (debugQueue.size() >= DEBUG_QUEUE_CAP) {
+            // 写盘跟不上就不再排队：丢掉的条数会出现在 F3 汇总里，好过让渲染线程陪着堆内存。
+            debugDropped++;
+            return;
+        }
+        boolean wasEmpty = debugQueue.isEmpty();
+        debugQueue.addLast(message);
+        if (debugWriterThread == null) {
+            debugWriterThread = new Thread(LavaFlowDevice::runDebugWriter, "LavaFlow debug log");
+            debugWriterThread.setDaemon(true);
+            debugWriterThread.start();
+        }
+        // 只有从空变非空才叫醒写线程：每笔 buffer 关闭都通知一次的话，通知本身就成了新开销。
+        if (wasEmpty) LavaFlowDevice.class.notifyAll();
     }
 
     /** Number of diagnostic events emitted this session, for the one-line F3 summary. */
@@ -350,45 +366,60 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         return debugLogPath;
     }
 
-    private static void appendDebugLine(String message) {
-        if (debugCapped) return;
+    /** 写线程主体：攒一批再 flush 一次，队列空时睡在监视器上，不空转。 */
+    private static void runDebugWriter() {
+        Path path = pathOfDebugLog();
         try {
-            if (debugWriter == null) {
-                Path path = pathOfDebugLog();
-                Files.createDirectories(path.getParent());
-                debugWriter = Files.newBufferedWriter(path, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                writeDebug("=== " + java.time.OffsetDateTime.now().withNano(0) + " debugBuffers session ===");
+            Files.createDirectories(path.getParent());
+            try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                writer.write("=== " + java.time.OffsetDateTime.now().withNano(0) + " debugBuffers session ===");
+                writer.write(System.lineSeparator());
+                writer.flush();
+                long bytes = 0;
+                List<String> batch = new ArrayList<>(DEBUG_BATCH_MAX);
+                while (true) {
+                    synchronized (LavaFlowDevice.class) {
+                        while (debugQueue.isEmpty()) LavaFlowDevice.class.wait();
+                        while (!debugQueue.isEmpty() && batch.size() < DEBUG_BATCH_MAX) batch.add(debugQueue.pollFirst());
+                    }
+                    for (String line : batch) {
+                        writer.write(line);
+                        writer.write(System.lineSeparator());
+                        bytes += line.length() + 1;
+                    }
+                    batch.clear();
+                    writer.flush();
+                    if (bytes >= DEBUG_FILE_CAP) {
+                        writer.write("=== 已达 " + (DEBUG_FILE_CAP >> 20) + " MiB 上限，后续事件不再写入 ===");
+                        writer.write(System.lineSeparator());
+                        writer.flush();
+                        synchronized (LavaFlowDevice.class) {
+                            debugCapped = true;
+                            debugQueue.clear();
+                        }
+                        return;
+                    }
+                }
             }
-            writeDebug(message);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stopDebugWriter(e);
         } catch (IOException e) {
-            debugCapped = true;
-            LOGGER.log(System.Logger.Level.WARNING, "LavaFlow 诊断日志写入失败，后续事件改为只留在内存环形缓冲", e);
+            stopDebugWriter(e);
         }
     }
 
-    private static void writeDebug(String line) throws IOException {
-        byte[] bytes = (line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8);
-        if (debugBytes + bytes.length > DEBUG_FILE_CAP) {
+    private static void stopDebugWriter(Exception cause) {
+        synchronized (LavaFlowDevice.class) {
             debugCapped = true;
-            debugWriter.write("=== 已达 " + (DEBUG_FILE_CAP >> 20) + " MiB 上限，后续事件不再写入 ===" + System.lineSeparator());
-            debugWriter.flush();
-            debugWriter.close();
-            debugWriter = null;
-            return;
+            debugQueue.clear();
         }
-        debugWriter.write(line);
-        debugWriter.write(System.lineSeparator());
-        debugWriter.flush();
-        debugBytes += bytes.length;
+        LOGGER.log(System.Logger.Level.WARNING, "LavaFlow 诊断日志写入失败，后续事件只计数不落盘", cause);
     }
 
-    /** Snapshot of the recent buffer diagnostics, for LavaFlowBufferDebugEntry. */
-    public static synchronized List<String> debugMessages() {
-        return new ArrayList<>(debugMessages);
-    }
-
-    public static synchronized void clearDebugMessages() { debugMessages.clear(); }
+    /** Events dropped because the writer could not keep up, for the one-line F3 summary. */
+    public static synchronized long debugDropped() { return debugDropped; }
     /**
      * Whether the frontend resolves the names of the objects it asks us to create.
      *

@@ -23,8 +23,10 @@ public final class LavaFlowBufferDebugEntry implements DebugScreenEntry {
                                   LevelChunk adjacentChunk) {
         if (!LavaFlowDevice.DEBUG_BUFFERS) return;
         // 事件本体写进 logs/lavaflow-debug.log；F3 上只留一行，免得每帧被刷成一片看不清。
+        long dropped = LavaFlowDevice.debugDropped();
         displayer.addPriorityLine("LavaFlow 事件 " + LavaFlowDevice.debugEventCount()
-                + " 条 -> " + LavaFlowDevice.debugLogPath());
+                + (dropped == 0 ? "" : "（丢弃 " + dropped + "）")
+                + " -> " + LavaFlowDevice.debugLogPath());
     }
 
     @Override public DebugEntryCategory category() { return DebugEntryCategory.RENDERER; }
