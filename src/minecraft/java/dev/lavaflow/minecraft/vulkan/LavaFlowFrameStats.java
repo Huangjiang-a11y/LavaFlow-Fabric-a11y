@@ -610,6 +610,8 @@ public final class LavaFlowFrameStats {
         double samplersPerFrame = framesSince == 0 ? 0 : (retiredSamplers - retiredSamplersAtReport) / (double) framesSince;
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
+        // 必须在 updateReportBaselines() 之前算：那一调用会把基线推平，之后再比增量永远是 0。
+        LOGGER.log(System.Logger.Level.INFO, layoutTransitionLine(framesSince));
         updateReportBaselines();
         LOGGER.log(System.Logger.Level.INFO,
                 "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} gpu_ms={6}"
@@ -670,7 +672,6 @@ public final class LavaFlowFrameStats {
             passGpuMillisAtReport.put(entry.getKey(), entry.getValue().clone());
         }
         timedPassesAtReport = timedPasses;
-        LOGGER.log(System.Logger.Level.INFO, layoutTransitionLine(framesSince));
     }
 
     /**
