@@ -5,6 +5,7 @@ import dev.lavaflow.minecraft.LavaFlowGpuDebugEntry;
 import net.minecraft.client.core.registries.ClientRegistries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
+import net.minecraft.core.Registry;
 import net.minecraft.core.WritableRegistry;
 import net.minecraft.resources.ResourceKey;
 import org.spongepowered.asm.mixin.Mixin;
@@ -34,14 +35,14 @@ abstract class DebugScreenEntriesMixin {
         ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowBufferDebugEntry.ID);
         if (!registry.containsKey(bufferKey)) {
-            registry.register(bufferKey, new LavaFlowBufferDebugEntry());
+            Registry.register(registry, bufferKey, new LavaFlowBufferDebugEntry());
         }
         ResourceKey<DebugScreenEntry> key = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowGpuDebugEntry.ID);
         if (!registry.containsKey(key)) {
-            // snapshot-8 把这个形参收窄成 WritableRegistry，注册也回到实例方法 register(key, value) 上；
-            // vanilla 自己的 bootstrap 用的就是同一条路。
-            registry.register(key, new LavaFlowGpuDebugEntry());
+            // snapshot-8 把这个形参收窄成 WritableRegistry。WritableRegistry 自己的 register 是三参数的
+            // （第三个是 RegistrationInfo），所以仍走 Registry 上的静态入口：它有收 WritableRegistry 的重载。
+            Registry.register(registry, key, new LavaFlowGpuDebugEntry());
         }
     }
 }
