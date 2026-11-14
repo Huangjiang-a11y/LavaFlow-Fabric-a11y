@@ -34,14 +34,14 @@ abstract class DebugScreenEntriesMixin {
         ResourceKey<DebugScreenEntry> bufferKey = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowBufferDebugEntry.ID);
         if (!registry.containsKey(bufferKey)) {
-            Registry.register(registry, bufferKey, new LavaFlowBufferDebugEntry());
+            registry.register(bufferKey, new LavaFlowBufferDebugEntry());
         }
         ResourceKey<DebugScreenEntry> key = ResourceKey.create(ClientRegistries.DEBUG_SCREEN_ENTRY,
                 LavaFlowGpuDebugEntry.ID);
         if (!registry.containsKey(key)) {
-            // 26.4's Registry exposes registration as static entry points only; the instance method that
-            // 26.3 had is gone. This is the same path vanilla's own bootstrap uses.
-            Registry.register(registry, key, new LavaFlowGpuDebugEntry());
+            // snapshot-8 把这个形参收窄成 WritableRegistry，注册也回到实例方法 register(key, value) 上；
+            // vanilla 自己的 bootstrap 用的就是同一条路。
+            registry.register(key, new LavaFlowGpuDebugEntry());
         }
     }
 }
