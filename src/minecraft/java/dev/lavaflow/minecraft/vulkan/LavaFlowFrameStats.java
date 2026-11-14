@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Frame pacing statistics for LavaFlow development, enabled with {@code -Dlavaflow.frameStats=true}.
@@ -43,6 +44,10 @@ public final class LavaFlowFrameStats {
     private static long descriptorInvalidations;
     private static long descriptorInvalidationsAtReport;
     private static long barriers;
+    // 每帧 barrier 变多时，需要知道是哪张纹理、哪种布局对在变多：只数总量只能说明"多了"，
+    // 数不到"多在哪"。键是 "纹理标签 from->to"，报告里给增量最大的几条。
+    private static final Map<String, Long> layoutTransitions = new ConcurrentHashMap<>();
+    private static final Map<String, Long> layoutTransitionsAtReport = new ConcurrentHashMap<>();
     private static long barriersAtReport;
     private static long copyBarriers;
     private static long copyBarriersAtReport;
@@ -133,6 +138,27 @@ public final class LavaFlowFrameStats {
     public static void descriptorCacheInvalidated() {
         if (!ENABLED) return;
         descriptorInvalidations++;
+    }
+
+    /** 记录一次布局转换：纹理标签 + 从哪种布局到哪种布局。只在 frameStats 打开时记账。 */
+    public static void layoutTransition(LavaFlowGpuTexture texture, int from, int to) {
+        if (!ENABLED) return;
+        layoutTransitions.merge(texture.label() + " " + layoutName(from) + "->" + layoutName(to), 1L, Long::sum);
+    }
+
+    private static String layoutName(int layout) {
+        return switch (layout) {
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED -> "UNDEFINED";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL -> "GENERAL";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL -> "COLOR";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL -> "DEPTH_STENCIL";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL -> "DEPTH";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL -> "SAMPLED";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL -> "XFER_SRC";
+            case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL -> "XFER_DST";
+            case org.lwjgl.vulkan.VK_KHR_swapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR -> "PRESENT";
+            default -> "0x" + Integer.toHexString(layout);
+        };
     }
 
     /** Counts one image layout barrier recorded into the command stream. */
@@ -498,6 +524,8 @@ public final class LavaFlowFrameStats {
         descriptorHitsAtReport = descriptorHits;
         descriptorInvalidationsAtReport = descriptorInvalidations;
         barriersAtReport = barriers;
+        layoutTransitionsAtReport.clear();
+        layoutTransitionsAtReport.putAll(layoutTransitions);
         copyBarriersAtReport = copyBarriers;
         indirectNativeAtReport = indirectNative;
         indirectExpandedAtReport = indirectExpanded;
@@ -643,6 +671,36 @@ public final class LavaFlowFrameStats {
             passGpuMillisAtReport.put(entry.getKey(), entry.getValue().clone());
         }
         timedPassesAtReport = timedPasses;
+        LOGGER.log(System.Logger.Level.INFO, layoutTransitionLine(framesSince));
+    }
+
+    /**
+     * 本窗口内增量最大的几种布局转换，每帧次数。只数 barrier 总量只能知道"多了"，这一行回答
+     * "是哪张纹理、从哪种布局转到哪种布局变多了"——换快照后 barrier 从 8.6 涨到 10.8 时，
+     * 缺的正是这个答案。
+     */
+    private static String layoutTransitionLine(long frames) {
+        if (layoutTransitions.isEmpty()) return "layout_transitions=[]";
+        List<Map.Entry<String, Long>> entries = new ArrayList<>();
+        for (Map.Entry<String, Long> e : layoutTransitions.entrySet()) {
+            long delta = e.getValue() - layoutTransitionsAtReport.getOrDefault(e.getKey(), 0L);
+            if (delta > 0) entries.add(Map.entry(e.getKey(), delta));
+        }
+        if (entries.isEmpty()) return "layout_transitions=[]";
+        entries.sort((x, y) -> Long.compare(y.getValue(), x.getValue()));
+        double divisor = Math.max(1, frames);
+        StringBuilder sb = new StringBuilder("layout_transitions=[");
+        int shown = 0;
+        for (Map.Entry<String, Long> e : entries) {
+            if (shown == 4) {
+                sb.append(", …(+").append(entries.size() - 4).append(')');
+                break;
+            }
+            if (shown++ > 0) sb.append(", ");
+            sb.append(e.getKey().replace(' ', '_')).append(' ')
+                    .append(String.format("%.2f", e.getValue() / divisor));
+        }
+        return sb.append(']').toString();
     }
 
     /**

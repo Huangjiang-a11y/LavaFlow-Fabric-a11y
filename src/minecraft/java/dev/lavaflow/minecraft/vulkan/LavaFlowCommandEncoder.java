@@ -497,6 +497,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
         LavaFlowFrameStats.barrierRecorded();
+        LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
         try (MemoryStack stack = stackPush()) {
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .oldLayout(sourceLayout).newLayout(targetLayout)

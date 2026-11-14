@@ -27,6 +27,9 @@ final class LavaFlowGpuTexture implements GpuTexture {
     // for us have to live here. The constructor parameter list is exactly that former super(...) call.
     private final int usage;
     private final String label;
+
+    /** 前端给的标签，诊断用；没有标签时给一个固定的占位，免得聚合时分不清"空"和"缺"。 */
+    String label() { return label == null ? "(unlabeled)" : label; }
     private final GpuFormat format;
     private final int width;
     private final int height;
