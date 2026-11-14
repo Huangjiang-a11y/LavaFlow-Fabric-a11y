@@ -208,6 +208,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int pendingVertexMask;
     // The slot-local index of this pass's start timestamp, or -1 when per-pass timing is off.
     private int timedPass = -1;
+    // 本通道是否要在 begin 之后用 vkCmdClearAttachments 清一次深度（见 ensureBegun）。
+    private boolean pendingDepthClearInline;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
 
@@ -238,6 +240,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         colorTargetMismatchReported = false;
         timedPass = -1;
         resumeRenderPass = 0;
+        pendingDepthClearInline = false;
 
         int colorSlots = colorSlotCount();
         RenderPassDescriptor.Attachment depth = depthAttachment();
@@ -310,6 +313,15 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     void ensureBegun() {
         if (begun) return;
         begun = true;
+        // 有推迟下来的深度清屏时，先判断这个通道能不能就地清：要求渲染区域覆盖整张深度图，
+        // 否则被裁掉的部分会留下旧内容——那种情况退回"进通道前先转 TRANSFER_DST 清掉"。
+        if (depthView != null && encoder.hasPendingDepthClear(depthView.texture())) {
+            RenderPass.RenderArea area = descriptor.renderArea();
+            boolean fullArea = area.x() == 0 && area.y() == 0
+                    && area.width() == outputWidth && area.height() == outputHeight;
+            if (fullArea) pendingDepthClearInline = true;
+            else encoder.flushPendingDepthClear(depthView.texture());
+        }
         for (LavaFlowGpuTexture sampled : sampledTextures()) {
             int layout = LavaFlowVk.sampledLayout();
             if (sampled.layout() != layout) {
@@ -331,6 +343,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             else beginLegacy(stack, false);
             applyViewport(stack);
             setScissor(stack, scissorX, scissorY, scissorWidth, scissorHeight);
+        }
+        if (pendingDepthClearInline) {
+            recordPendingDepthClear();
+            // 只清这一下：后面 splitForSampledTransitions 重开通道时不能再清一次。
+            pendingDepthClearInline = false;
         }
         if (pipeline != null) recordPipelineBind();
         if (pendingVertexMask != 0) {
@@ -376,6 +393,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
 
+    /**
+     * 通道内清深度：{@code vkCmdClearAttachments}，不做整图布局转换。
+     *
+     * <p>真机实测（Mali-G76，快照-8）主深度每帧被清两次，走 {@code TRANSFER_DST} 的话每次要付
+     * 两个整图屏障；在通道里清则是零个。渲染区域覆盖整张图这一前提已在 ensureBegun 里判过。
+     */
+    private void recordPendingDepthClear() {
+        LavaFlowGpuTexture depthTexture = depthView.texture();
+        Double value = encoder.takePendingDepthClear(depthTexture);
+        if (value == null) return;
+        try (MemoryStack stack = stackPush()) {
+            VkClearAttachment.Buffer clear = VkClearAttachment.calloc(1, stack)
+                    .aspectMask(LavaFlowVk.aspect(depthTexture.getFormat())).colorAttachment(0);
+            clear.clearValue().depthStencil().depth(value.floatValue()).stencil(0);
+            VkClearRect.Buffer rect = VkClearRect.calloc(1, stack);
+            rect.rect().offset().set(0, 0);
+            rect.rect().extent().set(outputWidth, outputHeight);
+            rect.baseArrayLayer(0).layerCount(depthTexture.getDepthOrLayers());
+            vkCmdClearAttachments(encoder.commandBuffer(), clear, rect);
+        }
+    }
+
     /** The frontend's name for this pass, used as the key of the per-pass GPU breakdown. */
     private String passLabel() {
         var label = descriptor.label();
@@ -410,7 +449,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (depthView != null) {
             depthAttachment = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
                     .imageView(depthView.handle()).imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                    .loadOp(loadOp(depth, resume))
+                    // 就地清深度时用 DONT_CARE 载入：省掉把旧 tile 读回来再整块覆盖的带宽。
+                    .loadOp(pendingDepthClearInline ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, resume))
                     .storeOp(depth.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
             if (clears(depth, resume)) depthAttachment.clearValue().depthStencil()
                     .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());

@@ -44,6 +44,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 每帧几十个渲染通道，对象本身很小，复用的收益就只是几十次小分配，但代价只有 reset 要清干净；
     // 至于池子里的对象数量，一帧的通道是串行的，一个就够，多的只会是历史遗留。
     private final ArrayDeque<LavaFlowRenderPass> passPool = new ArrayDeque<>();
+    // 推迟到通道内执行的深度清屏。清屏时还不知道后面哪个通道会用到这张深度图，而
+    // vkCmdClearAttachments 必须在通道内做；这样一来，一次清屏从"转 TRANSFER_DST、清、转回"
+    // 三个整图屏障（真机实测每帧两次）变成零个。没人用的清屏在 submit() 前按旧写法补上。
+    private final java.util.LinkedHashMap<LavaFlowGpuTexture, Double> pendingDepthClears = new java.util.LinkedHashMap<>();
     private long recordingSerial = 1;
     private long completedSerial;
     private boolean destroyed;
@@ -341,6 +345,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void submit() {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         if (renderPassOpen) submitRenderPass();
+        // 这一帧里没有任何通道用到的深度清屏，在这里按旧写法补上，保证清屏语义不丢。
+        if (!pendingDepthClears.isEmpty()) {
+            for (var entry : pendingDepthClears.entrySet()) clearDepthImmediate(entry.getKey(), entry.getValue());
+            pendingDepthClears.clear();
+        }
         try (MemoryStack stack = stackPush()) {
             memoryBarrier(stack);
         }
@@ -489,6 +498,18 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         return activeRenderPass;
     }
 
+    /** 这张深度图有没有一笔推迟下来的清屏在等通道。 */
+    boolean hasPendingDepthClear(LavaFlowGpuTexture texture) { return pendingDepthClears.containsKey(texture); }
+
+    /** 取走这笔待办清屏；返回 null 表示没有。 */
+    Double takePendingDepthClear(LavaFlowGpuTexture texture) { return pendingDepthClears.remove(texture); }
+
+    /** 通道用不上这笔清屏时的退路：按旧写法立刻清掉（此时还没开通道，转换是合法的）。 */
+    void flushPendingDepthClear(LavaFlowGpuTexture texture) {
+        Double value = pendingDepthClears.remove(texture);
+        if (value != null) clearDepthImmediate(texture, value);
+    }
+
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
     void releasePass(LavaFlowRenderPass pass) {
         if (!destroyed) passPool.addFirst(pass);
@@ -541,6 +562,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
+        // 能当渲染目标的深度图（主深度就是）走到通道里用 vkCmdClearAttachments 清，
+        // 省掉两次整图布局转换；其余（例如要采样后才清一次的非通道用图）按旧写法立即清。
+        if (context.dynamicRendering() && (texture.usage() & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0) {
+            pendingDepthClears.put(texture, value);
+            return;
+        }
+        clearDepthImmediate(texture, value);
+    }
+
+    /** 旧的清深度写法：转到 TRANSFER_DST 清掉，再回到清之前的布局。 */
+    void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
         int previous = texture.layout();
         transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
