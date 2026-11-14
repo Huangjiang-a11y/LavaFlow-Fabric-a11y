@@ -692,8 +692,8 @@ public final class LavaFlowFrameStats {
         StringBuilder sb = new StringBuilder("layout_transitions=[");
         int shown = 0;
         for (Map.Entry<String, Long> e : entries) {
-            if (shown == 4) {
-                sb.append(", …(+").append(entries.size() - 4).append(')');
+            if (shown == 8) {
+                sb.append(", …(+").append(entries.size() - 8).append(')');
                 break;
             }
             if (shown++ > 0) sb.append(", ");
