@@ -514,31 +514,37 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
-        LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(gpuTexture);
+        int previous = texture.layout();
+        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearColorValue clear = VkClearColorValue.calloc(stack).float32(stack.floats(color.x(), color.y(), color.z(), color.w()));
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
             vkCmdClearColorImage(commandBuffer, texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, range);
         }
-        restoreSampledLayout(texture);
+        restoreAfterClear(texture, previous);
     }
     @Override public void clearColorAndDepthTextures(GpuTexture color, Vector4fc value, GpuTexture depth, double depthValue) {
         clearColorTexture(color, value); clearDepthTexture(depth, depthValue);
     }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
-        LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(gpuTexture);
+        int previous = texture.layout();
+        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearDepthStencilValue clear = VkClearDepthStencilValue.calloc(stack).depth((float)value).stencil(0);
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(LavaFlowVk.aspect(texture.getFormat()))
                     .baseMipLevel(0).levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
             vkCmdClearDepthStencilImage(commandBuffer, texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, range);
         }
-        restoreSampledLayout(texture);
+        restoreAfterClear(texture, previous);
     }
 
     @Override public void clearStencilTexture(GpuTexture gpuTexture, byte value) {
-        LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(gpuTexture);
+        int previous = texture.layout();
+        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             // 只清 stencil 面（aspect = STENCIL），depth 字段此时被驱动忽略；官方 Vulkan 后端也是
             // 只填 stencil、只声明 STENCIL aspect。
@@ -547,7 +553,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     .baseMipLevel(0).levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
             vkCmdClearDepthStencilImage(commandBuffer, texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clear, range);
         }
-        restoreSampledLayout(texture);
+        restoreAfterClear(texture, previous);
     }
 
     @Override public void writeToBuffer(GpuBufferSlice destination, ByteBuffer source) {
@@ -748,6 +754,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
     private static LavaFlowGpuTexture texture(GpuTexture texture) { return (LavaFlowGpuTexture)texture; }
+
+    /**
+     * 清屏后回到清之前的布局，而不是一律转回 SAMPLED。
+     *
+     * <p>清屏只是借 {@code TRANSFER_DST} 走一趟。真机实测（快照-8，Mali-G76）：主深度缓冲每帧两次
+     * “清深度 → 采样深度 → 再当深度附件用”，一律转回 SAMPLED 会让每一次清屏都多出
+     * {@code XFER_DST→SAMPLED→DEPTH_STENCIL} 两趟整图屏障；回到清之前的布局只要
+     * {@code XFER_DST→DEPTH_STENCIL} 一趟，每帧省两个。确实要被采样的目标，frontend 采样时
+     * 会照常触发转换，这里不需要提前替它决定。
+     *
+     * <p>刚建出来（{@code UNDEFINED}）的纹理不能“回到 UNDEFINED”——那不是一个合法的目标布局，
+     * 这种只在第一次清屏时出现的场合退回到原来的采样布局。
+     */
+    private void restoreAfterClear(LavaFlowGpuTexture texture, int previousLayout) {
+        if (previousLayout == VK_IMAGE_LAYOUT_UNDEFINED) restoreSampledLayout(texture);
+        else transition(texture, previousLayout);
+    }
 
     private void restoreSampledLayout(LavaFlowGpuTexture texture) {
         if ((texture.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
