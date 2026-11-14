@@ -56,13 +56,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
 
     private final LavaFlowCommandEncoder encoder;
     private final LavaFlowVulkanContext context;
-    private final RenderPassDescriptor descriptor;
-    private final int outputWidth;
-    private final int outputHeight;
-    private final long renderPass;
-    private final LavaFlowGpuTextureView[] colorViews;
-    private final LavaFlowGpuTextureView depthView;
-    private final boolean hasClears;
+    // 这些每帧随描述符变化，pass 对象被复用（见 LavaFlowCommandEncoder 的 passPool），所以不能是 final。
+    private RenderPassDescriptor descriptor;
+    private int outputWidth;
+    private int outputHeight;
+    private long renderPass;
+    private LavaFlowGpuTextureView[] colorViews;
+    private LavaFlowGpuTextureView depthView;
+    private boolean hasClears;
     // One slot per uniform the bound pipeline was compiled with, in the same order as the frontend's
     // uniform indices: 26.3 resolves a uniform name to its slot in the frontend and hands the backend
     // (index, value) pairs. Sized in setPipeline, then filled by setUniform.
@@ -213,7 +214,30 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     LavaFlowRenderPass(LavaFlowCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
         this.context = encoder.device().context();
+        reset(descriptor);
+    }
+
+    /**
+     * 复用这个 pass 对象来处理一份新的描述符：先把上一次留下的全部可变状态清干净，再按新描述符
+     * 重新初始化。每帧有几十个渲染通道，复用省下的只是几十个小对象的分配，收益很小——但代价也
+     * 只是这一处必须把状态清全，所以清哪些写在这里集中列出来，免得下次加字段时漏掉一个。
+     */
+    LavaFlowRenderPass reset(RenderPassDescriptor descriptor) {
         this.descriptor = descriptor;
+        uniforms.clear();
+        pipeline = null;
+        begun = false;
+        ended = false;
+        descriptorsDirty = true;
+        pendingVertexMask = 0;
+        pendingIndexBuffer = 0;
+        pendingIndexType = -1;
+        watchedVertexBuffer = null;
+        watchedIndexBuffer = null;
+        watchedVertexOffset = 0;
+        colorTargetMismatchReported = false;
+        timedPass = -1;
+        resumeRenderPass = 0;
 
         int colorSlots = colorSlotCount();
         RenderPassDescriptor.Attachment depth = depthAttachment();
@@ -231,7 +255,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         viewportWidth = outputWidth;
         viewportHeight = outputHeight;
 
-        colorViews = new LavaFlowGpuTextureView[colorSlots];
+        if (colorViews == null || colorViews.length != colorSlots) {
+            colorViews = new LavaFlowGpuTextureView[colorSlots];
+        } else {
+            java.util.Arrays.fill(colorViews, null);
+        }
         boolean clearAny = clears(depth, false);
         for (int slot = 0; slot < colorSlots; slot++) {
             RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
@@ -245,8 +273,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (context.dynamicRendering()) {
             renderPass = 0;
         } else {
-            colorFormats = new int[colorSlots];
-            colorLoadOps = new int[colorSlots];
+            if (colorFormats == null || colorFormats.length != colorSlots) {
+                colorFormats = new int[colorSlots];
+                colorLoadOps = new int[colorSlots];
+            }
             for (int slot = 0; slot < colorSlots; slot++) {
                 RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
                 if (colorViews[slot] == null) {
@@ -268,6 +298,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         scissorY = area.y();
         scissorWidth = area.width();
         scissorHeight = area.height();
+        return this;
     }
 
     /**
@@ -329,14 +360,20 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     void end() {
         if (ended) return;
         ended = true;
-        if (!begun) {
-            if (!hasClears) return;
-            ensureBegun();
+        try {
+            if (!begun) {
+                if (!hasClears) return;
+                ensureBegun();
+            }
+            if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+            else vkCmdEndRenderPass(encoder.commandBuffer());
+            encoder.endTimedPass(timedPass);
+            timedPass = -1;
+        } finally {
+            // 无论是正常结束还是“什么都没录”的空通道，对象都回池子；
+            // 放在 finally 里是因为上面那条 return 也是正常出口。
+            encoder.releasePass(this);
         }
-        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
-        else vkCmdEndRenderPass(encoder.commandBuffer());
-        encoder.endTimedPass(timedPass);
-        timedPass = -1;
     }
 
     /** The frontend's name for this pass, used as the key of the per-pass GPU breakdown. */

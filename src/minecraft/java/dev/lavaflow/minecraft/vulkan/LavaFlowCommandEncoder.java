@@ -12,6 +12,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.nio.LongBuffer;
 import java.util.function.Supplier;
 import dev.lavaflow.vulkan.VulkanException;
@@ -40,6 +41,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
+    // 每帧几十个渲染通道，对象本身很小，复用的收益就只是几十次小分配，但代价只有 reset 要清干净；
+    // 至于池子里的对象数量，一帧的通道是串行的，一个就够，多的只会是历史遗留。
+    private final ArrayDeque<LavaFlowRenderPass> passPool = new ArrayDeque<>();
     private long recordingSerial = 1;
     private long completedSerial;
     private boolean destroyed;
@@ -443,6 +447,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (destroyed) return;
         if (renderPassOpen) submitRenderPass();
         destroyed = true;
+        passPool.clear();
         if (readbackScratch != NULL) {
             MemoryUtil.nmemAlignedFree(readbackScratch);
             readbackScratch = NULL;
@@ -479,8 +484,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen) throw new IllegalStateException("A render pass is already open");
         flushBufferWriteBarrier();
         renderPassOpen = true;
-        activeRenderPass = new LavaFlowRenderPass(this, descriptor);
+        LavaFlowRenderPass recycled = passPool.pollFirst();
+        activeRenderPass = recycled == null ? new LavaFlowRenderPass(this, descriptor) : recycled.reset(descriptor);
         return activeRenderPass;
+    }
+
+    /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
+    void releasePass(LavaFlowRenderPass pass) {
+        if (!destroyed) passPool.addFirst(pass);
     }
     @Override public void submitRenderPass() {
         if (renderPassOpen) {
