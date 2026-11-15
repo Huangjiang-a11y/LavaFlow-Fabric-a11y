@@ -174,6 +174,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
         boundIndexHandle = 0;
         boundIndexType = -1;
+        lastDepthCleared = 0;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -567,8 +568,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             submitRenderPass();
         }
     }
+    /** 同一帧内同一张深度图第二次清屏直接跳过（-Dlavaflow.noSkipRepeatDepthClear=true 退回）。 */
+    private static final boolean SKIP_REPEAT_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipRepeatDepthClear");
+    private long lastDepthCleared;
+
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
-        LavaFlowGpuTexture texture = texture(gpuTexture); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(gpuTexture);
+        // 每帧两次整屏深度清各带两条整图布局转换；第二次清之后没有读者，直接跳过。
+        if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
+        lastDepthCleared = texture.handle();
+        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearDepthStencilValue clear = VkClearDepthStencilValue.calloc(stack).depth((float)value).stencil(0);
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(LavaFlowVk.aspect(texture.getFormat()))

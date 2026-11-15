@@ -42,6 +42,11 @@ import static org.lwjgl.vulkan.VK10.*;
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
 final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
+    /** 手持物品/准心不挂深度附件（-Dlavaflow.noDropDepth=true 退回）。 */
+    private static final boolean DROP_DEPTH = !Boolean.getBoolean("lavaflow.noDropDepth");
+    private static final java.util.Set<String> DROP_DEPTH_LABELS =
+            java.util.Set.of("Item in hand", "3d crosshair");
+
 
     private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
     // Layout of the VkMultiDrawIndexedInfoEXT records that multiDrawIndexed receives, as int indices.
@@ -137,6 +142,9 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             colorViews[i] = view(attachment.textureView());
             clears |= attachment.clearValue().isPresent();
         }
+        // 手持物品/准心是整屏一笔的通道，管线不测世界深度；去掉深度附件语义不变，
+        // 而且少一次深度载入/写回（-Dlavaflow.noDropDepth=true 退回）。
+        if (DROP_DEPTH && depth != null && DROP_DEPTH_LABELS.contains(passLabel())) depth = null;
         depthView = depth == null ? null : view(depth.textureView());
         hasClears = clears;
 
