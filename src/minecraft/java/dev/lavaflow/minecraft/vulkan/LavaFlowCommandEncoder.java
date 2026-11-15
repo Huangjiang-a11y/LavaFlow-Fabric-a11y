@@ -45,7 +45,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 通道合并：只对白名单里的通道放行（Main 与 Item in hand 的附件集合完全一致）。
     // 真机数据：Item in hand 平均只有一笔绘制，却占整屏颜色+深度的读回写回，约 1.2 ms。
     private static final boolean PASS_MERGE = !Boolean.getBoolean("lavaflow.noPassMerge");
-    private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Main", "Item in hand");
+    // 只并"纯颜色"那一对：手持物品/准心（已去掉深度附件）与紧随其后的 HUD。
+    // Main 不参与：它与手持物品的附件集合不同，上一版硬并就是水面闪的来源。
+    private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Item in hand", "3d crosshair");
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
     private long pendingRenderPass = -1;
