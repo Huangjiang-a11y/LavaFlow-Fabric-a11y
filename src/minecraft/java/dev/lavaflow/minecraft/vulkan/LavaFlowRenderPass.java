@@ -170,6 +170,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null || depth.clearValue().isEmpty()
                     ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            // 有推迟到通道内的深度清屏时，载入那趟没有意义，直接 DONT_CARE。
+            if (depthView != null && depthLoadOp == VK_ATTACHMENT_LOAD_OP_LOAD
+                    && encoder.hasPendingDepthClear(depthView.texture())) {
+                depthLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            }
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
         }
 
@@ -340,7 +345,24 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 .renderPass(beginRenderPass).framebuffer(framebuffer).pClearValues(clearValues);
         begin.renderArea().offset().set(area.x(), area.y());
         begin.renderArea().extent().set(area.width(), area.height());
+        if (depthView != null) encoder.noteDepthAttachment(depthView.handle());
         vkCmdBeginRenderPass(encoder.commandBuffer(), begin, VK_SUBPASS_CONTENTS_INLINE);
+        if (!resume && depthView != null) {
+            Double pendingDepth = encoder.takePendingDepthClear(depthView.texture());
+            if (pendingDepth != null && !depth.clearValue().isPresent()) {
+                try (MemoryStack clearStack = stackPush()) {
+                    VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(1, clearStack);
+                    attachments.get(0).aspectMask(LavaFlowVk.aspect(depthView.texture().getFormat()))
+                            .colorAttachment(0);
+                    attachments.get(0).clearValue().depthStencil().depth((float) (double) pendingDepth).stencil(0);
+                    VkClearRect.Buffer rect = VkClearRect.calloc(1, clearStack);
+                    rect.get(0).rect().offset().set(area.x(), area.y());
+                    rect.get(0).rect().extent().set(area.width(), area.height());
+                    rect.get(0).baseArrayLayer(0).layerCount(1);
+                    vkCmdClearAttachments(encoder.commandBuffer(), attachments, rect);
+                }
+            }
+        }
     }
 
     /**
