@@ -42,6 +42,11 @@ import static org.lwjgl.vulkan.VK10.*;
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
 final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
+    /** 每帧把通道序列打出来：标签、颜色附件数、有没有深度、绘制笔数、区域。 */
+    private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
+    private static int passSeqIndex;
+    private int seqDraws;
+
     /** 手持物品/准心不挂深度附件（-Dlavaflow.noDropDepth=true 退回）。 */
     private static final boolean DROP_DEPTH = !Boolean.getBoolean("lavaflow.noDropDepth");
     private static final java.util.Set<String> DROP_DEPTH_LABELS =
@@ -240,6 +245,16 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             if (!hasClears) return;
             ensureBegun();
         }
+        if (PASS_SEQUENCE) {
+            int colors = 0;
+            for (LavaFlowGpuTextureView v : colorViews) if (v != null) colors++;
+            var area = descriptor.renderArea();
+            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                    "[LavaFlow pass-seq] #" + (++passSeqIndex) + " " + passLabel() + " color=" + colors
+                            + (depthView == null ? " depth=none" : " depth=present")
+                            + " draws=" + seqDraws + " area=" + area.width() + "x" + area.height());
+        }
+        seqDraws = 0;
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
         encoder.endTimedPass(timedPass);
@@ -566,6 +581,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
 
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
+        if (PASS_SEQUENCE) seqDraws++;
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
         if (LavaFlowDrawCheck.ENABLED) {
@@ -618,6 +634,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
+        if (PASS_SEQUENCE) seqDraws++;
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
@@ -698,6 +715,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        if (PASS_SEQUENCE) seqDraws++;
         encoder.flushBufferWriteBarrier();
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
