@@ -246,11 +246,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (PASS_SEQUENCE) {
             int colors = 0;
             for (LavaFlowGpuTextureView v : colorViews) if (v != null) colors++;
-            var area = descriptor.renderArea();
             System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
                     "[LavaFlow pass-seq] #" + (++passSeqIndex) + " " + passLabel() + " color=" + colors
                             + (depthView == null ? " depth=none" : " depth=present")
-                            + " draws=" + seqDraws + " area=" + area.width() + "x" + area.height());
+                            + " draws=" + seqDraws + " area=" + scissorWidth + "x" + scissorHeight);
         }
         seqDraws = 0;
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
