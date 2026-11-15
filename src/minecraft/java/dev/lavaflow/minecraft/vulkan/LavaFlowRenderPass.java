@@ -388,8 +388,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             }
             RenderPass.RenderArea endArea = descriptor.renderArea();
             boolean deferred = encoder.closePassForMerge(context.dynamicRendering(), renderPass,
-                    legacyFramebuffer, colorViews.length > 0 && colorViews[0] != null ? colorViews[0].handle() : 0L,
-                    endArea.x(), endArea.y(), endArea.width(), endArea.height(),
+                    legacyFramebuffer, endArea.x(), endArea.y(), endArea.width(), endArea.height(),
                     allAttachmentsStored(), passLabel());
             if (!deferred) {
                 if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
@@ -545,7 +544,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         legacyFramebuffer = framebuffer;
         RenderPass.RenderArea area = descriptor.renderArea();
         if (!resume && encoder.resumeIntoPass(false, beginRenderPass, framebuffer,
-                colorViews.length > 0 && colorViews[0] != null ? colorViews[0].handle() : 0L,
                 area.x(), area.y(), area.width(), area.height(), passLabel())) {
             return;
         }
