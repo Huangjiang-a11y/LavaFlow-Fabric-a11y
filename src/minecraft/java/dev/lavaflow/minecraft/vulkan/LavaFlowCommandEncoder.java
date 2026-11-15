@@ -588,12 +588,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     Double takePendingDepthClear(LavaFlowGpuTexture texture) { return pendingDepthClears.remove(texture); }
 
-    /** 通道用不上这笔推迟的清屏时的退路：立即按旧写法清掉。 */
-    void flushPendingDepthClear(LavaFlowGpuTexture texture) {
-        Double value = pendingDepthClears.remove(texture);
-        if (value != null) clearDepthImmediate(texture, value);
-    }
-
     /** 能当渲染目标的深度图：清屏推迟到通道里用 vkCmdClearAttachments 做，省掉两次整图布局转换。 */
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
