@@ -76,8 +76,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
     /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
     private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
-    /** 天空通道整屏一笔、内容全覆盖，载入上一帧颜色是白读 8 MB；默认开，-Dlavaflow.noSkipSkyLoad=true 退回。 */
-    private static final boolean SKIP_SKY_LOAD = !Boolean.getBoolean("lavaflow.noSkipSkyLoad");
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -294,12 +292,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 } else {
                     colorFormats[slot] = LavaFlowVk.format(colorViews[slot].texture().getFormat());
                     colorLoadOps[slot] = loadOp(attachment, false);
-                    // 天空通道整屏一笔、内容全覆盖，载入上一帧的颜色是白读 8 MB。
-                    // 默认关，用 -Dlavaflow.skipSkyLoad=true 实测（万一天空有不覆盖的像素会露出残影）。
-                    if (SKIP_SKY_LOAD && colorLoadOps[slot] == VK_ATTACHMENT_LOAD_OP_LOAD
-                            && "Cubemap".equals(passLabel())) {
-                        colorLoadOps[slot] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-                    }
                 }
             }
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED

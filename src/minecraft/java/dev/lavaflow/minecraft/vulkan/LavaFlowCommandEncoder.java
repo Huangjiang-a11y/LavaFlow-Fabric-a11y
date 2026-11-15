@@ -180,6 +180,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
         boundIndexHandle = 0;
         boundIndexType = -1;
+        lastDepthCleared = 0;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -571,8 +572,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         clearDepthImmediate(texture, value);
     }
 
+    /** 同一帧内同一张深度图第二次清屏的跳过开关（-Dlavaflow.noSkipRepeatDepthClear=true 退回）。 */
+    private static final boolean SKIP_REPEAT_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipRepeatDepthClear");
+    private long lastDepthCleared;
+
     /** 旧的清深度写法：转到 TRANSFER_DST 清掉，再回到清之前的布局。 */
     void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
+        // 同一帧里同一张深度图被清两次：两次都是整屏深度写 + 两次整图布局转换。
+        // 第二次清之前这张深度只当过附件写过、之后再没有东西读它，所以直接跳过。
+        if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
+        lastDepthCleared = texture.handle();
         int previous = texture.layout();
         transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
