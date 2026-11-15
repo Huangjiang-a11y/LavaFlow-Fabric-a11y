@@ -386,8 +386,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 if (!hasClears) return;
                 ensureBegun();
             }
-            if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
-            else vkCmdEndRenderPass(encoder.commandBuffer());
+            RenderPass.RenderArea endArea = descriptor.renderArea();
+            boolean deferred = encoder.closePassForMerge(context.dynamicRendering(), renderPass,
+                    legacyFramebuffer, endArea.x(), endArea.y(), endArea.width(), endArea.height(),
+                    allAttachmentsStored(), passLabel());
+            if (!deferred) {
+                if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+                else vkCmdEndRenderPass(encoder.commandBuffer());
+            }
             if (PASS_SEQUENCE) {
                 reportPassSeq(passSequenceLine());
                 // 每份通道结束时归零：上一版忘了这一步，笔数在整局里累加，
@@ -426,6 +432,17 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     /** The frontend's name for this pass, used as the key of the per-pass GPU breakdown. */
+    private long legacyFramebuffer;
+
+    private boolean allAttachmentsStored() {
+        for (int i = 0; i < colorSlotCount(); i++) {
+            RenderPassDescriptor.Attachment a = colorAttachment(i);
+            if (a != null && !a.store()) return false;
+        }
+        RenderPassDescriptor.Attachment d = depthView == null ? null : depthAttachment();
+        return d == null || d.store();
+    }
+
     private String passLabel() {
         var label = descriptor.label();
         String value = label == null ? null : label.get();
@@ -524,7 +541,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         long beginRenderPass = resume ? resumeRenderPass() : renderPass;
         long framebuffer = context.legacyFramebuffer(beginRenderPass, views, outputWidth, outputHeight);
+        legacyFramebuffer = framebuffer;
         RenderPass.RenderArea area = descriptor.renderArea();
+        if (!resume && encoder.resumeIntoPass(false, beginRenderPass, framebuffer,
+                area.x(), area.y(), area.width(), area.height(), passLabel())) {
+            return;
+        }
         VkRenderPassBeginInfo begin = VkRenderPassBeginInfo.calloc(stack).sType$Default()
                 .renderPass(beginRenderPass).framebuffer(framebuffer).pClearValues(clearValues);
         begin.renderArea().offset().set(area.x(), area.y());

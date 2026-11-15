@@ -41,6 +41,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
+
+    // 通道合并：只对白名单里的通道放行（Main 与 Item in hand 的附件集合完全一致）。
+    // 真机数据：Item in hand 平均只有一笔绘制，却占整屏颜色+深度的读回写回，约 1.2 ms。
+    private static final boolean PASS_MERGE = !Boolean.getBoolean("lavaflow.noPassMerge");
+    private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Main", "Item in hand");
+    private boolean pendingPassEnd;
+    private boolean pendingPassDynamic;
+    private long pendingRenderPass = -1;
+    private long pendingFramebuffer = -1;
+    private int pendingX, pendingY, pendingW, pendingH;
+    private String pendingLabel = "";
     // 每帧几十个渲染通道，对象本身很小，复用的收益就只是几十次小分配，但代价只有 reset 要清干净；
     // 至于池子里的对象数量，一帧的通道是串行的，一个就够，多的只会是历史遗留。
     private final ArrayDeque<LavaFlowRenderPass> passPool = new ArrayDeque<>();
@@ -345,6 +356,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void submit() {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         if (renderPassOpen) submitRenderPass();
+        endPassNow();
         // 这一帧里没有任何通道用到的深度清屏，在这里按旧写法补上，保证清屏语义不丢。
         if (!pendingDepthClears.isEmpty()) {
             for (var entry : pendingDepthClears.entrySet()) clearDepthImmediate(entry.getKey(), entry.getValue());
@@ -511,6 +523,38 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
+    /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
+    boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
+                              int x, int y, int width, int height, boolean allStored, String label) {
+        if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) { endPassNow(); return false; }
+        pendingPassEnd = true; pendingPassDynamic = dynamic; pendingRenderPass = renderPass;
+        pendingFramebuffer = framebuffer; pendingX = x; pendingY = y; pendingW = width; pendingH = height;
+        pendingLabel = label;
+        return true;
+    }
+
+    /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
+    boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
+                           int x, int y, int width, int height, String label) {
+        if (!pendingPassEnd) return false;
+        boolean same = dynamic == pendingPassDynamic && renderPass == pendingRenderPass
+                && framebuffer == pendingFramebuffer && x == pendingX && y == pendingY
+                && width == pendingW && height == pendingH
+                && MERGEABLE.contains(label) && !label.equals(pendingLabel);
+        pendingPassEnd = false;
+        if (same) return true;
+        endPassNow();
+        return false;
+    }
+
+    /** 真正结束挂起的那份通道；布局转换、提交之前都必须先调。 */
+    void endPassNow() {
+        if (!pendingPassEnd) return;
+        pendingPassEnd = false;
+        if (pendingPassDynamic) org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
+        else vkCmdEndRenderPass(commandBuffer);
+    }
+
     void releasePass(LavaFlowRenderPass pass) {
         if (!destroyed) passPool.addFirst(pass);
     }
@@ -526,6 +570,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void markRenderPassClosed() { renderPassOpen = false; }
 
     void transition(LavaFlowGpuTexture texture, int targetLayout) {
+        endPassNow();
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
         LavaFlowFrameStats.barrierRecorded();
