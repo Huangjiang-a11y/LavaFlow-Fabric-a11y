@@ -388,7 +388,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             }
             if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
             else vkCmdEndRenderPass(encoder.commandBuffer());
-            if (PASS_SEQUENCE) reportPassSeq(passSequenceLine());
+            if (PASS_SEQUENCE) {
+                reportPassSeq(passSequenceLine());
+                // 每份通道结束时归零：上一版忘了这一步，笔数在整局里累加，
+                // 于是 Main 报出十七万笔这种明显不可能是真的数字。
+                seqDraws = 0;
+            }
             encoder.endTimedPass(timedPass);
             timedPass = -1;
         } finally {
