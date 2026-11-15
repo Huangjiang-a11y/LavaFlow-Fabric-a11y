@@ -50,6 +50,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Item in hand", "3d crosshair");
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
+    private static final boolean MERGE_DIAG = Boolean.getBoolean("lavaflow.passSequence");
     private static boolean mergeDiag;
     private long pendingRenderPass = -1;
     private long pendingFramebuffer = -1;
@@ -535,7 +536,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
                               int x, int y, int width, int height, boolean allStored, String label) {
         if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) {
-            if (PASS_SEQUENCE && !mergeDiag && ("Item in hand".equals(label) || "3d crosshair".equals(label))) {
+            if (MERGE_DIAG && !mergeDiag && ("Item in hand".equals(label) || "3d crosshair".equals(label))) {
                 mergeDiag = true;
                 reportPassSeq("merge-diag refuse-end label=" + label + " merge=" + PASS_MERGE
                         + " dynamic=" + dynamic + " allStored=" + allStored
@@ -552,7 +553,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
     boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
                            int x, int y, int width, int height, String label) {
-        if (PASS_SEQUENCE && !mergeDiag && "GUI before blur".equals(label)) {
+        if (MERGE_DIAG && !mergeDiag && "GUI before blur".equals(label)) {
             mergeDiag = true;
             reportPassSeq("merge-diag incoming=" + label + " pending=" + pendingLabel
                     + " pendingPassEnd=" + pendingPassEnd + " rp=" + renderPass + "/" + pendingRenderPass
