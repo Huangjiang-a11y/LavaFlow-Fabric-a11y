@@ -528,6 +528,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
     /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
+    private static void reportPassSeq(String message) {
+        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, "[LavaFlow pass-seq] " + message);
+    }
+
     boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
                               int x, int y, int width, int height, boolean allStored, String label) {
         if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) {
