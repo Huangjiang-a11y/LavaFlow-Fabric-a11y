@@ -76,10 +76,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
     /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
     private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
-    /** 手持物品通道不测深度：省掉每帧第二次整屏深度清。关它用 -Dlavaflow.noSkipHandDepthClear=true。 */
-    private static final boolean SKIP_HAND_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipHandDepthClear");
-    private static int handDepthClearSkipped;
-    private static final boolean SKIP_SKY_LOAD = Boolean.getBoolean("lavaflow.skipSkyLoad");
+<<<<<<< HEAD
+    /** 天空通道整屏一笔、内容全覆盖，载入上一帧颜色是白读 8 MB；默认开，-Dlavaflow.noSkipSkyLoad=true 退回。 */
+    private static final boolean SKIP_SKY_LOAD = !Boolean.getBoolean("lavaflow.noSkipSkyLoad");
+=======
+>>>>>>> parent of 2bab03b (perf(gpu): 手持物品通道的深度清降级为 DONT_CARE)
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -307,13 +308,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, false);
-            // 手持物品通道是"一笔绘制 + 整屏"，它开头那次深度清是每帧第二次整屏深度写。
-            // 手持物品的管线不测世界深度，这次清对画面没有贡献，先降级成 DONT_CARE 实测。
-            if (SKIP_HAND_DEPTH_CLEAR && depth != null && clears(depth, false)
-                    && "Item in hand".equals(passLabel())) {
-                depthLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-                handDepthClearSkipped++;
-            }
             renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
         }
 
