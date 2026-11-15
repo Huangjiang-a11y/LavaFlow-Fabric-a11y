@@ -342,6 +342,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void submit() {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         if (renderPassOpen) submitRenderPass();
+        // 这一帧没有任何通道用到的深度清屏，按旧写法补上，保证清屏语义不丢。
+        if (!pendingDepthClears.isEmpty()) {
+            for (var entry : new java.util.ArrayList<>(pendingDepthClears.entrySet())) clearDepthImmediate(entry.getKey(), entry.getValue());
+            pendingDepthClears.clear();
+        }
         try (MemoryStack stack = stackPush()) {
             memoryBarrier(stack);
         }
@@ -572,8 +577,24 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private static final boolean SKIP_REPEAT_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipRepeatDepthClear");
     private long lastDepthCleared;
 
+    private final java.util.LinkedHashMap<LavaFlowGpuTexture, Double> pendingDepthClears = new java.util.LinkedHashMap<>();
+    /** 上一次当深度附件用的纹理；清它就能推迟到通道里做。 */
+    private long lastDepthAttachment;
+
+    void noteDepthAttachment(long handle) { lastDepthAttachment = handle; }
+
+    boolean hasPendingDepthClear(LavaFlowGpuTexture texture) { return pendingDepthClears.containsKey(texture); }
+
+    Double takePendingDepthClear(LavaFlowGpuTexture texture) { return pendingDepthClears.remove(texture); }
+
+    /** 能推迟就推迟；推迟不了时按旧写法立即清。 */
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
+        if (texture.handle() == lastDepthAttachment) { pendingDepthClears.put(texture, value); return; }
+        clearDepthImmediate(texture, value);
+    }
+
+    void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
         // 每帧两次整屏深度清各带两条整图布局转换；第二次清之后没有读者，直接跳过。
         if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
         lastDepthCleared = texture.handle();
