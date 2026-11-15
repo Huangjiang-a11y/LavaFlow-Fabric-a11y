@@ -46,9 +46,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 真机数据：Item in hand 平均只有一笔绘制，却占整屏颜色+深度的读回写回，约 1.2 ms。
     private static final boolean PASS_MERGE = !Boolean.getBoolean("lavaflow.noPassMerge");
     private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Main", "Item in hand");
+    // 附件集合不同、但颜色附件与渲染区域一致的通道：HUD 只声明颜色、没有深度，
+    // 无法自己开一份与主通道兼容的渲染通道；直接沿用上一份（主通道）的通道画进去即可。
+    // 前提是 HUD 管线的深度测试是关的（Mali 上实测 HUD 不受影响），出问题用 noPassMerge 关掉。
+    private static final java.util.Set<String> MERGE_IGNORING_DEPTH = java.util.Set.of("GUI before blur");
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
     private long pendingRenderPass = -1;
+    private long pendingColorView;
     private long pendingFramebuffer = -1;
     private int pendingX, pendingY, pendingW, pendingH;
     private String pendingLabel = "";
@@ -524,23 +529,30 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
     /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
-    boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
+    boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer, long colorView,
                               int x, int y, int width, int height, boolean allStored, String label) {
-        if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) { endPassNow(); return false; }
+        if (!PASS_MERGE || dynamic || !allStored
+                || !(MERGEABLE.contains(label) || MERGE_IGNORING_DEPTH.contains(label))) { endPassNow(); return false; }
         pendingPassEnd = true; pendingPassDynamic = dynamic; pendingRenderPass = renderPass;
         pendingFramebuffer = framebuffer; pendingX = x; pendingY = y; pendingW = width; pendingH = height;
+        pendingColorView = colorView;
         pendingLabel = label;
         return true;
     }
 
     /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
-    boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
+    boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer, long colorView,
                            int x, int y, int width, int height, String label) {
         if (!pendingPassEnd) return false;
-        boolean same = dynamic == pendingPassDynamic && renderPass == pendingRenderPass
-                && framebuffer == pendingFramebuffer && x == pendingX && y == pendingY
-                && width == pendingW && height == pendingH
-                && MERGEABLE.contains(label) && !label.equals(pendingLabel);
+        boolean ignoreDepth = MERGE_IGNORING_DEPTH.contains(label);
+        boolean same = dynamic == pendingPassDynamic
+                && x == pendingX && y == pendingY && width == pendingW && height == pendingH
+                && !label.equals(pendingLabel)
+                && (ignoreDepth
+                        ? colorView != 0 && colorView == pendingColorView
+                        : MERGEABLE.contains(label) && renderPass == pendingRenderPass
+                                && framebuffer == pendingFramebuffer)
+                && (ignoreDepth || MERGEABLE.contains(label));
         pendingPassEnd = false;
         if (same) return true;
         endPassNow();
