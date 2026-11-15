@@ -50,6 +50,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Item in hand", "3d crosshair");
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
+    private static boolean mergeDiag;
     private long pendingRenderPass = -1;
     private long pendingFramebuffer = -1;
     private int pendingX, pendingY, pendingW, pendingH;
@@ -529,7 +530,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
     boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
                               int x, int y, int width, int height, boolean allStored, String label) {
-        if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) { endPassNow(); return false; }
+        if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) {
+            if (PASS_SEQUENCE && !mergeDiag && ("Item in hand".equals(label) || "3d crosshair".equals(label))) {
+                mergeDiag = true;
+                reportPassSeq("merge-diag refuse-end label=" + label + " merge=" + PASS_MERGE
+                        + " dynamic=" + dynamic + " allStored=" + allStored
+                        + " whitelisted=" + MERGEABLE.contains(label));
+            }
+            endPassNow(); return false;
+        }
         pendingPassEnd = true; pendingPassDynamic = dynamic; pendingRenderPass = renderPass;
         pendingFramebuffer = framebuffer; pendingX = x; pendingY = y; pendingW = width; pendingH = height;
         pendingLabel = label;
@@ -539,6 +548,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
     boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
                            int x, int y, int width, int height, String label) {
+        if (PASS_SEQUENCE && !mergeDiag && "GUI before blur".equals(label)) {
+            mergeDiag = true;
+            reportPassSeq("merge-diag incoming=" + label + " pending=" + pendingLabel
+                    + " pendingPassEnd=" + pendingPassEnd + " rp=" + renderPass + "/" + pendingRenderPass
+                    + " fb=" + framebuffer + "/" + pendingFramebuffer
+                    + " area=" + width + "x" + height + "/" + pendingW + "x" + pendingH);
+        }
         if (!pendingPassEnd) return false;
         boolean same = dynamic == pendingPassDynamic && renderPass == pendingRenderPass
                 && framebuffer == pendingFramebuffer && x == pendingX && y == pendingY
