@@ -76,6 +76,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
     /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
     private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
+    private static final boolean DROP_DEPTH = !Boolean.getBoolean("lavaflow.noDropDepth");
+    private static final java.util.Set<String> DROP_DEPTH_LABELS =
+            java.util.Set.of("Item in hand", "3d crosshair");
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -274,6 +277,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             colorViews[slot] = view(attachment.textureView());
             clearAny |= clears(attachment, false);
         }
+        // 手持物品/准心这两个整屏通道：附件里带深度，但管线不测世界深度。
+        // 去掉深度附件后它们的附件集合与 HUD 一致，HUD 通道就能并进来，
+        // 省掉一整个整屏通道的开合费（-Dlavaflow.noDropDepth=true 退回）。
+        if (DROP_DEPTH && depth != null && DROP_DEPTH_LABELS.contains(passLabel())) depth = null;
         depthView = depth == null ? null : view(depth.textureView());
         hasClears = clearAny;
 
