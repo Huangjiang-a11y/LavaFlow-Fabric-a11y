@@ -528,8 +528,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void transition(LavaFlowGpuTexture texture, int targetLayout) {
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
-        // 真要做转换了才结束挂起通道：冗余调用不该制造通道边界。
-        endPassNow();
         LavaFlowFrameStats.barrierRecorded();
         LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
         try (MemoryStack stack = stackPush()) {
