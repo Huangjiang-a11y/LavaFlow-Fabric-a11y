@@ -79,6 +79,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     /** 手持物品通道不测深度：省掉每帧第二次整屏深度清。关它用 -Dlavaflow.noSkipHandDepthClear=true。 */
     private static final boolean SKIP_HAND_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipHandDepthClear");
     private static int handDepthClearSkipped;
+    private static final boolean SKIP_SKY_LOAD = Boolean.getBoolean("lavaflow.skipSkyLoad");
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -295,6 +296,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 } else {
                     colorFormats[slot] = LavaFlowVk.format(colorViews[slot].texture().getFormat());
                     colorLoadOps[slot] = loadOp(attachment, false);
+                    // 天空通道整屏一笔、内容全覆盖，载入上一帧的颜色是白读 8 MB。
+                    // 默认关，用 -Dlavaflow.skipSkyLoad=true 实测（万一天空有不覆盖的像素会露出残影）。
+                    if (SKIP_SKY_LOAD && colorLoadOps[slot] == VK_ATTACHMENT_LOAD_OP_LOAD
+                            && "Cubemap".equals(passLabel())) {
+                        colorLoadOps[slot] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    }
                 }
             }
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
