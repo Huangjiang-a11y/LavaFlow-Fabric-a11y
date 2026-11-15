@@ -837,7 +837,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
-        seqDraws++;
+        if (PASS_SEQUENCE) seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexed");
@@ -871,7 +871,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
-        seqDraws += drawCount;
+        if (PASS_SEQUENCE) seqDraws += drawCount;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
@@ -983,7 +983,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
-        seqDraws++;
+        if (PASS_SEQUENCE) seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("draw");
