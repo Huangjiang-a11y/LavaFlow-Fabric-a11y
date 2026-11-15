@@ -543,7 +543,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boolean same = dynamic == pendingPassDynamic && renderPass == pendingRenderPass
                 && framebuffer == pendingFramebuffer && x == pendingX && y == pendingY
                 && width == pendingW && height == pendingH
-                && MERGEABLE.contains(label) && !label.equals(pendingLabel);
+                && (MERGEABLE.contains(label) || MERGEABLE.contains(pendingLabel))
+                && !label.equals(pendingLabel);
         pendingPassEnd = false;
         if (same) return true;
         endPassNow();
