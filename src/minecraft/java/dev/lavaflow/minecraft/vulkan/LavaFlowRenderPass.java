@@ -74,6 +74,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 命令条数、参数缓冲偏移。配合 -Dlavaflow.debugPipelines 打出的声明行，就能把"水面那批用的是
     // 哪条管线、参数从哪个偏移开始"对上号。只在开头若干帧记录，避免刷屏。
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
+    /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
+    private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
+    private static int passSeqIndex;
+    private int seqDraws;
 
     // 每种绘制入口第一次被调用时打一行，用来确定地形究竟走哪个方法——上一轮把记录器挂在
     // drawIndexedIndirect 和 drawIndexed 上都没出东西，说明猜入口不如让入口自己报名。
@@ -384,6 +388,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             }
             if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
             else vkCmdEndRenderPass(encoder.commandBuffer());
+            if (PASS_SEQUENCE) reportPassSeq(passSequenceLine());
             encoder.endTimedPass(timedPass);
             timedPass = -1;
         } finally {
@@ -420,6 +425,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         var label = descriptor.label();
         String value = label == null ? null : label.get();
         return value == null || value.isEmpty() ? "unnamed" : value;
+    }
+
+    private String passSequenceLine() {
+        StringBuilder sb = new StringBuilder();
+        sb.append('#').append(passSeqIndex++).append(' ').append(passLabel());
+        int colors = colorSlotCount();
+        int stored = 0;
+        for (int i = 0; i < colors; i++) {
+            RenderPassDescriptor.Attachment a = colorAttachment(i);
+            if (a != null && a.store()) stored++;
+        }
+        sb.append(" color=").append(colors).append("/store").append(stored);
+        RenderPassDescriptor.Attachment depth = depthView == null ? null : depthAttachment();
+        sb.append(" depth=").append(depth == null ? "none" : (depth.store() ? "store" : "dontstore"));
+        sb.append(" draws=").append(seqDraws);
+        RenderPass.RenderArea area = descriptor.renderArea();
+        sb.append(" area=").append(area.width()).append('x').append(area.height());
+        return sb.toString();
+    }
+
+    private static void reportPassSeq(String message) {
+        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, "[LavaFlow pass-seq] " + message);
     }
 
     private void beginDynamic(MemoryStack stack, boolean resume) {
@@ -805,6 +832,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
+        seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("drawIndexed");
@@ -838,6 +866,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
+        seqDraws += drawCount;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
@@ -949,6 +978,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         noteDrawKind("draw");
