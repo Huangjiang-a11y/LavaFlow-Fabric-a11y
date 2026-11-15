@@ -45,13 +45,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 通道合并：只对白名单里的通道放行（Main 与 Item in hand 的附件集合完全一致）。
     // 真机数据：Item in hand 平均只有一笔绘制，却占整屏颜色+深度的读回写回，约 1.2 ms。
     private static final boolean PASS_MERGE = !Boolean.getBoolean("lavaflow.noPassMerge");
-    // 只并"纯颜色"那一对：手持物品/准心（已去掉深度附件）与紧随其后的 HUD。
-    // Main 不参与：它与手持物品的附件集合不同，上一版硬并就是水面闪的来源。
-    private static final java.util.Set<String> MERGEABLE = java.util.Set.of("Item in hand", "3d crosshair");
+    // 合并机制保留，但白名单为空：实测 Main->手持物品 会闪水面，手持物品->HUD 之间必有布局转换
+    // （屏障不能在开着的通道里发），两对都不可合。要再试就改这里。
+    private static final java.util.Set<String> MERGEABLE = java.util.Set.of();
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
-    private static final boolean MERGE_DIAG = Boolean.getBoolean("lavaflow.passSequence");
-    private static boolean mergeDiag;
     private long pendingRenderPass = -1;
     private long pendingFramebuffer = -1;
     private int pendingX, pendingY, pendingW, pendingH;
@@ -529,19 +527,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
     /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
-    private static void reportPassSeq(String message) {
-        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, "[LavaFlow pass-seq] " + message);
-    }
-
     boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
                               int x, int y, int width, int height, boolean allStored, String label) {
         if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) {
-            if (MERGE_DIAG && !mergeDiag && ("Item in hand".equals(label) || "3d crosshair".equals(label))) {
-                mergeDiag = true;
-                reportPassSeq("merge-diag refuse-end label=" + label + " merge=" + PASS_MERGE
-                        + " dynamic=" + dynamic + " allStored=" + allStored
-                        + " whitelisted=" + MERGEABLE.contains(label));
-            }
             endPassNow(); return false;
         }
         pendingPassEnd = true; pendingPassDynamic = dynamic; pendingRenderPass = renderPass;
@@ -553,13 +541,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
     boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
                            int x, int y, int width, int height, String label) {
-        if (MERGE_DIAG && !mergeDiag && "GUI before blur".equals(label)) {
-            mergeDiag = true;
-            reportPassSeq("merge-diag incoming=" + label + " pending=" + pendingLabel
-                    + " pendingPassEnd=" + pendingPassEnd + " rp=" + renderPass + "/" + pendingRenderPass
-                    + " fb=" + framebuffer + "/" + pendingFramebuffer
-                    + " area=" + width + "x" + height + "/" + pendingW + "x" + pendingH);
-        }
         if (!pendingPassEnd) return false;
         boolean same = dynamic == pendingPassDynamic && renderPass == pendingRenderPass
                 && framebuffer == pendingFramebuffer && x == pendingX && y == pendingY
