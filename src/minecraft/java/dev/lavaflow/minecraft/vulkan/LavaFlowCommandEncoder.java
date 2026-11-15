@@ -602,7 +602,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
-        LavaFlowGpuTexture texture = texture(gpuTexture);
         // 每帧两次整屏深度清各带两条整图布局转换；第二次清之后没有读者，直接跳过。
         if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
         lastDepthCleared = texture.handle();
