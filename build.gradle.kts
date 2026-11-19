@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "dev.lavaflow"
-version = "0.1.6-beta"
+version = "0.1.7-beta"
 
 val lwjglVersion = "3.4.3"
 val lwjglArch = System.getProperty("os.arch").lowercase()
