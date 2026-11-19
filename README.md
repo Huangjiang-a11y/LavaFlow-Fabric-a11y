@@ -6,9 +6,41 @@
 > LavaFlow 的源代码与文档**100% 由 AI 在人类指导下生成**。请将其视为实验性实现：在依赖它之前，先审计代码并在你自己的硬件上测试。
 
 > [!NOTE]
-> 本仓库是 LavaFlow 的 **a11y 分支**（fork 自 [EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric) 的 Fabric 移植版），而后者基于原始项目 [BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow)（NeoForge 版）开发。Vulkan 后端的设计与实现全部归功于原项目。本分支聚焦于**早期移动端GPU与第三方模组的兼容性修复**。
+> 本仓库是 LavaFlow 的 **a11y 分支**（fork 自 [EternityQwQ/LavaFlow-Fabric](https://github.com/EternityQwQ/LavaFlow-Fabric)，后者基于原始项目 [BZLZHH/LavaFlow](https://github.com/BZLZHH/LavaFlow)），聚焦**早期移动端 GPU 与第三方模组的兼容性修复**。同一仓库维护三条分支，共享同一份后端实现，差异主要是 Minecraft 版本适配与已回移的优化：
+
+| 分支 | Minecraft | 当前版本 | 定位 |
+| --- | --- | --- | --- |
+| `26.4` | 26.4-snapshot-10 | 0.1.7-alpha | 主开发分支，新特性先落这里 |
+| `26.3` | 26.3 | 0.1.7-beta | 跟随 26.3 稳定版 |
+| `26.2` | 26.2 | 0.1.7-beta | 跟随 26.2 稳定版 |
+
+当前分支：**`26.2`**，目标 Minecraft **26.2**，版本 **0.1.7-beta**。
 
 LavaFlow 是 Minecraft Blaze3D API 的实验性 Vulkan 1.1 图形后端。它用 LavaFlow 自有的 LWJGL Vulkan 实现替换了实际执行的 Blaze3D 渲染路径，并且从不调用 OpenGL。
+
+## 快速开始
+
+1. 取本分支的构建产物：`lavaflow-26.2-0.1.7-beta.jar`（Release 页面或 CI 产物）。
+2. 放进该实例的 `mods` 目录。
+3. 把实例的图形 API 选为 Vulkan，用 Java 25 启动。
+4. 出问题先看 `logs/latest.log` 里以 `[LavaFlow` 开头的行；诊断开关见「验证与诊断」。
+
+## 目录
+
+- [兼容性](#兼容性)
+- [当前功能](#当前功能)
+- [架构](#架构)
+- [构建](#构建)
+- [smoke 渲染器](#smoke-渲染器)
+- [验证与诊断](#验证与诊断)
+- [在 Fabric 上安装](#在-fabric-上安装)
+- [AsyncParticles 兼容性](#asyncparticles-兼容性)
+- [Vitrail 兼容性](#vitrail-兼容性)
+- [已知限制](#已知限制)
+- [后续可做](#后续可做)
+- [状态](#状态)
+- [致谢](#致谢)
+- [许可证](#许可证)
 
 ## 兼容性
 
@@ -144,7 +176,7 @@ gradle --no-daemon clean check jar installDist
 Fabric 模组产物输出至：
 
 ```text
-build/libs/lavaflow-26.2-0.1.0-alpha.jar
+build/libs/lavaflow-26.2-0.1.7-beta.jar
 ```
 
 生成到 `lavaflow-version.txt` 的版本与提交会打进 JAR：设备启动时以一行 INFO 输出（`LavaFlow build <版本> (<提交>)`），并进入 `DeviceInfo` 的 `driverInfo`，因此崩溃报告的 “Graphics Drivers” 一行同样带提交。工作区有未提交改动时提交带 `-dirty` 后缀；环境无 `git` 时退化为 `unknown`。
@@ -229,7 +261,7 @@ rendering、push descriptors、multi-draw indirect、非 solid fill mode、顶�
 
 ## 在 Fabric 上安装
 
-1. 将 `build/libs/lavaflow-26.2-0.1.0-alpha.jar` 复制到 Minecraft 26.2 实例的 `mods` 目录。
+1. 将 `build/libs/lavaflow-26.2-0.1.7-beta.jar` 复制到 Minecraft 26.2 实例的 `mods` 目录。
 2. 选择 Vulkan 作为实例的图形后端。
 3. 使用 Java 25 启动 Minecraft。
 
