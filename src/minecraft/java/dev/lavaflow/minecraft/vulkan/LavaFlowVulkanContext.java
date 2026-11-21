@@ -905,12 +905,25 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             }
+            // 相邻子通道之间只需要"颜色/深度写入 -> 输入附件读取与颜色/深度再写"。
+            // 这里给到 COLOR_ATTACHMENT_OUTPUT + EARLY/LATE_FRAGMENT_TESTS，片段阶段负责输入附件读取；
+            // 比 ALL_GRAPHICS 窄，在瓦片式 GPU 上少一次整条图形管线的等待。
             for (int s = 1; s < subpasses.size(); s++) {
                 deps.get(di++).srcSubpass(s - 1).dstSubpass(s)
-                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
-                        .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
-                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                        .srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                                | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                                | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+                        .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+                                | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                                | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT
+                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
             }
             VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
                     .pAttachments(attachments).pSubpasses(descs).pDependencies(deps);
