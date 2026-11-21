@@ -327,7 +327,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 layoutLoadOps = null;
                 layoutStoreFlags = null;
                 RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
-        boolean depthStoreFlag = depthAttachment == null || depthAttachment.store();
+        boolean depthStoreFlag = depth == null || depth.store();
                 renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores,
                         depthFormat, depthLoadOp, depthStoreFlag);
             }
@@ -662,7 +662,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
-        boolean depthStoreFlag = depth == null || depth.store();
+        RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
+        boolean depthStoreFlag = depthAttachment == null || depthAttachment.store();
         resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores, depthFormat,
                 depthStoreFlag ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStoreFlag);
         return resumeRenderPass;
