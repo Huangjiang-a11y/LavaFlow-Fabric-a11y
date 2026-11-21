@@ -309,8 +309,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, false);
-            if (descriptor.layout().subpasses().size() > 1) layoutRenderPass(depthLoadOp);
-            else renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+            if (descriptor.layout().subpasses().size() > 1) {
+                layoutRenderPass(depthLoadOp);
+            } else {
+                // pass 对象会被复用：上一轮若走过多子通道路径，layoutViews 必须清掉，
+                // 否则 beginLegacy 会拿废数组去建帧缓冲。
+                layoutViews = null;
+                layoutFormats = null;
+                layoutLoadOps = null;
+                renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+            }
         }
 
         RenderPass.RenderArea area = descriptor.renderArea();
