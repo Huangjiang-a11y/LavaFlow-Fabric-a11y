@@ -75,6 +75,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         LavaFlowElision.logConfiguration();
         LavaFlowSync.logConfiguration();
         this.context = new LavaFlowVulkanContext();
+        context.attachDevice(this);
         this.descriptorCache = new LavaFlowDescriptorCache(context, this);
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());

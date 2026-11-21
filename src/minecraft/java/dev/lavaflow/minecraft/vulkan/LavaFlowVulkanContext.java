@@ -753,6 +753,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     Set<String> enabledExtensions() { return enabledExtensions; }
 
     private com.mojang.renderpearl.api.textures.GpuSampler defaultSampler;
+    private LavaFlowDevice owner;
+
+    /** 设备构造时回挂自己，兜底采样器之类需要设备 API 的东西从这里走。 */
+    void attachDevice(LavaFlowDevice device) { owner = device; }
 
     /**
      * 组合图像采样器的兜底采样器。快照-10 起有的通道（OIT 的深度界通道）把裸纹理视图塞进
@@ -760,7 +764,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      */
     synchronized com.mojang.renderpearl.api.textures.GpuSampler defaultSampler() {
         if (defaultSampler == null) {
-            defaultSampler = device.createSampler(
+            defaultSampler = owner.createSampler(
                     com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
                     com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
                     com.mojang.renderpearl.api.textures.FilterMode.NEAREST,
