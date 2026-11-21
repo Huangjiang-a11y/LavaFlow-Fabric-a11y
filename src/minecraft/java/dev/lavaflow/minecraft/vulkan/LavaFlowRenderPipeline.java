@@ -36,7 +36,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * no longer exists and must not be reintroduced.
  */
 final class LavaFlowRenderPipeline implements BackendRenderPipeline {
-    enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, TEXEL_BUFFER }
+    enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, INPUT_ATTACHMENT, TEXEL_BUFFER }
     record Entry(EntryType type, String name, GpuFormat texelFormat) {}
 
     final LavaFlowDevice device;
@@ -528,6 +528,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             case UNIFORM_BUFFER -> dynamicUniforms
                     ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             case SAMPLED_IMAGE -> VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case INPUT_ATTACHMENT -> VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
             case TEXEL_BUFFER -> VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
         };
     }

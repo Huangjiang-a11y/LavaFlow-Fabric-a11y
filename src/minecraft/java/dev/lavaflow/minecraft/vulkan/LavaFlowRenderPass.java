@@ -1248,6 +1248,25 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     resourceHandles[handleCount++] = keyValues[at];
                     resourceHandles[handleCount++] = keyValues[at + 1];
                 }
+                case INPUT_ATTACHMENT -> {
+                    // Input attachment: only the image view, no sampler. Layout must be attachment optimal
+                    # (or general) at the point of subpassLoad; the render pass ensures this.
+                    Object value = i < uniforms.size() ? uniforms.get(i) : null;
+                    LavaFlowGpuTextureView view;
+                    if (value instanceof TextureViewAndSampler binding) {
+                        view = (LavaFlowGpuTextureView) binding.view();
+                    } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView v) {
+                        view = (LavaFlowGpuTextureView) v;
+                    } else {
+                        throw new IllegalStateException("Uniform " + entry.name() + " (slot " + i + ") is "
+                                + (value == null ? "missing" : value.getClass().getName())
+                                + ", expected TextureViewAndSampler or GpuTextureView for input attachment");
+                    }
+                    keyValues[at] = view.handle();
+                    keyValues[at + 1] = 0;
+                    keyValues[at + 2] = 0;
+                    resourceHandles[handleCount++] = keyValues[at];
+                }
             }
         }
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
@@ -1313,6 +1332,24 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                             .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
                             .imageLayout(LavaFlowVk.sampledLayout()));
                 }
+                case INPUT_ATTACHMENT -> {
+                    Object value = i < uniforms.size() ? uniforms.get(i) : null;
+                    LavaFlowGpuTextureView view;
+                    if (value instanceof TextureViewAndSampler binding) {
+                        view = (LavaFlowGpuTextureView) binding.view();
+                    } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView v) {
+                        view = (LavaFlowGpuTextureView) v;
+                    } else {
+                        throw new IllegalStateException("Uniform " + entry.name() + " (slot " + i + ") is "
+                                + (value == null ? "missing" : value.getClass().getName())
+                                + ", expected TextureViewAndSampler or GpuTextureView for input attachment");
+                    }
+                    // Input attachment: subpassLoad reads from the attachment directly, layout must be
+                    # ATTACHMENT_OPTIMAL (or GENERAL). No sampler.
+                    write.pImageInfo(scratch.imageInfo(i)
+                            .sampler(0).imageView(view.handle())
+                            .imageLayout(LavaFlowVk.attachmentLayout()));
+                }
                 case TEXEL_BUFFER -> {
                     GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
                     long bufferView = cache.bufferView(((LavaFlowGpuBuffer) slice.buffer()).handle(),
@@ -1362,6 +1399,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     /** Textures behind the sampled-image uniforms currently bound, in slot order. */
+    private void sampledTexturesCollect(List<LavaFlowGpuTexture> out) {
+        if (pipeline == null) return;
+        for (int index : pipeline.sampledIndices()) {
+            if (index < uniforms.size()) {
+                Object value = uniforms.get(index);
+                if (value instanceof TextureViewAndSampler binding) {
+                    out.add(((LavaFlowGpuTextureView) binding.view()).texture());
+                } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
+                    out.add(((LavaFlowGpuTextureView) view).texture());
+                }
+            }
+        }
+    }
+    // Input attachment textures are read via subpassLoad, not sampled. They don't need to be
+    # in sampled layout and shouldn't be listed here.
+    
     private List<LavaFlowGpuTexture> sampledTextures() {
         sampledScratch.clear();
         if (pipeline == null) return sampledScratch;
