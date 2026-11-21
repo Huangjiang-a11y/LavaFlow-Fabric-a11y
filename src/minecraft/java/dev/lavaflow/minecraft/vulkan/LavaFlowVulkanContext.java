@@ -829,7 +829,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
      * 相邻子通道之间再补一条写后读写依赖，覆盖"后一个子通道读前一个子通道输出"的语义。
      */
     synchronized long legacyRenderPassLayout(List<com.mojang.renderpearl.api.pipeline.RenderPassLayout.Subpass> subpasses,
-                                             int[] formats, int[] loadOps, int depthLayoutIndex, int depthLoadOp) {
+                                             int[] formats, int[] loadOps, boolean[] storeFlags,
+                                             int depthLayoutIndex, int depthLoadOp, boolean depthStore) {
         StringBuilder sig = new StringBuilder("sp=").append(subpasses.size());
         for (com.mojang.renderpearl.api.pipeline.RenderPassLayout.Subpass s : subpasses) {
             sig.append("|c");
@@ -840,6 +841,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
         for (int f : formats) sig.append("|f").append(f);
         for (int l : loadOps) sig.append("|l").append(l);
+        for (boolean st : storeFlags) sig.append("|s").append(st ? 1 : 0);
+        sig.append("|ds").append(depthStore ? 1 : 0);
         sig.append("|dl").append(depthLoadOp).append("|di").append(depthLayoutIndex);
         String key = sig.toString();
         Long cached = legacyLayoutPasses.get(key);
@@ -852,7 +855,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 int layout = isDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                         : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 attachments.get(i).format(formats[i]).samples(VK_SAMPLE_COUNT_1_BIT)
-                        .loadOp(isDepth ? depthLoadOp : loadOps[i]).storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                        .loadOp(isDepth ? depthLoadOp : loadOps[i])
+                        .storeOp((isDepth ? depthStore : storeFlags[i])
+                                ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
                         .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .initialLayout(layout).finalLayout(layout);

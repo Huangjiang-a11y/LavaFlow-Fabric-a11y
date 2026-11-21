@@ -216,6 +216,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private long[] layoutViews;
     private int[] layoutFormats;
     private int[] layoutLoadOps;
+    private boolean[] layoutStoreFlags;
+    private boolean depthStore;
     private int depthLayoutIndex = -1;
     private int pendingVertexMask;
     // The slot-local index of this pass's start timestamp, or -1 when per-pass timing is off.
@@ -317,6 +319,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 layoutViews = null;
                 layoutFormats = null;
                 layoutLoadOps = null;
+                layoutStoreFlags = null;
                 renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
             }
         }
@@ -591,6 +594,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (layoutFormats == null || layoutFormats.length != n) {
             layoutFormats = new int[n];
             layoutLoadOps = new int[n];
+            layoutStoreFlags = new boolean[n];
             layoutViews = new long[n];
         }
         depthLayoutIndex = descriptor.layout().subpass(0).depthStencilAttachment();
@@ -600,18 +604,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             layoutViews[i] = v.handle();
             layoutFormats[i] = LavaFlowVk.format(v.texture().getFormat());
             layoutLoadOps[i] = loadOp(attachment, false);
+            layoutStoreFlags[i] = attachment.store();
+        }
+        RenderPassDescriptor.Attachment depthAttachment = depthLayoutIndex >= 0 ? all.get(depthLayoutIndex) : null;
+        depthStore = depthAttachment != null && depthAttachment.store();
+        if (depthAttachment != null && depthLoadOp != VK_ATTACHMENT_LOAD_OP_DONT_CARE) {
+            layoutLoadOps[depthLayoutIndex] = depthLoadOp;
         }
         renderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
-                layoutLoadOps, depthLayoutIndex, depthLoadOp);
+                layoutLoadOps, layoutStoreFlags, depthLayoutIndex, depthLoadOp, depthStore);
     }
 
     private long resumeRenderPass() {
         if (resumeRenderPass != 0) return resumeRenderPass;
         if (layoutFormats != null) {
             int[] loadOps = new int[layoutFormats.length];
-            java.util.Arrays.fill(loadOps, VK_ATTACHMENT_LOAD_OP_LOAD);
+            for (int i = 0; i < loadOps.length; i++) {
+                loadOps[i] = layoutStoreFlags != null && i < layoutStoreFlags.length && layoutStoreFlags[i]
+                        ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            }
+            int depthLoadOp = depthStore ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             resumeRenderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
-                    loadOps, depthLayoutIndex, VK_ATTACHMENT_LOAD_OP_LOAD);
+                    loadOps, layoutStoreFlags, depthLayoutIndex, depthLoadOp, depthStore);
             return resumeRenderPass;
         }
         // Formats are the ones built at construction; only the load ops differ (all LOAD so the split
@@ -785,14 +799,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     /**
-     * 子通道边界。旧的 VkRenderPass 只声明一个 subpass，直接 vkCmdNextSubpass 是非法调用
-     * （Mali 上表现为驱动 SIGSEGV，26.4-snapshot-10 的 OIT 通道即如此），所以这里用
-     * "存回 + 以全 LOAD 重开同一通道"来模拟边界：子通道边界本质是一次隐式依赖，结果等价，
-     * 而管线始终按子通道 0 编译，不必重建。
+     * 子通道边界。多子通道通道早期被塌成单子通道时，这里调用 vkCmdNextSubpass 属于非法调用
+     * （Mali 上是驱动 SIGSEGV，26.4-snapshot-10 的 OIT 通道即如此）；通道按 layout 建出之后，
+     * 推进子通道是合法的。
      */
     /**
-     * 子通道边界。多子通道通道已按 layout 如实建出，这里直接推进即可；
-     * 单子通道通道上日志里的 OIT 崩溃曾是"对单子通道通道调 vkCmdNextSubpass"造成的，那种情况仍然直接返回。
+     * 单子通道 layout 上没有子通道可推进，直接返回。
      */
     @Override public void nextSubpass() {
         if (descriptor.layout().subpasses().size() <= 1 || !begun || ended) return;
