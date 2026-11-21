@@ -495,7 +495,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                         .depthAttachmentFormat(depthVkFormat);
                 create.pNext(rendering);
             } else {
-                create.renderPass(renderPass).subpass(0);
+                create.renderPass(renderPass).subpass(info.subpass().index());
             }
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),

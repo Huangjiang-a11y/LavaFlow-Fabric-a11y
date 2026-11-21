@@ -78,6 +78,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
+    /** 多子通道通道按子通道结构签名缓存：OIT 这类 layout 不能塌成单子通道。 */
+    private final Map<String, Long> legacyLayoutPasses = new HashMap<>();
     // Reverse index from an attachment view to the cached framebuffers naming it. Releasing a view
     // then touches only the entries that mention it; this used to walk the whole table, once per
     // destroyed view, while the lookup side next to it has always been a plain get().
@@ -821,6 +823,100 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         }
     }
 
+    /**
+     * 按 layout 的子通道结构建旧版渲染通道。附件按 layout 顺序给出（OIT 的深度附件夹在颜色附件中间，
+     * 不能沿用"颜色在前、深度在后"的顺序）。每个子通道各自带一条自依赖（通道内屏障的合法性来源），
+     * 相邻子通道之间再补一条写后读写依赖，覆盖"后一个子通道读前一个子通道输出"的语义。
+     */
+    synchronized long legacyRenderPassLayout(List<com.mojang.renderpearl.api.pipeline.RenderPassLayout.Subpass> subpasses,
+                                             int[] formats, int[] loadOps, int depthLayoutIndex, int depthLoadOp) {
+        StringBuilder sig = new StringBuilder("sp=").append(subpasses.size());
+        for (com.mojang.renderpearl.api.pipeline.RenderPassLayout.Subpass s : subpasses) {
+            sig.append("|c");
+            for (int i = 0; i < s.colorAttachments().size(); i++) sig.append(s.colorAttachments().getByte(i)).append(',');
+            sig.append("|i");
+            for (int i = 0; i < s.inputAttachments().size(); i++) sig.append(s.inputAttachments().getByte(i)).append(',');
+            sig.append("|d").append(s.depthStencilAttachment());
+        }
+        for (int f : formats) sig.append("|f").append(f);
+        for (int l : loadOps) sig.append("|l").append(l);
+        sig.append("|dl").append(depthLoadOp).append("|di").append(depthLayoutIndex);
+        String key = sig.toString();
+        Long cached = legacyLayoutPasses.get(key);
+        if (cached != null) return cached;
+        try (MemoryStack stack = stackPush()) {
+            int n = formats.length;
+            VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.calloc(n, stack);
+            for (int i = 0; i < n; i++) {
+                boolean isDepth = i == depthLayoutIndex;
+                int layout = isDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                        : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                attachments.get(i).format(formats[i]).samples(VK_SAMPLE_COUNT_1_BIT)
+                        .loadOp(isDepth ? depthLoadOp : loadOps[i]).storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                        .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                        .initialLayout(layout).finalLayout(layout);
+            }
+            VkSubpassDescription.Buffer descs = VkSubpassDescription.calloc(subpasses.size(), stack);
+            for (int s = 0; s < subpasses.size(); s++) {
+                com.mojang.renderpearl.api.pipeline.RenderPassLayout.Subpass sp = subpasses.get(s);
+                int colorCount = sp.colorAttachments().size();
+                VkAttachmentReference.Buffer colorRefs = VkAttachmentReference.calloc(colorCount, stack);
+                for (int i = 0; i < colorCount; i++) {
+                    int idx = sp.colorAttachments().getByte(i);
+                    colorRefs.get(i).attachment(idx == com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED
+                                    ? VK_ATTACHMENT_UNUSED : idx)
+                            .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                }
+                VkSubpassDescription desc = descs.get(s);
+                desc.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
+                        .colorAttachmentCount(colorCount).pColorAttachments(colorRefs);
+                int inputCount = sp.inputAttachments().size();
+                if (inputCount > 0) {
+                    VkAttachmentReference.Buffer inputRefs = VkAttachmentReference.calloc(inputCount, stack);
+                    for (int i = 0; i < inputCount; i++) {
+                        inputRefs.get(i).attachment(sp.inputAttachments().getByte(i))
+                                .layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    }
+                    desc.inputAttachmentCount(inputCount).pInputAttachments(inputRefs);
+                }
+                int depthIndex = sp.depthStencilAttachment();
+                if (depthIndex != com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED) {
+                    desc.pDepthStencilAttachment(VkAttachmentReference.calloc(stack).attachment(depthIndex)
+                            .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL));
+                }
+            }
+            int depCount = 1 + subpasses.size() + Math.max(0, subpasses.size() - 1);
+            VkSubpassDependency.Buffer deps = VkSubpassDependency.calloc(depCount, stack);
+            int di = 0;
+            deps.get(di++).srcSubpass(VK_SUBPASS_EXTERNAL).dstSubpass(0)
+                    .srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .srcAccessMask(0).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            for (int s = 0; s < subpasses.size(); s++) {
+                deps.get(di++).srcSubpass(s).dstSubpass(s)
+                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            }
+            for (int s = 1; s < subpasses.size(); s++) {
+                deps.get(di++).srcSubpass(s - 1).dstSubpass(s)
+                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            }
+            VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
+                    .pAttachments(attachments).pSubpasses(descs).pDependencies(deps);
+            LongBuffer out = stack.mallocLong(1);
+            check(vkCreateRenderPass(device, info, null, out), "vkCreateRenderPass(layout)");
+            long handle = out.get(0);
+            legacyLayoutPasses.put(key, handle);
+            return handle;
+        }
+    }
+
     synchronized long legacyFramebuffer(long renderPass, long[] views, int width, int height) {
         LegacyFramebufferKey key = new LegacyFramebufferKey(renderPass, views, width, height);
         Long cached = legacyFramebuffers.get(key);
@@ -864,6 +960,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             legacyFramebuffers.clear();
             framebuffersByView.clear();
             for (long renderPass : legacyRenderPasses.values()) vkDestroyRenderPass(device, renderPass, null);
+            for (long renderPass : legacyLayoutPasses.values()) vkDestroyRenderPass(device, renderPass, null);
             legacyRenderPasses.clear();
         }
         if (commandPool != NULL) vkDestroyCommandPool(device, commandPool, null);

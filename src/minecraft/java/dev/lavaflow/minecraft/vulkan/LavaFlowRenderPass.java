@@ -212,6 +212,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int[] colorFormats;
     private int[] colorLoadOps;
     private long resumeRenderPass;
+    /** 多子通道通道：按 layout 顺序排的附件视图、格式与加载操作，以及深度附件的 layout 下标。 */
+    private long[] layoutViews;
+    private int[] layoutFormats;
+    private int[] layoutLoadOps;
+    private int depthLayoutIndex = -1;
     private int pendingVertexMask;
     // The slot-local index of this pass's start timestamp, or -1 when per-pass timing is off.
     private int timedPass = -1;
@@ -304,7 +309,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, false);
-            renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+            if (descriptor.layout().subpasses().size() > 1) layoutRenderPass(depthLoadOp);
+            else renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
         }
 
         RenderPass.RenderArea area = descriptor.renderArea();
@@ -547,7 +553,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());
         }
         long beginRenderPass = resume ? resumeRenderPass() : renderPass;
-        long framebuffer = context.legacyFramebuffer(beginRenderPass, views, outputWidth, outputHeight);
+        long framebuffer = context.legacyFramebuffer(beginRenderPass,
+                layoutViews != null ? layoutViews : views, outputWidth, outputHeight);
         legacyFramebuffer = framebuffer;
         RenderPass.RenderArea area = descriptor.renderArea();
         if (!resume && encoder.resumeIntoPass(false, beginRenderPass, framebuffer,
@@ -565,8 +572,40 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * The all-load variant of this pass's render pass, used when the pass is split mid-way. Load ops
      * do not affect render-pass compatibility, so pipelines built against the original stay valid.
      */
+
+    /**
+     * 多子通道通道：附件必须按 layout 顺序铺（OIT 的深度附件不在末尾），并把子通道结构交给 context。
+     * 单子通道的旧路径保持原样，两条路的帧缓冲顺序各自自洽。
+     */
+    private void layoutRenderPass(int depthLoadOp) {
+        List<RenderPassDescriptor.Attachment> all = descriptor.attachments();
+        int n = all.size();
+        if (layoutFormats == null || layoutFormats.length != n) {
+            layoutFormats = new int[n];
+            layoutLoadOps = new int[n];
+            layoutViews = new long[n];
+        }
+        depthLayoutIndex = descriptor.layout().subpass(0).depthStencilAttachment();
+        for (int i = 0; i < n; i++) {
+            RenderPassDescriptor.Attachment attachment = all.get(i);
+            LavaFlowGpuTextureView v = view(attachment.textureView());
+            layoutViews[i] = v.handle();
+            layoutFormats[i] = LavaFlowVk.format(v.texture().getFormat());
+            layoutLoadOps[i] = loadOp(attachment, false);
+        }
+        renderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
+                layoutLoadOps, depthLayoutIndex, depthLoadOp);
+    }
+
     private long resumeRenderPass() {
         if (resumeRenderPass != 0) return resumeRenderPass;
+        if (layoutFormats != null) {
+            int[] loadOps = new int[layoutFormats.length];
+            java.util.Arrays.fill(loadOps, VK_ATTACHMENT_LOAD_OP_LOAD);
+            resumeRenderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
+                    loadOps, depthLayoutIndex, VK_ATTACHMENT_LOAD_OP_LOAD);
+            return resumeRenderPass;
+        }
         // Formats are the ones built at construction; only the load ops differ (all LOAD so the split
         // does not lose the first half of the pass).
         for (int i = 0; i < colorLoadOps.length; i++) {
@@ -743,27 +782,15 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * "存回 + 以全 LOAD 重开同一通道"来模拟边界：子通道边界本质是一次隐式依赖，结果等价，
      * 而管线始终按子通道 0 编译，不必重建。
      */
+    /**
+     * 子通道边界。多子通道通道已按 layout 如实建出，这里直接推进即可；
+     * 单子通道通道上日志里的 OIT 崩溃曾是"对单子通道通道调 vkCmdNextSubpass"造成的，那种情况仍然直接返回。
+     */
     @Override public void nextSubpass() {
         if (descriptor.layout().subpasses().size() <= 1 || !begun || ended) return;
-        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
-        else vkCmdEndRenderPass(encoder.commandBuffer());
-        try (MemoryStack stack = stackPush()) {
-            if (context.dynamicRendering()) beginDynamic(stack, true);
-            else beginLegacy(stack, true);
-            applyViewport(stack);
-            setScissor(stack, scissorX, scissorY, scissorWidth, scissorHeight);
-            // 重开通道会清掉 Vulkan 侧的命令状态：顶点/索引绑定按记录补回，管线由前端重绑。
-            for (int slot = 0; slot < pendingVertexBuffers.length; slot++) {
-                long handle = encoder.boundVertexHandle(slot);
-                if (handle == 0) continue;
-                vkCmdBindVertexBuffers(encoder.commandBuffer(), slot,
-                        stack.longs(handle), stack.longs(encoder.boundVertexOffset(slot)));
-            }
-            long index = encoder.boundIndexHandle();
-            if (index != 0) vkCmdBindIndexBuffer(encoder.commandBuffer(), index, 0, encoder.boundIndexType());
-        }
-        pipeline = null;
+        vkCmdNextSubpass(encoder.commandBuffer(), VK_SUBPASS_CONTENTS_INLINE);
     }
+
 
     boolean hasDepth() { return depthAttachment() != null; }
 
