@@ -1250,7 +1250,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 }
                 case INPUT_ATTACHMENT -> {
                     // Input attachment: only the image view, no sampler. Layout must be attachment optimal
-                    # (or general) at the point of subpassLoad; the render pass ensures this.
+                    // (or general) at the point of subpassLoad; the render pass ensures this.
                     Object value = i < uniforms.size() ? uniforms.get(i) : null;
                     LavaFlowGpuTextureView view;
                     if (value instanceof TextureViewAndSampler binding) {
