@@ -737,14 +737,32 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         return attachment != null && attachment.load() ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     }
 
+    /**
+     * 子通道边界。旧的 VkRenderPass 只声明一个 subpass，直接 vkCmdNextSubpass 是非法调用
+     * （Mali 上表现为驱动 SIGSEGV，26.4-snapshot-10 的 OIT 通道即如此），所以这里用
+     * "存回 + 以全 LOAD 重开同一通道"来模拟边界：子通道边界本质是一次隐式依赖，结果等价，
+     * 而管线始终按子通道 0 编译，不必重建。
+     */
     @Override public void nextSubpass() {
-        // LavaFlow 按单子通道录制：旧的 VkRenderPass 只声明一个 subpass，动态渲染本来也没有 subpass。
-        // 单子通道布局下这一步是无操作；真出现多子通道布局，在旧路径上如实推进一步，动态渲染明确拒绝。
-        if (descriptor.layout().subpasses().size() <= 1 || !begun) return;
-        if (context.dynamicRendering()) {
-            throw new IllegalStateException("nextSubpass is not supported with dynamic rendering");
+        if (descriptor.layout().subpasses().size() <= 1 || !begun || ended) return;
+        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+        else vkCmdEndRenderPass(encoder.commandBuffer());
+        try (MemoryStack stack = stackPush()) {
+            if (context.dynamicRendering()) beginDynamic(stack, true);
+            else beginLegacy(stack, true);
+            applyViewport(stack);
+            setScissor(stack, scissorX, scissorY, scissorWidth, scissorHeight);
+            // 重开通道会清掉 Vulkan 侧的命令状态：顶点/索引绑定按记录补回，管线由前端重绑。
+            for (int slot = 0; slot < pendingVertexBuffers.length; slot++) {
+                long handle = encoder.boundVertexHandle(slot);
+                if (handle == 0) continue;
+                vkCmdBindVertexBuffers(encoder.commandBuffer(), slot,
+                        stack.longs(handle), stack.longs(encoder.boundVertexOffset(slot)));
+            }
+            long index = encoder.boundIndexHandle();
+            if (index != 0) vkCmdBindIndexBuffer(encoder.commandBuffer(), index, 0, encoder.boundIndexType());
         }
-        vkCmdNextSubpass(encoder.commandBuffer(), VK_SUBPASS_CONTENTS_INLINE);
+        pipeline = null;
     }
 
     boolean hasDepth() { return depthAttachment() != null; }
