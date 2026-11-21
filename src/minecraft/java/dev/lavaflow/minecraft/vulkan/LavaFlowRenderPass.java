@@ -652,15 +652,18 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     loadOps, layoutStoreFlags, depthLayoutIndex, depthLoadOp, depthStore);
             return resumeRenderPass;
         }
-        // Formats are the ones built at construction; only the load ops differ (all LOAD so the split
-        // does not lose the first half of the pass).
+        // Formats are the ones built at construction; only the load ops differ. 重新开通道是为了保住
+        // 前半段的内容，所以只对真正存过的附件 LOAD；DONT_STORE 的附件没内容可保，LOAD 只会读回脏数据。
         for (int i = 0; i < colorLoadOps.length; i++) {
-            if (colorViews[i] != null) colorLoadOps[i] = VK_ATTACHMENT_LOAD_OP_LOAD;
+            if (colorViews[i] != null) {
+                colorLoadOps[i] = colorStores[i] ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            }
         }
         int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                 : LavaFlowVk.format(depthView.texture().getFormat());
-        resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat,
-                VK_ATTACHMENT_LOAD_OP_LOAD);
+        boolean depthStoreFlag = depth == null || depth.store();
+        resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores, depthFormat,
+                depthStoreFlag ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStoreFlag);
         return resumeRenderPass;
     }
 
