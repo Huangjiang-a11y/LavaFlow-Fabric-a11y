@@ -373,8 +373,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         // 提交前把外部屏障全提交
         try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
-        // 提交前把外部屏障全提交
-        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         if (renderPassOpen) submitRenderPass();
         endPassNow();
         // 这一帧里没有任何通道用到的深度清屏，在这里按旧写法补上，保证清屏语义不丢。
