@@ -40,6 +40,11 @@ final class LavaFlowVk {
         return SAMPLED_READ_ONLY ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
     }
 
+    /** Layout for input attachment descriptors (subpassLoad). GENERAL is always valid;
+     *  SHADER_READ_ONLY_OPTIMAL also works for depth/stencil with the right features. */
+    static int attachmentLayout() { return VK_IMAGE_LAYOUT_GENERAL; }
+
+
     private static final int[] FORMATS = {
             9, 10, 16, 17, 23, 24, 37, 38, 70, 71, 77, 78, 84, 85, 91, 92,
             13, 14, 20, 21, 27, 28, 41, 42, 74, 75, 81, 82, 88, 89, 95, 96,
