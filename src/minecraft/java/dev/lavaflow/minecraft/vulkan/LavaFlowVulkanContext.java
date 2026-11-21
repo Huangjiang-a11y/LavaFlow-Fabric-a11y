@@ -752,6 +752,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
+    private com.mojang.renderpearl.api.textures.GpuSampler defaultSampler;
+
+    /**
+     * 组合图像采样器的兜底采样器。快照-10 起有的通道（OIT 的深度界通道）把裸纹理视图塞进
+     * COMBINED_IMAGE_SAMPLER 的槽位，没有配套采样器；这类槽位要的是最近邻 + clamp-to-edge。
+     */
+    synchronized com.mojang.renderpearl.api.textures.GpuSampler defaultSampler() {
+        if (defaultSampler == null) {
+            defaultSampler = device.createSampler(
+                    com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
+                    com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
+                    com.mojang.renderpearl.api.textures.FilterMode.NEAREST,
+                    com.mojang.renderpearl.api.textures.FilterMode.NEAREST, 1, java.util.OptionalDouble.empty());
+        }
+        return defaultSampler;
+    }
+
     synchronized long legacyRenderPass(int[] colorFormats, int[] colorLoadOps, boolean[] colorStores,
                                        int depthFormat, int depthLoadOp, boolean depthStore) {
         LegacyRenderPassKey key = new LegacyRenderPassKey(colorFormats, colorLoadOps, colorStores,

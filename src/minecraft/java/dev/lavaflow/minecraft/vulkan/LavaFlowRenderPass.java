@@ -1241,7 +1241,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     resourceHandles[handleCount++] = keyValues[at];
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureViewAndSampler binding = requireAt(entry, i, TextureViewAndSampler.class);
+                    TextureViewAndSampler binding = sampledBinding(entry, i);
                     keyValues[at] = ((LavaFlowGpuTextureView) binding.view()).handle();
                     keyValues[at + 1] = ((LavaFlowGpuSampler) binding.sampler()).handle();
                     keyValues[at + 2] = 0;
@@ -1303,7 +1303,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                             .offset(dynamicUniforms ? 0 : slice.offset()).range(slice.length()));
                 }
                 case SAMPLED_IMAGE -> {
-                    TextureViewAndSampler binding = requireAt(entry, i, TextureViewAndSampler.class);
+                    TextureViewAndSampler binding = sampledBinding(entry, i);
                     LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) binding.view();
                     LavaFlowGpuTexture sampledTexture = view.texture();
                     if (sampledTexture.layout() != LavaFlowVk.sampledLayout()) {
@@ -1346,13 +1346,33 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         return type.cast(value);
     }
 
+    /**
+     * 组合图像采样器的取值。快照-10 的 OIT 深度界通道传的是裸视图（没有采样器），
+     * 这种槽位按最近邻 + clamp-to-edge 兜底；常规通道传的仍是视图与采样器打包的 record。
+     */
+    private TextureViewAndSampler sampledBinding(LavaFlowRenderPipeline.Entry entry, int index) {
+        Object value = index < uniforms.size() ? uniforms.get(index) : null;
+        if (value instanceof TextureViewAndSampler binding) return binding;
+        if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
+            return new TextureViewAndSampler(view, context.defaultSampler());
+        }
+        throw new IllegalStateException("Uniform " + entry.name() + " (slot " + index + ") is "
+                + (value == null ? "missing" : value.getClass().getName())
+                + ", expected TextureViewAndSampler or GpuTextureView");
+    }
+
     /** Textures behind the sampled-image uniforms currently bound, in slot order. */
     private List<LavaFlowGpuTexture> sampledTextures() {
         sampledScratch.clear();
         if (pipeline == null) return sampledScratch;
         for (int index : pipeline.sampledIndices()) {
-            if (index < uniforms.size() && uniforms.get(index) instanceof TextureViewAndSampler binding) {
-                sampledScratch.add(((LavaFlowGpuTextureView) binding.view()).texture());
+            if (index < uniforms.size()) {
+                Object value = uniforms.get(index);
+                if (value instanceof TextureViewAndSampler binding) {
+                    sampledScratch.add(((LavaFlowGpuTextureView) binding.view()).texture());
+                } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
+                    sampledScratch.add(((LavaFlowGpuTextureView) view).texture());
+                }
             }
         }
         return sampledScratch;
