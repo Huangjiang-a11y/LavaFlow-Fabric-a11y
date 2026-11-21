@@ -63,10 +63,10 @@ class LavaFlowLegacyFramebufferIndexTest {
 
             int format = LavaFlowVk.format(GpuFormat.RGBA8_UNORM);
             long singleAttachment = context.legacyRenderPass(new int[]{format},
-                    new int[]{VK_ATTACHMENT_LOAD_OP_DONT_CARE}, VK_FORMAT_UNDEFINED, 0);
+                    new int[]{VK_ATTACHMENT_LOAD_OP_DONT_CARE}, new boolean[]{true}, VK_FORMAT_UNDEFINED, 0, true);
             long twoAttachments = context.legacyRenderPass(new int[]{format, format},
                     new int[]{VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_LOAD_OP_DONT_CARE},
-                    VK_FORMAT_UNDEFINED, 0);
+                    new boolean[]{true, true}, VK_FORMAT_UNDEFINED, 0, true);
 
             long framebufferA = context.legacyFramebuffer(singleAttachment, new long[]{handleA}, SIZE, SIZE);
             assertEquals(framebufferA, context.legacyFramebuffer(singleAttachment, new long[]{handleA}, SIZE, SIZE),
