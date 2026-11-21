@@ -311,7 +311,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
                     : LavaFlowVk.format(depthView.texture().getFormat());
             int depthLoadOp = depth == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, false);
-            if (descriptor.layout().subpasses().size() > 1) {
+            // 多子通道，或者带 DONT_STORE 瞬时附件的通道，都必须走 layout 构建器：
+            // 前者要真的建出子通道，后者要真的别存。其余通道保持原来的单子通道构建，回归面最小。
+            if ((descriptor.layout().subpasses().size() > 1 || hasTransientAttachment()) && attachmentsHaveViews()) {
                 layoutRenderPass(depthLoadOp);
             } else {
                 // pass 对象会被复用：上一轮若走过多子通道路径，layoutViews 必须清掉，
@@ -583,6 +585,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * The all-load variant of this pass's render pass, used when the pass is split mid-way. Load ops
      * do not affect render-pass compatibility, so pipelines built against the original stay valid.
      */
+
+    /** 有附件声明了"不存"，老构建器一律 STORE，这类通道要走 layout 构建器。 */
+    private boolean hasTransientAttachment() {
+        for (RenderPassDescriptor.Attachment attachment : descriptor.attachments()) {
+            if (attachment != null && !attachment.store()) return true;
+        }
+        return false;
+    }
+
+    /** layout 构建器按附件下标取视图，视图缺失时退回老路径，别在建通道时踩空。 */
+    private boolean attachmentsHaveViews() {
+        for (RenderPassDescriptor.Attachment attachment : descriptor.attachments()) {
+            if (attachment == null || attachment.textureView() == null) return false;
+        }
+        return true;
+    }
 
     /**
      * 多子通道通道：附件必须按 layout 顺序铺（OIT 的深度附件不在末尾），并把子通道结构交给 context。
