@@ -1345,7 +1345,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                                 + ", expected TextureViewAndSampler or GpuTextureView for input attachment");
                     }
                     // Input attachment: subpassLoad reads from the attachment directly, layout must be
-                    # ATTACHMENT_OPTIMAL (or GENERAL). No sampler.
+                    // ATTACHMENT_OPTIMAL (or GENERAL). No sampler.
                     write.pImageInfo(scratch.imageInfo(i)
                             .sampler(0).imageView(view.handle())
                             .imageLayout(LavaFlowVk.attachmentLayout()));
