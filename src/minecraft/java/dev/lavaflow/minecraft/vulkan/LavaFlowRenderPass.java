@@ -326,7 +326,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 layoutFormats = null;
                 layoutLoadOps = null;
                 layoutStoreFlags = null;
-                boolean depthStoreFlag = depth == null || depth.store();
+                RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
+        boolean depthStoreFlag = depthAttachment == null || depthAttachment.store();
                 renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores,
                         depthFormat, depthLoadOp, depthStoreFlag);
             }
