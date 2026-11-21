@@ -1413,7 +1413,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     // Input attachment textures are read via subpassLoad, not sampled. They don't need to be
-    # in sampled layout and shouldn't be listed here.
+    // in sampled layout and shouldn't be listed here.
     
     private List<LavaFlowGpuTexture> sampledTextures() {
         sampledScratch.clear();
