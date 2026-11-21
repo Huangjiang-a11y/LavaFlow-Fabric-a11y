@@ -878,7 +878,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         inputRefs.get(i).attachment(sp.inputAttachments().getByte(i))
                                 .layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                     }
-                    desc.inputAttachmentCount(inputCount).pInputAttachments(inputRefs);
+                    desc.pInputAttachments(inputRefs);
                 }
                 int depthIndex = sp.depthStencilAttachment();
                 if (depthIndex != com.mojang.renderpearl.api.pipeline.RenderPassLayout.ATTACHMENT_UNUSED) {
