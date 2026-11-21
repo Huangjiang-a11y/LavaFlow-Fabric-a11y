@@ -104,6 +104,9 @@ final class LavaFlowGpuTexture implements GpuTexture {
     long handle() { return image; }
     int layout() { return layout; }
     void layout(int value) { layout = value; }
+    private int pendingLayout = -1;
+    void pendingLayout(int target) { pendingLayout = target; }
+    void commitLayout() { if (pendingLayout != -1) { layout = pendingLayout; pendingLayout = -1; } }
 
     /**
      * A view of one mip, created once and reused by the partial-clear path instead of once per clear.

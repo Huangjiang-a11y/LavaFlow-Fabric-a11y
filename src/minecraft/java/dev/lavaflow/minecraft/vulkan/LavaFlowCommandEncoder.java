@@ -36,6 +36,19 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+
+    // 通道外屏障累积（可用 ALL_COMMANDS / TRANSFER 等任意阶段）
+    private final java.util.ArrayList<VkImageMemoryBarrier> pendingImageBarriersOut = new java.util.ArrayList<>(8);
+    private final java.util.ArrayList<VkBufferMemoryBarrier> pendingBufferBarriersOut = new java.util.ArrayList<>(4);
+    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersOut = new java.util.ArrayList<>(2);
+
+    // 通道内屏障累积（仅图形管线阶段：VERTEX/FRAGMENT/GEOMETRY/...）
+    private final java.util.ArrayList<VkImageMemoryBarrier> pendingImageBarriersIn = new java.util.ArrayList<>(8);
+    private final java.util.ArrayList<VkBufferMemoryBarrier> pendingBufferBarriersIn = new java.util.ArrayList<>(4);
+    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersIn = new java.util.ArrayList<>(2);
+
+    // 待落地 layout 的纹理列表
+    private final java.util.ArrayList<LavaFlowGpuTexture> pendingLayoutTextures = new java.util.ArrayList<>(8);
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private long waitSemaphore;
@@ -358,6 +371,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     @Override public void submit() {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
+        // 提交前把外部屏障全提交
+        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         // 提交前把外部屏障全提交
         try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         if (renderPassOpen) submitRenderPass();
