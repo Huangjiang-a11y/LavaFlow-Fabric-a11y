@@ -211,6 +211,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // what it retains, so reusing one pair of arrays is safe.
     private int[] colorFormats;
     private int[] colorLoadOps;
+    private boolean[] colorStores;
     private long resumeRenderPass;
     /** 多子通道通道：按 layout 顺序排的附件视图、格式与加载操作，以及深度附件的 layout 下标。 */
     private long[] layoutViews;
@@ -297,15 +298,18 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (colorFormats == null || colorFormats.length != colorSlots) {
                 colorFormats = new int[colorSlots];
                 colorLoadOps = new int[colorSlots];
+                colorStores = new boolean[colorSlots];
             }
             for (int slot = 0; slot < colorSlots; slot++) {
                 RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
                 if (colorViews[slot] == null) {
                     colorFormats[slot] = VK_FORMAT_UNDEFINED;
                     colorLoadOps[slot] = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    colorStores[slot] = false;
                 } else {
                     colorFormats[slot] = LavaFlowVk.format(colorViews[slot].texture().getFormat());
                     colorLoadOps[slot] = loadOp(attachment, false);
+                    colorStores[slot] = attachment.store();
                 }
             }
             int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
@@ -322,7 +326,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 layoutFormats = null;
                 layoutLoadOps = null;
                 layoutStoreFlags = null;
-                renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+                boolean depthStoreFlag = depth == null || depth.store();
+                renderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores,
+                        depthFormat, depthLoadOp, depthStoreFlag);
             }
         }
 

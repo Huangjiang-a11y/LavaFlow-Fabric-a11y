@@ -99,25 +99,32 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private static final class LegacyRenderPassKey {
         final int[] colorFormats;
         final int[] colorLoadOps;
+        final boolean[] colorStores;
         final int depthFormat;
         final int depthLoadOp;
+        final boolean depthStore;
         final int hash;
 
         /** Returns a key that owns its arrays, so a caller may reuse the arrays it passed in. */
         LegacyRenderPassKey copy() {
-            return new LegacyRenderPassKey(colorFormats.clone(), colorLoadOps.clone(), depthFormat, depthLoadOp);
+            return new LegacyRenderPassKey(colorFormats.clone(), colorLoadOps.clone(), colorStores.clone(),
+                    depthFormat, depthLoadOp, depthStore);
         }
 
-        LegacyRenderPassKey(int[] colorFormats, int[] colorLoadOps, int depthFormat, int depthLoadOp) {
+        LegacyRenderPassKey(int[] colorFormats, int[] colorLoadOps, boolean[] colorStores,
+                            int depthFormat, int depthLoadOp, boolean depthStore) {
             // Borrowed: this key is only read on lookup, and a stored key owns its arrays — see copy().
             // The caller builds these arrays per render pass, so cloning them on every lookup was two
             // allocations per pass for nothing.
             this.colorFormats = colorFormats;
             this.colorLoadOps = colorLoadOps;
+            this.colorStores = colorStores;
             this.depthFormat = depthFormat;
             this.depthLoadOp = depthLoadOp;
-            this.hash = 31 * (31 * Arrays.hashCode(this.colorFormats) + Arrays.hashCode(this.colorLoadOps))
-                    + 31 * depthFormat + depthLoadOp;
+            this.depthStore = depthStore;
+            this.hash = 31 * (31 * (31 * Arrays.hashCode(this.colorFormats) + Arrays.hashCode(this.colorLoadOps))
+                    + Arrays.hashCode(this.colorStores)) + 31 * depthFormat + depthLoadOp
+                    + (depthStore ? 1 : 0);
         }
 
         @Override public int hashCode() { return hash; }
@@ -125,7 +132,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             return other instanceof LegacyRenderPassKey key
                     && depthFormat == key.depthFormat && depthLoadOp == key.depthLoadOp
                     && Arrays.equals(colorFormats, key.colorFormats)
-                    && Arrays.equals(colorLoadOps, key.colorLoadOps);
+                    && Arrays.equals(colorLoadOps, key.colorLoadOps)
+                    && Arrays.equals(colorStores, key.colorStores)
+                    && depthStore == key.depthStore;
         }
     }
 
@@ -743,8 +752,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
-    synchronized long legacyRenderPass(int[] colorFormats, int[] colorLoadOps, int depthFormat, int depthLoadOp) {
-        LegacyRenderPassKey key = new LegacyRenderPassKey(colorFormats, colorLoadOps, depthFormat, depthLoadOp);
+    synchronized long legacyRenderPass(int[] colorFormats, int[] colorLoadOps, boolean[] colorStores,
+                                       int depthFormat, int depthLoadOp, boolean depthStore) {
+        LegacyRenderPassKey key = new LegacyRenderPassKey(colorFormats, colorLoadOps, colorStores,
+                depthFormat, depthLoadOp, depthStore);
         Long cached = legacyRenderPasses.get(key);
         if (cached != null) return cached;
         try (MemoryStack stack = stackPush()) {
@@ -761,7 +772,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     continue;
                 }
                 attachments.get(attachmentIndex).format(format).samples(VK_SAMPLE_COUNT_1_BIT)
-                        .loadOp(colorLoadOps[i]).storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                        .loadOp(colorLoadOps[i])
+                        .storeOp(colorStores[i] ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
                         .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .initialLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
@@ -772,7 +784,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             VkAttachmentReference depthReference = null;
             if (depthFormat != VK_FORMAT_UNDEFINED) {
                 attachments.get(attachmentIndex).format(depthFormat).samples(VK_SAMPLE_COUNT_1_BIT)
-                        .loadOp(depthLoadOp).storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+                        .loadOp(depthLoadOp)
+                        .storeOp(depthStore ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
                         .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .initialLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
