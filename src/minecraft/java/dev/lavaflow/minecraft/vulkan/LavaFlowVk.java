@@ -40,9 +40,11 @@ final class LavaFlowVk {
         return SAMPLED_READ_ONLY ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
     }
 
-    /** Layout for input attachment descriptors (subpassLoad). GENERAL is always valid;
-     *  SHADER_READ_ONLY_OPTIMAL also works for depth/stencil with the right features. */
-    static int attachmentLayout() { return VK_IMAGE_LAYOUT_GENERAL; }
+    /** Layout for input attachment descriptors (subpassLoad). Input attachments are read
+     *  in the same render pass where they're written as color attachments, so the layout
+     *  at the point of subpassLoad is COLOR_ATTACHMENT_OPTIMAL. GENERAL also works but
+     *  some drivers validate the layout more strictly for input attachments. */
+    static int attachmentLayout() { return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; }
 
 
     private static final int[] FORMATS = {
