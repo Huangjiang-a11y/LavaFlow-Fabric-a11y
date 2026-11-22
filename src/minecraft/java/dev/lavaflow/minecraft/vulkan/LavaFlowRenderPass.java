@@ -32,6 +32,7 @@ import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
 
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import static org.lwjgl.vulkan.KHRPushDescriptor.vkCmdPushDescriptorSetKHR;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002 (from VK_KHR_swapchain)
