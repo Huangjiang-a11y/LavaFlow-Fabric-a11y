@@ -880,7 +880,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         int totalBarriers = 0;
         for (java.util.List<PendingTransition> group : transGroups) totalBarriers += group.size();
         if (totalBarriers > 0) {
-            VkImageMemoryBarrier.Buffer allBarriers = VkImageMemoryBarrier.malloc(totalBarriers);
+            VkImageMemoryBarrier.Buffer allBarriers = VkImageMemoryBarrier.calloc(totalBarriers);
             int barrierIdx = 0;
             for (int g = 0; g < srcStages.size(); g++) {
                 java.util.List<PendingTransition> group = transGroups.get(g);
