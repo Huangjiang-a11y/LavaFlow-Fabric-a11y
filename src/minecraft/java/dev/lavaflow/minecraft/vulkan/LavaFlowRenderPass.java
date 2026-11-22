@@ -729,7 +729,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         else vkCmdEndRenderPass(encoder.commandBuffer());
         for (LavaFlowGpuTexture texture : sampled) {
             int layout = LavaFlowVk.sampledLayout();
-            if (texture.layout() != layout) {
+            if (texture.effectiveLayout() != layout) {
                 encoder.transitionTo(texture, layout);
             }
         }
@@ -749,7 +749,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     private void debugValidateLayouts() {
         for (LavaFlowGpuTexture t : sampledTextures()) {
-            int l = t.layout();
+            int l = t.effectiveLayout();
             if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                 report("Sampled texture " + System.identityHashCode(t) + " has pre-begin layout " + l
                         + " (expected GENERAL or SHADER_READ_ONLY_OPTIMAL)");
@@ -1232,7 +1232,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         List<LavaFlowGpuTexture> sampled = sampledTextures();
         for (int i = 0; i < sampled.size(); i++) {
-            if (sampled.get(i).layout() != LavaFlowVk.sampledLayout()) {
+            if (sampled.get(i).effectiveLayout() != LavaFlowVk.sampledLayout()) {
                 splitForSampledTransitions(sampled);
                 break;
             }
@@ -1366,8 +1366,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     TextureViewAndSampler binding = sampledBinding(entry, i);
                     LavaFlowGpuTextureView view = (LavaFlowGpuTextureView) binding.view();
                     LavaFlowGpuTexture sampledTexture = view.texture();
-                    if (sampledTexture.layout() != LavaFlowVk.sampledLayout()) {
-                        throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.layout() + ")");
+                    if (sampledTexture.effectiveLayout() != LavaFlowVk.sampledLayout()) {
+                        throw new IllegalStateException("Sampled image " + entry.name() + " is not shader-readable (layout " + sampledTexture.effectiveLayout() + ")");
                     }
                     write.pImageInfo(scratch.imageInfo(i)
                             .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
