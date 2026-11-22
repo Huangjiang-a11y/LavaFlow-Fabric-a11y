@@ -366,8 +366,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 encoder.transition(sampled, layout);
             }
         }
-        for (LavaFlowGpuTextureView view : colorViews) {
-            if (view != null) encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        for (int i = 0; i < colorViews.length; i++) {
+            LavaFlowGpuTextureView view = colorViews[i];
+            if (view != null) {
+                // For dynamic rendering, skip swap chain (slot 0) - the render pass handles its layout
+                if (!(context.dynamicRendering() && i == 0)) {
+                    encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                }
+            }
         }
         if (depthView != null) {
             encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
