@@ -41,7 +41,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
     private int height;
     private int currentImage = NO_IMAGE;
     // Track layout for each swapchain image; -1 = uninitialized (first use -> UNDEFINED)
-    private final int[] swapchainImageLayouts;
+    private int[] swapchainImageLayouts = new int[0];
     // Track the layout of the current swap chain image for correct blit transitions
     private boolean suboptimal;
     private boolean outOfDate;
