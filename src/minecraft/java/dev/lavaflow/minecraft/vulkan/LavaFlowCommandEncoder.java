@@ -19,6 +19,7 @@ import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 final class LavaFlowCommandEncoder implements CommandEncoderBackend {
