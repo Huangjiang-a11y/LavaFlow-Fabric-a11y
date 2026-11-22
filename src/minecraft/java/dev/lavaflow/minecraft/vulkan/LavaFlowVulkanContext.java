@@ -950,8 +950,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 if (inputCount > 0) {
                     VkAttachmentReference.Buffer inputRefs = VkAttachmentReference.calloc(inputCount, stack);
                     for (int i = 0; i < inputCount; i++) {
+                        // 与描述符侧同源：LavaFlowVk.attachmentLayout()。两处各写各的值会
+                        // 悄悄分叉（85fbbf4 就分叉了），分叉之后 subpassLoad 读的是脏数据，
+                        // 而驱动不会为这种不一致报错。
                         inputRefs.get(i).attachment(sp.inputAttachments().getByte(i))
-                                .layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                .layout(LavaFlowVk.attachmentLayout());
                     }
                     desc.pInputAttachments(inputRefs);
                 }
