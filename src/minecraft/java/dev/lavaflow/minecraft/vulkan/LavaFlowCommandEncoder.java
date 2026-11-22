@@ -952,26 +952,35 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
 
         if (pendingBufferWriteBarriersOut > 0) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersOut, stack);
-            for (int i = 0; i < pendingBufferWriteBarriersOut; i++) {
-                memBuf.get(i).sType$Default()
-                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            }
+            // 源阶段必须是 ALL_COMMANDS，不能是 BOTTOM_OF_PIPE。
+            //
+            // BOTTOM_OF_PIPE 里不执行任何命令，把它写在 srcStageMask 上，这条屏障就不等待前面
+            // 任何阶段完成 —— 语义上等于空操作：vkCmdCopyBuffer 的 TRANSFER_WRITE 还没落地，
+            // 后面的绘制就已经开始读那块缓冲了。于是顶点、索引、间接参数都可能读到半截数据，
+            // 画面就是"个别三角形被拉得极远"，而缓冲区内容本身完全合法，所有 CPU 侧诊断都通过。
+            //
+            // 之前这里同时写了 ALL_GRAPHICS | DRAW_INDIRECT 作目的阶段，看起来照顾到了间接
+            // 参数，但源端是 BOTTOM_OF_PIPE，整条屏障依然是空转。真机对照：eager 版（每笔拷贝
+            // 后一条 ALL_COMMANDS → ALL_COMMANDS）水面正常，延迟版照样闪，差别就在这个源阶段。
+            //
+            // 目的阶段同样用 ALL_COMMANDS：ALL_GRAPHICS 不含 DRAW_INDIRECT 与 COMPUTE，凡是要
+            // 读这段缓冲的阶段都得被覆盖，官方后端（VulkanCommandEncoder.memoryBarrier）两侧
+            // 都是 ALL_COMMANDS，这里与它对齐。
+            //
+            // 形态换成一条：这几条屏障的掩码逐字相同，而且都落在同一段通道外区间里（中间没有
+            // 任何绘制，只有拷拷拷），合并成一条与原意等价。以前按计数发 N 条 —— 一帧 8 笔拷贝
+            // 就是 8 条全屏屏障，真机 barriers_per_frame=8.4 的主要来源，Mali 上每条都要刷 tile
+            // 状态，白付。
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
+            memBuf.get(0).sType$Default()
+                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
-                    // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
-                    // 三角形被拉得离谱"。
-                    //
-                    // DRAW_INDIRECT 必须一起写上：26.4-snapshot-10 把地形改成 indirect 绘制，
-                    // 参数是 vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的。
-                    // ALL_GRAPHICS 不含 DRAW_INDIRECT，只写它就等于让命令处理器去读还没写完的
-                    // vertexOffset/indexCount —— 真机上就是一个顶点飞到极远。这里在通道外，
-                    // 两个阶段一起命名是合法的。
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            LavaFlowFrameStats.copyBarrierRecorded();
             pendingBufferWriteBarriersOut = 0;
         }
 
