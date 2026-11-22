@@ -726,13 +726,29 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     /** 每帧都在拆通道时，这里只打印一次"是谁拆的"，省得靠猜。 */
     private static final java.util.Set<String> SPLIT_REPORTED = new java.util.HashSet<>();
 
+    private boolean isColorAttachment(LavaFlowGpuTexture t) {
+        for (LavaFlowGpuTextureView v : colorViews) {
+            if (v != null && v.texture() == t) return true;
+        }
+        return false;
+    }
+
     private void splitForSampledTransitions(List<LavaFlowGpuTexture> sampled) {
         LavaFlowFrameStats.passSplit();
+        // 拆一次通道在 Mali 上是整个 tile buffer 的存回+LOAD，所以这里要说清是谁逼出来的，
+        // 而且要说清"它到底是本通道的附件（真需要拆），还是布局跟踪算错（不该拆）"：
+        //   real = pending 值（effectiveLayout）与已提交值（layout()）不一致 → 过渡只是排上了队
+        //   isAttachment = 这个纹理就在本通道的 colorViews/depthView 里
         int want = LavaFlowVk.sampledLayout();
         StringBuilder why = new StringBuilder();
         for (LavaFlowGpuTexture t : sampled) {
             int have = t.effectiveLayout();
-            if (have != want) why.append(' ').append(t.label()).append('=').append(have);
+            if (have != want) {
+                why.append(' ').append(t.label()).append('=')
+                        .append(have).append('/').append(t.layout())
+                        .append(t == (depthView == null ? null : depthView.texture())
+                                ? "(depth)" : isColorAttachment(t) ? "(color)" : "");
+            }
         }
         String line = (pipeline == null ? "(no pipeline)" : pipeline.name()) + " ->" + why;
         if (SPLIT_REPORTED.add(line)) {
