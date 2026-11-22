@@ -620,7 +620,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 唯一的布局转换入口：统计、记录屏障、设置 pendingLayout（真正提交屏障时 commit）。 */
     void transitionTo(LavaFlowGpuTexture texture, int targetLayout) {
         endPassNow();
-        int sourceLayout = texture.layout();
+        int sourceLayout = texture.effectiveLayout();
         if (sourceLayout == targetLayout) return;
         LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
         PendingTransition pt = new PendingTransition(texture, sourceLayout, targetLayout);

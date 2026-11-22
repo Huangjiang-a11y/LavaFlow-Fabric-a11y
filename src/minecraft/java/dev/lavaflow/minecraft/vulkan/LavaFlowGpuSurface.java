@@ -152,6 +152,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
                     "vkGetSwapchainImagesKHR");
             images = new long[count.get(0)];
             presentSemaphores = new long[images.length];
+            swapchainImageLayouts = new int[images.length];
+            java.util.Arrays.fill(swapchainImageLayouts, -1); // -1 = uninitialized (first use -> UNDEFINED)
             for (int i = 0; i < images.length; i++) images[i] = handles.get(i);
 
             VkSemaphoreCreateInfo semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack).sType$Default();
