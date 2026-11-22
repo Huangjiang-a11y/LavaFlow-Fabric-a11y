@@ -997,9 +997,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                         .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             }
             vkCmdPipelineBarrier(commandBuffer,
+                    // 源阶段必须是 BOTTOM_OF_PIPE，不能是 ALL_GRAPHICS。
+                    //
+                    // 顶点/索引是从暂存区用 vkCmdCopyBuffer 写进缓冲的，那是 TRANSFER 阶段。
+                    // ALL_GRAPHICS 当源阶段只等图形阶段，TRANSFER 的拷贝还没落地就放行绘制，
+                    // 读到的顶点是半截数据 —— 真机上就是个别三角形被拉得老长（水面/半透明最明显）。
+                    // 通道内又不许把 TRANSFER 写进 srcStageMask（VUID 00837/00838：非 EXTERNAL
+                    // 子通道的阶段位必须都被图形管线支持），BOTTOM_OF_PIPE 是唯一能覆盖 TRANSFER
+                    // 又合法的写法。0.1.6-alpha 用的就是这个形式。
+                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                    VK_DEPENDENCY_BY_REGION_BIT, memBuf, null, null);
+                    0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
             pendingBufferWriteBarriersIn = 0;
         }
