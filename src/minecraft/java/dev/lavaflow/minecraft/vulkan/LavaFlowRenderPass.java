@@ -960,7 +960,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
-        flushPendingBufferBarrier();
+        if (encoder.renderPassOpen()) {
+            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
+            encoder.pendingLayoutTextures().clear();
+        }
         pushDescriptors();
         noteDrawKind("drawIndexed");
         if (LavaFlowDrawCheck.ENABLED) {
@@ -1040,7 +1044,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
-        flushPendingBufferBarrier();
+        if (encoder.renderPassOpen()) {
+            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
+            encoder.pendingLayoutTextures().clear();
+        }
         pushDescriptors();
         noteDrawKind("drawIndexedIndirect");
         if (DEBUG_DRAWS) logIndirectDraw(buffer, count);
@@ -1106,7 +1114,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
-        flushPendingBufferBarrier();
+        if (encoder.renderPassOpen()) {
+            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
+            encoder.pendingLayoutTextures().clear();
+        }
         pushDescriptors();
         noteDrawKind("draw");
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
@@ -1114,7 +1126,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
-        flushPendingBufferBarrier();
+        if (encoder.renderPassOpen()) {
+            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
+            encoder.pendingLayoutTextures().clear();
+        }
         pushDescriptors();
         noteDrawKind("drawIndirect");
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();

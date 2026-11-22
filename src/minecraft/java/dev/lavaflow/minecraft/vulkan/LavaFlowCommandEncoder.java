@@ -590,25 +590,178 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     void markRenderPassClosed() { renderPassOpen = false; }
 
-    void transition(LavaFlowGpuTexture texture, int targetLayout) {
-        endPassNow();
-        int sourceLayout = texture.layout();
-        if (sourceLayout == targetLayout) return;
-        LavaFlowFrameStats.barrierRecorded();
-        LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
+    boolean renderPassOpen() { return renderPassOpen; }
+    java.util.ArrayList<LavaFlowGpuTexture> pendingLayoutTextures() { return pendingLayoutTextures; }
+
+
+    /** 提交通道外累积的屏障。在 beginRenderPass / submit 前调用。 */
+    private void flushPendingBarriersOut(MemoryStack stack) {
+        if (pendingImageBarriersOut.isEmpty() && pendingBufferBarriersOut.isEmpty() && pendingMemoryBarriersOut.isEmpty()) return;
+        java.util.List<java.util.List<VkImageMemoryBarrier>> imgGroups = new java.util.ArrayList<>();
+        java.util.List<java.util.List<VkBufferMemoryBarrier>> bufGroups = new java.util.ArrayList<>();
+        java.util.List<java.util.List<VkMemoryBarrier>> memGroups = new java.util.ArrayList<>();
+        java.util.List<Integer> srcStages = new java.util.ArrayList<>();
+        java.util.List<Integer> dstStages = new java.util.ArrayList<>();
+
+        for (VkImageMemoryBarrier b : pendingImageBarriersOut) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) {
+                if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            imgGroups.get(idx).add(b);
+        }
+        for (VkBufferMemoryBarrier b : pendingBufferBarriersOut) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) {
+                if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            bufGroups.get(idx).add(b);
+        }
+        for (VkMemoryBarrier b : pendingMemoryBarriersOut) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) {
+                if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            memGroups.get(idx).add(b);
+        }
+        for (int g = 0; g < srcStages.size(); g++) {
+            VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
+                    : VkImageMemoryBarrier.calloc(imgGroups.get(g).size(), stack);
+            VkBufferMemoryBarrier.Buffer bufBuf = bufGroups.get(g).isEmpty() ? null
+                    : VkBufferMemoryBarrier.calloc(bufGroups.get(g).size(), stack);
+            VkMemoryBarrier.Buffer memBuf = memGroups.get(g).isEmpty() ? null
+                    : VkMemoryBarrier.calloc(memGroups.get(g).size(), stack);
+            if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
+            if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
+            if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
+            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, bufBuf, imgBuf);
+            LavaFlowFrameStats.barrierRecorded();
+        }
+        pendingImageBarriersOut.clear();
+        pendingBufferBarriersOut.clear();
+        pendingMemoryBarriersOut.clear();
+        pendingLayoutTextures.clear();
+    }
+
+    /** 提交通道内累积的屏障。在 draw / endRenderPass 前调用。 */
+    private void flushPendingBarriersIn(MemoryStack stack) {
+        if (pendingImageBarriersIn.isEmpty() && pendingBufferBarriersIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
+        java.util.List<java.util.List<VkImageMemoryBarrier>> imgGroups = new java.util.ArrayList<>();
+        java.util.List<java.util.List<VkBufferMemoryBarrier>> bufGroups = new java.util.ArrayList<>();
+        java.util.List<java.util.List<VkMemoryBarrier>> memGroups = new java.util.ArrayList<>();
+        java.util.List<Integer> srcStages = new java.util.ArrayList<>();
+        java.util.List<Integer> dstStages = new java.util.ArrayList<>();
+
+        for (VkImageMemoryBarrier b : pendingImageBarriersIn) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            imgGroups.get(idx).add(b);
+        }
+        for (VkBufferMemoryBarrier b : pendingBufferBarriersIn) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            bufGroups.get(idx).add(b);
+        }
+        for (VkMemoryBarrier b : pendingMemoryBarriersIn) {
+            int src = b.srcStageMask(); int dst = b.dstStageMask();
+            int idx = -1;
+            for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
+                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+            memGroups.get(idx).add(b);
+        }
+        for (int g = 0; g < srcStages.size(); g++) {
+            VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
+                    : VkImageMemoryBarrier.calloc(imgGroups.get(g).size(), stack);
+            VkBufferMemoryBarrier.Buffer bufBuf = bufGroups.get(g).isEmpty() ? null
+                    : VkBufferMemoryBarrier.calloc(bufGroups.get(g).size(), stack);
+            VkMemoryBarrier.Buffer memBuf = memGroups.get(g).isEmpty() ? null
+                    : VkMemoryBarrier.calloc(memGroups.get(g).size(), stack);
+            if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
+            if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
+            if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
+            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, bufBuf, imgBuf);
+            LavaFlowFrameStats.barrierRecorded();
+        }
+        pendingImageBarriersIn.clear();
+        pendingBufferBarriersIn.clear();
+        pendingMemoryBarriersIn.clear();
+    }
+
+    // 记录通道外 image barrier（布局转换），不立即提交
+    private void recordImageBarrierOut(LavaFlowGpuTexture texture, int sourceLayout, int targetLayout) {
         try (MemoryStack stack = stackPush()) {
-            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
+            VkImageMemoryBarrier barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .oldLayout(sourceLayout).newLayout(targetLayout)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(texture.handle());
             barrier.subresourceRange().aspectMask(LavaFlowVk.aspect(texture.getFormat())).baseMipLevel(0)
                     .levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
-            barrier.srcAccessMask(sourceAccessForLayout(sourceLayout));
-            barrier.dstAccessMask(destinationAccessForLayout(targetLayout));
-            vkCmdPipelineBarrier(commandBuffer, sourceStageForLayout(sourceLayout), destinationStageForLayout(targetLayout),
-                    0, null, null, barrier);
-            texture.layout(targetLayout);
+            barrier.srcStageMask(sourceStageForLayout(sourceLayout));
+            barrier.dstStageMask(destinationStageForLayout(targetLayout));
+            pendingImageBarriersOut.add(barrier);
+            pendingLayoutTextures.add(texture);
         }
+    }
+
+    // 记录通道内 image barrier
+    private void recordImageBarrierIn(LavaFlowGpuTexture texture, int sourceLayout, int targetLayout) {
+        try (MemoryStack stack = stackPush()) {
+            VkImageMemoryBarrier barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
+                    .oldLayout(sourceLayout).newLayout(targetLayout)
+                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .image(texture.handle());
+            barrier.subresourceRange().aspectMask(LavaFlowVk.aspect(texture.getFormat())).baseMipLevel(0)
+                    .levelCount(texture.getMipLevels()).baseArrayLayer(0).layerCount(texture.getDepthOrLayers());
+            barrier.srcStageMask(sourceStageForLayout(sourceLayout));
+            barrier.dstStageMask(destinationStageForLayout(targetLayout));
+            pendingImageBarriersIn.add(barrier);
+            pendingLayoutTextures.add(texture);
+        }
+    }
+
+    // 记录通道外 buffer barrier
+    private void recordBufferBarrierOut() {
+        try (MemoryStack stack = stackPush()) {
+            VkMemoryBarrier barrier = VkMemoryBarrier.calloc(1, stack).sType$Default();
+            pendingMemoryBarriersOut.add(barrier);
+        }
+    }
+
+    // 记录通道内 buffer barrier
+    private void recordBufferBarrierIn() {
+        try (MemoryStack stack = stackPush()) {
+            VkMemoryBarrier barrier = VkMemoryBarrier.calloc(1, stack).sType$Default();
+            pendingMemoryBarriersIn.add(barrier);
+        }
+    }
+
+    void transition(LavaFlowGpuTexture texture, int targetLayout) {
+        endPassNow();
+        int sourceLayout = texture.layout();
+        if (sourceLayout == targetLayout) return;
+        LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
+        if (renderPassOpen) {
+            recordImageBarrierIn(texture, sourceLayout, targetLayout);
+        } else {
+            recordImageBarrierOut(texture, sourceLayout, targetLayout);
+        }
+        texture.pendingLayout(targetLayout);
     }
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
