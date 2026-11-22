@@ -1289,25 +1289,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     resourceHandles[handleCount++] = keyValues[at];
                     resourceHandles[handleCount++] = keyValues[at + 1];
                 }
-                case INPUT_ATTACHMENT -> {
-                    // Input attachment: only the image view, no sampler. Layout must be attachment optimal
-                    // (or general) at the point of subpassLoad; the render pass ensures this.
-                    Object value = i < uniforms.size() ? uniforms.get(i) : null;
-                    LavaFlowGpuTextureView view;
-                    if (value instanceof TextureViewAndSampler binding) {
-                        view = (LavaFlowGpuTextureView) binding.view();
-                    } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView v) {
-                        view = (LavaFlowGpuTextureView) v;
-                    } else {
-                        throw new IllegalStateException("Uniform " + entry.name() + " (slot " + i + ") is "
-                                + (value == null ? "missing" : value.getClass().getName())
-                                + ", expected TextureViewAndSampler or GpuTextureView for input attachment");
-                    }
-                    keyValues[at] = view.handle();
-                    keyValues[at + 1] = 0;
-                    keyValues[at + 2] = 0;
-                    resourceHandles[handleCount++] = keyValues[at];
-                }
             }
         }
         LavaFlowDescriptorCache cache = encoder.device().descriptorCache();
@@ -1372,24 +1353,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     write.pImageInfo(scratch.imageInfo(i)
                             .sampler(((LavaFlowGpuSampler) binding.sampler()).handle()).imageView(view.handle())
                             .imageLayout(LavaFlowVk.sampledLayout()));
-                }
-                case INPUT_ATTACHMENT -> {
-                    Object value = i < uniforms.size() ? uniforms.get(i) : null;
-                    LavaFlowGpuTextureView view;
-                    if (value instanceof TextureViewAndSampler binding) {
-                        view = (LavaFlowGpuTextureView) binding.view();
-                    } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView v) {
-                        view = (LavaFlowGpuTextureView) v;
-                    } else {
-                        throw new IllegalStateException("Uniform " + entry.name() + " (slot " + i + ") is "
-                                + (value == null ? "missing" : value.getClass().getName())
-                                + ", expected TextureViewAndSampler or GpuTextureView for input attachment");
-                    }
-                    // Input attachment: subpassLoad reads from the attachment directly, layout must be
-                    // ATTACHMENT_OPTIMAL (or GENERAL). No sampler.
-                    write.pImageInfo(scratch.imageInfo(i)
-                            .sampler(0).imageView(view.handle())
-                            .imageLayout(LavaFlowVk.attachmentLayout()));
                 }
                 case TEXEL_BUFFER -> {
                     GpuBufferSlice slice = requireAt(entry, i, GpuBufferSlice.class);
