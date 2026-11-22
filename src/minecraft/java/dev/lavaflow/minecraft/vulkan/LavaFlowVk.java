@@ -44,7 +44,19 @@ final class LavaFlowVk {
      *  in the same render pass where they're written as color attachments, so the layout
      *  at the point of subpassLoad is COLOR_ATTACHMENT_OPTIMAL. GENERAL also works but
      *  some drivers validate the layout more strictly for input attachments. */
-    static int attachmentLayout() { return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; }
+    /**
+     * 输入附件（subpassLoad）在描述符里声明的布局。
+     *
+     * <p>必须与建渲染通道时 {@code VkAttachmentReference.layout} 写给同一张图的值一致，
+     * 否则描述符说的和驱动实际摆放的布局不符——规范上是未定义行为，Mali 不会报错，
+     * 只会在 subpassLoad 时读到脏数据。
+     *
+     * <p>历史上这里取过 GENERAL（任何访问都合法，多数驱动能容忍），后被 85fbbf4 改成
+     * COLOR_ATTACHMENT_OPTIMAL 去修手臂空洞——方向错了：COLOR_ATTACHMENT_OPTIMAL 不能用作
+     * 输入附件的 reference 布局（只能是 SHADER_READ_ONLY_OPTIMAL 或 GENERAL），于是描述符
+     * 与渲染通道那侧（一直写 SHADER_READ_ONLY_OPTIMAL）互相矛盾。现在两侧共用这一个值。
+     */
+    static int attachmentLayout() { return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; }
 
 
     private static final int[] FORMATS = {
