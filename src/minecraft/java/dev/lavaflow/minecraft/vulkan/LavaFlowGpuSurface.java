@@ -40,6 +40,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
     private int width;
     private int height;
     private int currentImage = NO_IMAGE;
+    // Track layout for each swapchain image; -1 = uninitialized (first use -> UNDEFINED)
+    private final int[] swapchainImageLayouts;
     // Track the layout of the current swap chain image for correct blit transitions
     private boolean suboptimal;
     private boolean outOfDate;
@@ -245,16 +247,19 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
         LavaFlowGpuTexture source = (LavaFlowGpuTexture)sourceView.texture();
         encoder.transitionTo(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         long destination = images[currentImage];
+        // Get current tracked layout for this swapchain image (-1 = first use -> UNDEFINED)
+        int currentLayout = swapchainImageLayouts[currentImage];
+        int oldLayout = (currentLayout == -1) ? VK_IMAGE_LAYOUT_UNDEFINED : currentLayout;
+        int srcStage = (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         try (MemoryStack stack = stackPush()) {
-            // Swap chain image layout after present is PRESENT_SRC (1000001002)
             VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
-                    .oldLayout(1000001002).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .oldLayout(oldLayout).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(destination).srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
             toTransfer.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
                     .baseArrayLayer(0).layerCount(1);
-            vkCmdPipelineBarrier(encoder.commandBuffer(),
-                    1000001002 == 1000001002 ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vkCmdPipelineBarrier(encoder.commandBuffer(), srcStage,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
 
             VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
@@ -279,7 +284,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             vkCmdPipelineBarrier(encoder.commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, toPresent);
         }
-        // Layout is now PRESENT_SRC after blit + barrier
+        // Track layout for next acquire
+        swapchainImageLayouts[currentImage] = 1000001002;
         encoder.signal(presentSemaphores[currentImage]);
     }
 

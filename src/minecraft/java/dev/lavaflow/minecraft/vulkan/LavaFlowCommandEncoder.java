@@ -374,7 +374,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     @Override public void submit() {
-        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         // 提交前把外部屏障全提交
         try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
@@ -581,7 +580,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     /** 真正结束挂起的那份通道；布局转换、提交之前都必须先调。 */
-    /** 真正结束挂起的那份通道；布局转换、提交之前都必须先调。 */
     void endPassNow() {
         if (!pendingPassEnd) return;
         boolean wasDynamic = pendingPassDynamic;
@@ -589,11 +587,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (wasDynamic) {
             org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
             // Dynamic render pass uses finalLayout = PRESENT_SRC for swap chain image,
-            // so update the Java tracked layout to match
+            // track this in our layout system via transitionTo (will be committed at next flush)
             if (activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
                 LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
-                if (swapchainTexture != null) {
-                    swapchainTexture.layout(1000001002);
+                if (swapchainTexture != null && swapchainTexture.layout() != 1000001002) {
+                    transitionTo(swapchainTexture, 1000001002);
                 }
             }
         } else {
@@ -619,7 +617,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     boolean renderPassOpen() { return renderPassOpen; }
 
-    /** 唯一的布局转换入口：统计、记录屏障、更新 LavaFlowGpuTexture.layout 字段。 */
+    /** 唯一的布局转换入口：统计、记录屏障、设置 pendingLayout（真正提交屏障时 commit）。 */
     void transitionTo(LavaFlowGpuTexture texture, int targetLayout) {
         endPassNow();
         int sourceLayout = texture.layout();
@@ -631,7 +629,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         } else {
             pendingTransitionsOut.add(pt);
         }
-        texture.layout(targetLayout);
+        texture.pendingLayout(targetLayout);
     }
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
@@ -925,6 +923,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 LavaFlowFrameStats.barrierRecorded();
             }
             allBarriers.free();
+            // Commit layouts after barriers are recorded
+            for (PendingTransition pt : pendingTransitionsOut) {
+                pt.texture.commitLayout();
+            }
         }
 
         if (!pendingMemoryBarriersOut.isEmpty()) {
@@ -1052,6 +1054,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             LavaFlowFrameStats.barrierRecorded();
         }
 
+        // Commit layouts after barriers are recorded
+        for (PendingTransition pt : pendingTransitionsIn) {
+            pt.texture.commitLayout();
+        }
         pendingTransitionsIn.clear();
         pendingMemoryBarriersIn.clear();
     }
