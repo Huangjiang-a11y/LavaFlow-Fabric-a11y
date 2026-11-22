@@ -648,12 +648,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (int g = 0; g < srcStages.size(); g++) {
             VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
                     : VkImageMemoryBarrier.calloc(imgGroups.get(g).size(), stack);
-            VkBufferMemoryBarrier.Buffer bufBuf = bufGroups.get(g).isEmpty() ? null
-                    : VkBufferMemoryBarrier.calloc(bufGroups.get(g).size(), stack);
             VkMemoryBarrier.Buffer memBuf = memGroups.get(g).isEmpty() ? null
                     : VkMemoryBarrier.calloc(memGroups.get(g).size(), stack);
             if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
-            if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
             if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
             vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, null, imgBuf);
             LavaFlowFrameStats.barrierRecorded();
@@ -712,12 +709,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         for (int g = 0; g < srcStages.size(); g++) {
             VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
                     : VkImageMemoryBarrier.calloc(imgGroups.get(g).size(), stack);
-            VkBufferMemoryBarrier.Buffer bufBuf = bufGroups.get(g).isEmpty() ? null
-                    : VkBufferMemoryBarrier.calloc(bufGroups.get(g).size(), stack);
             VkMemoryBarrier.Buffer memBuf = memGroups.get(g).isEmpty() ? null
                     : VkMemoryBarrier.calloc(memGroups.get(g).size(), stack);
             if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
-            if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
             if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
             vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, null, imgBuf);
             LavaFlowFrameStats.barrierRecorded();
