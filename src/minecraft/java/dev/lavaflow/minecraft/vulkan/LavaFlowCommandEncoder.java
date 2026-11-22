@@ -593,8 +593,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void markRenderPassClosed() { renderPassOpen = false; }
 
     boolean renderPassOpen() { return renderPassOpen; }
-    void flushPendingBarriersOut(MemoryStack stack) { flushPendingBarriersOut(stack); }
-    void flushPendingBarriersIn(MemoryStack stack) { flushPendingBarriersIn(stack); }
 
 
     /** Flush pending image transitions and memory barriers outside render passes. */
