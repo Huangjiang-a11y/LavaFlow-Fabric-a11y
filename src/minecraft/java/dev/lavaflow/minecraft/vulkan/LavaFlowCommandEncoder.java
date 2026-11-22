@@ -662,16 +662,20 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 提交通道内累积的屏障。在 draw / endRenderPass 前调用。 */
     private void flushPendingBarriersIn(MemoryStack stack) {
-        if (pendingImageBarriersIn.isEmpty() && pendingBufferBarriersIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
+        if (pendingImageTransitionsIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
         java.util.List<java.util.List<VkImageMemoryBarrier>> imgGroups = new java.util.ArrayList<>();
         java.util.List<java.util.List<VkMemoryBarrier>> memGroups = new java.util.ArrayList<>();
         java.util.List<Integer> srcStages = new java.util.ArrayList<>();
         java.util.List<Integer> dstStages = new java.util.ArrayList<>();
 
-        for (VkImageMemoryBarrier b : pendingImageBarriersIn) {
-            int src = b.srcStageMask(); int dst = b.dstStageMask();
+        // Recreate image barriers from transition records
+        for (TransitionRecord tr : pendingImageTransitionsIn) {
+            int src = sourceStageForLayout(tr.sourceLayout);
+            int dst = destinationStageForLayout(tr.targetLayout);
             int idx = -1;
-            for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            for (int i = 0; i < srcStages.size(); i++) {
+                if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
+            }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
                 imgGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             // Create barrier on stack
