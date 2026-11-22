@@ -49,6 +49,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     // 待落地 layout 的纹理列表
     private final java.util.ArrayList<LavaFlowGpuTexture> pendingLayoutTextures = new java.util.ArrayList<>(8);
+
+    /** Holder for memory barrier with its stage masks (VkMemoryBarrier has no stage fields). */
+    private static final class MemoryBarrierWithStages {
+        final VkMemoryBarrier barrier;
+        final int srcStageMask;
+        final int dstStageMask;
+        MemoryBarrierWithStages(VkMemoryBarrier b, int src, int dst) { barrier = b; srcStageMask = src; dstStageMask = dst; }
+    }
+
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private long waitSemaphore;
