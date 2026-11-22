@@ -63,7 +63,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int outputWidth;
     private int outputHeight;
     private long renderPass;
-    private LavaFlowGpuTextureView[] colorViews;
+    LavaFlowGpuTextureView[] colorViews;
     private LavaFlowGpuTextureView depthView;
     private boolean hasClears;
     // One slot per uniform the bound pipeline was compiled with, in the same order as the frontend's
