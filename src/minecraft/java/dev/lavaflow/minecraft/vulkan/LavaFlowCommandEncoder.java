@@ -707,6 +707,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
         pendingTransitionsIn.clear();
         pendingMemoryBarriersIn.clear();
+    }
 
     /** Flush accumulated in-pass barriers at render pass end (works for both dynamic and legacy). */
     void flushPendingBarriersInAtEnd(MemoryStack stack) {
