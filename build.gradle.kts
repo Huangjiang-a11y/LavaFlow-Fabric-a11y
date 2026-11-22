@@ -7,7 +7,7 @@ plugins {
 group = "dev.lavaflow"
 version = "0.1.7-alpha"
 
-val lwjglVersion = "3.4.1"
+val lwjglVersion = "3.4.3"
 val lwjglArch = System.getProperty("os.arch").lowercase()
 val lwjglNatives = when {
     System.getProperty("os.name").startsWith("Windows") && lwjglArch in setOf("aarch64", "arm64") ->
