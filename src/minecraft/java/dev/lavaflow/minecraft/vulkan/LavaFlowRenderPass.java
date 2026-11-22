@@ -29,7 +29,7 @@ import java.util.function.Supplier;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR;
-import static org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
 import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import static org.lwjgl.vulkan.KHRPushDescriptor.vkCmdPushDescriptorSetKHR;
 import static org.lwjgl.vulkan.VK10.*;
@@ -523,8 +523,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
             // For swap chain image (slot 0), set initial/final layout for proper present transitions
             if (slot == 0) {
-                renderingAttachment.initialLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
-                        .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                renderingAttachment.initialLayout(org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+                        .finalLayout(org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
             }
             if (clear && attachment.clearValue().color() != null) {
                 Vector4fc value = attachment.clearValue().color();
