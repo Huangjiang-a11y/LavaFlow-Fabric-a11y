@@ -35,9 +35,6 @@ import static org.lwjgl.vulkan.KHRPushDescriptor.vkCmdPushDescriptorSetKHR;
 import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
-// VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002 (from VK_KHR_swapchain)
-private static final int VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002;
-
 /**
  * Vulkan 1.1 render-pass attachment and draw state.
  *
@@ -50,7 +47,9 @@ private static final int VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002;
  * attachment writes and shader reads. State set before the first draw is buffered and replayed when
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
-final class LavaFlowRenderPass implements RenderPassBackend {    private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
+final class LavaFlowRenderPass implements RenderPassBackend {
+
+    private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
     // Layout of the VkMultiDrawIndexedInfoEXT records that multiDrawIndexed receives, as int indices.
     private static final int INDEXED_INFO_INTS = VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES;
     private static final int INDEXED_INFO_FIRST_INDEX = VkMultiDrawIndexedInfoEXT.FIRSTINDEX / Integer.BYTES;
@@ -523,11 +522,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {    private static 
                     .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                     .loadOp(loadOp(attachment, resume))
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
-            // For swap chain image (slot 0), set initial/final layout for proper present transitions
-            if (slot == 0) {
-                renderingAttachment.setInitialLayout(1000001002);
-                        renderingAttachment.setFinalLayout(1000001002);
-            }
+
             if (clear && attachment.clearValue().color() != null) {
                 Vector4fc value = attachment.clearValue().color();
                 renderingAttachment.clearValue().color()
@@ -550,10 +545,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {    private static 
         rendering.renderArea().offset().set(area.x(), area.y());
         rendering.renderArea().extent().set(area.width(), area.height());
         if (depthAttachment != null) rendering.pDepthAttachment(depthAttachment);
-        // Transition swap chain image to PRESENT_SRC -> COLOR_ATTACHMENT_OPTIMAL before render pass
-        if (colorViews[0] != null) {
-            encoder.transition(colorViews[0].texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        }
         vkCmdBeginRenderingKHR(encoder.commandBuffer(), rendering);
     }
 
@@ -1455,4 +1446,3 @@ final class LavaFlowRenderPass implements RenderPassBackend {    private static 
 
     private static void unsupported() { throw new UnsupportedOperationException("LavaFlow graphics pipeline binding is not initialized"); }
 }
-// Force recompilation: 1795327617.5122187
