@@ -875,6 +875,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
+        // 这条以前不记统计，于是 eager 那一局报出来的 barriers_per_frame=8.4 里一条拷贝屏障
+        // 都没算进去，和延迟路径的 11.4（含 copy_barriers=3.3）根本没法比。补上，两边的数
+        // 才可比。
+        LavaFlowFrameStats.barrierRecorded();
+        LavaFlowFrameStats.copyBarrierRecorded();
     }
 
     /**
