@@ -374,7 +374,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (colorAttachmentTextures.contains(sampled)) continue;
             int layout = LavaFlowVk.sampledLayout();
             if (sampled.layout() != layout) {
-                encoder.transition(sampled, layout);
+                encoder.transitionTo(sampled, layout);
             }
         }
         for (int i = 0; i < colorViews.length; i++) {
@@ -382,12 +382,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (view != null) {
                 // For dynamic rendering, skip swap chain (slot 0) - the render pass handles its layout
                 if (!(context.dynamicRendering() && i == 0)) {
-                    encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    encoder.transitionTo(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 }
             }
         }
         if (depthView != null) {
-            encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            encoder.transitionTo(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         }
         if (!LAYOUT_DEBUG.isEmpty()) debugValidateLayouts();
         // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
@@ -723,7 +723,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         for (LavaFlowGpuTexture texture : sampled) {
             int layout = LavaFlowVk.sampledLayout();
             if (texture.layout() != layout) {
-                encoder.transition(texture, layout);
+                encoder.transitionTo(texture, layout);
             }
         }
         try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
