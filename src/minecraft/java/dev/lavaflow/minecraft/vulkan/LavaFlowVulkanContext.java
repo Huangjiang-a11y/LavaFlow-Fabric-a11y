@@ -852,7 +852,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             // vkCmdPipelineBarrier site. Both masks are ALL_GRAPHICS because for a non-EXTERNAL srcSubpass every
             // stage bit must be one the graphics pipeline supports (00837/00838); ALL_GRAPHICS covers DRAW_INDIRECT
             // as well, so indirect parameters written inside a pass are covered too.
-            VkSubpassDependency.Buffer dependencies = VkSubpassDependency.calloc(2, stack);
+            // 3 条：EXTERNAL→0、0→0 带 BY_REGION、0→0 不带。
+            // 通道内会有两种屏障——图像布局转换（dependencyFlags=0）和缓冲写可见性
+            // （VK_DEPENDENCY_BY_REGION_BIT）。VUID-vkCmdPipelineBarrier-None-07889 要求
+            // "屏障没带 BY_REGION，自依赖也不许带"，所以两条自依赖都要有，各管一种。
+            VkSubpassDependency.Buffer dependencies = VkSubpassDependency.calloc(3, stack);
             dependencies.get(0).srcSubpass(VK_SUBPASS_EXTERNAL);
             dependencies.get(0).dstSubpass(0);
             dependencies.get(0).srcStageMask(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
@@ -869,6 +873,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                     .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                     .dependencyFlags(VK_DEPENDENCY_BY_REGION_BIT)
+                    .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            dependencies.get(2).srcSubpass(0).dstSubpass(0)
+                    .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                    .dependencyFlags(0)
                     .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
                     .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
@@ -951,7 +961,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                             .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL));
                 }
             }
-            int depCount = 1 + subpasses.size() + Math.max(0, subpasses.size() - 1);
+            // 每个子通道两条自依赖：一条带 BY_REGION（配缓冲写可见性屏障），一条不带
+            // （配图像布局转换屏障）。理由见 legacyRenderPass 里那段注释。
+            int depCount = 1 + subpasses.size() * 2 + Math.max(0, subpasses.size() - 1);
             VkSubpassDependency.Buffer deps = VkSubpassDependency.calloc(depCount, stack);
             int di = 0;
             deps.get(di++).srcSubpass(VK_SUBPASS_EXTERNAL).dstSubpass(0)
@@ -963,6 +975,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                         .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                         .dependencyFlags(VK_DEPENDENCY_BY_REGION_BIT)
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                deps.get(di++).srcSubpass(s).dstSubpass(s)
+                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .dependencyFlags(0)
                         .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             }
