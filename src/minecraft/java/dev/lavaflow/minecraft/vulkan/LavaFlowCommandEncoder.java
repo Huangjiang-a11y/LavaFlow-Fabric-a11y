@@ -376,6 +376,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         // 提交前把外部屏障全提交
         try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
+        // Transition swap chain back to PRESENT_SRC BEFORE submitRenderPass nulls activeRenderPass
+        if (renderPassOpen && context.dynamicRendering() && activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
+            LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
+            if (swapchainTexture != null && swapchainTexture.layout() == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                transition(swapchainTexture, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            }
+        }
         if (renderPassOpen) submitRenderPass();
         endPassNow();
         // 这一帧里没有任何通道用到的深度清屏，在这里按旧写法补上，保证清屏语义不丢。
