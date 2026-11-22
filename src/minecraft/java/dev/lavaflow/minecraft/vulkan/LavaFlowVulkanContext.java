@@ -768,7 +768,23 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
-    boolean synchronization2() { return synchronization2; }
+    boolean synchronization2() {
+        // Device supports it AND LWJGL binding is present (3.4.2+)
+        return synchronization2 && Synchronization2Holder.HAS_KHR_SYNC2;
+    }
+
+    /** Static holder to avoid NoClassDefFoundError on LWJGL 3.4.1. */
+    private static final class Synchronization2Holder {
+        static final boolean HAS_KHR_SYNC2;
+        static {
+            boolean ok = false;
+            try {
+                Class.forName("org.lwjgl.vulkan.KHRSynchronization2");
+                ok = true;
+            } catch (ClassNotFoundException ignored) {}
+            HAS_KHR_SYNC2 = ok;
+        }
+    }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
     private com.mojang.renderpearl.api.textures.GpuSampler defaultSampler;

@@ -832,6 +832,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     private void memoryBarrier(MemoryStack stack) {
         // Use Synchronization2 API when available (matches official backend behavior for copy barriers)
+        // context.synchronization2() already checks both device support and LWJGL binding presence.
         if (context.synchronization2()) {
             VkMemoryBarrier2KHR.Buffer barrier = VkMemoryBarrier2KHR.calloc(1, stack).sType$Default()
                     .srcStageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
