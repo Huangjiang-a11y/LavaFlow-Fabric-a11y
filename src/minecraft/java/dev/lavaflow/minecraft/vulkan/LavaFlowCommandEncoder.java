@@ -27,10 +27,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** Holder for memory barrier with its stage masks (VkMemoryBarrier has no stage fields). */
     private static final class MemoryBarrierWithStages {
-        final VkMemoryBarrier barrier;
-        final int srcStageMask;
-        final int dstStageMask;
-        MemoryBarrierWithStages(VkMemoryBarrier b, int src, int dst) { barrier = b; srcStageMask = src; dstStageMask = dst; }
+        public final VkMemoryBarrier barrier;
+        public final int srcStageMask;
+        public final int dstStageMask;
+        public MemoryBarrierWithStages(VkMemoryBarrier b, int src, int dst) { barrier = b; srcStageMask = src; dstStageMask = dst; }
     }
 
     private final LavaFlowVulkanContext context;
