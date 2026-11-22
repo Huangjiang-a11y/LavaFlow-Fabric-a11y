@@ -41,10 +41,16 @@ final class LavaFlowSync {
      * <p>延迟发属于"推出来的正确"：只要有一条用法没被推全，那一处就漏同步，画面就是乱连的三角形，
      * 而任何靠读自己记账的诊断都看不见它。默认回到无条件发。
      *
-     * <p>{@code -Dlavaflow.eagerCopyBarrier=false} 回到延迟发（测开销用）。
+     * <p><b>但这一版默认关闭，因为证据不支持它</b>：0.1.6 用的正是延迟发
+     * （{@code copyToBuffer → noteBufferWritten}，{@code noteBufferWritten} 里对
+     * {@code renderPassOpen} 立即冲刷，反编译 6602c20.jar 确认），而 0.1.6 在
+     * 26.4-snapshot-8 上画面干净、拖到 snapshot-10 才闪。也就是说 87d3afe 这条全局屏障
+     * 早在 0.1.6 里就以延迟形态存在，它解释不了"同一个包 8 好 10 坏"。
+     *
+     * <p>所以它只留作对照开关：{@code -Dlavaflow.eagerCopyBarrier=true}。默认保持与
+     * 0.1.6 逐字一致的延迟形态，免得在找 snapshot-10 的差异时混进一个自己改的动作。
      */
-    static final boolean EAGER_COPY_BARRIER =
-            !"false".equals(System.getProperty("lavaflow.eagerCopyBarrier", "true"));
+    static final boolean EAGER_COPY_BARRIER = Boolean.getBoolean("lavaflow.eagerCopyBarrier");
 
     /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
     static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
