@@ -547,6 +547,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {    private static 
         rendering.renderArea().offset().set(area.x(), area.y());
         rendering.renderArea().extent().set(area.width(), area.height());
         if (depthAttachment != null) rendering.pDepthAttachment(depthAttachment);
+        // Transition swap chain image to PRESENT_SRC -> COLOR_ATTACHMENT_OPTIMAL before render pass
+        if (colorViews[0] != null) {
+            encoder.transition(colorViews[0].texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        }
         vkCmdBeginRenderingKHR(encoder.commandBuffer(), rendering);
     }
 
