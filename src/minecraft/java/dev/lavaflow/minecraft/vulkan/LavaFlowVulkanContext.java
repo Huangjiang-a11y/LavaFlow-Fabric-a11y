@@ -22,7 +22,7 @@ import dev.lavaflow.vulkan.VulkanException;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.KHRSurface.*;
-import static org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+import static org.lwjgl.vulkan.VK10.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRPushDescriptor.VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRDynamicRendering.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRDepthStencilResolve.VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME;
@@ -796,9 +796,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .loadOp(colorLoadOps[i])
                         .storeOp(colorStores[i] ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
-                        .initialLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                        .finalLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
                 colorReferences.get(i).attachment(attachmentIndex++)
                         .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             }
@@ -808,9 +806,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .loadOp(depthLoadOp)
                         .storeOp(depthStore ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
-                        .initialLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                        .finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
                 depthReference = VkAttachmentReference.calloc(stack).attachment(attachmentIndex)
                         .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             }
@@ -893,8 +889,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .storeOp((isDepth ? depthStore : storeFlags[i])
                                 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
-                        .initialLayout(layout).finalLayout(layout);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
             }
             VkSubpassDescription.Buffer descs = VkSubpassDescription.calloc(subpasses.size(), stack);
             for (int s = 0; s < subpasses.size(); s++) {

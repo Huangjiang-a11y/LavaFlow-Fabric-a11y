@@ -18,7 +18,7 @@ import dev.lavaflow.vulkan.VulkanException;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.KHRSurface.*;
-import static org.lwjgl.vulkan.KHRSwapchain.*;
+import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** LavaFlow-owned swapchain with explicit acquire, blit, and present synchronization. */
@@ -39,7 +39,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
     private int height;
     private int currentImage = NO_IMAGE;
     // Track the layout of the current swap chain image for correct blit transitions
-    private int currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    private int currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC;
     private boolean suboptimal;
     private boolean outOfDate;
     private boolean closed;
@@ -254,7 +254,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             toTransfer.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
                     .baseArrayLayer(0).layerCount(1);
             vkCmdPipelineBarrier(encoder.commandBuffer(),
-                    oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
 
             VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
@@ -271,7 +271,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
                     destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blit, VK_FILTER_NEAREST);
 
             VkImageMemoryBarrier.Buffer toPresent = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
-                    .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+                    .oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(VK_IMAGE_LAYOUT_PRESENT_SRC)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(destination).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(0);
             toPresent.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
@@ -280,7 +280,7 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, toPresent);
         }
         // Update tracked layout
-        currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC;
         encoder.signal(presentSemaphores[currentImage]);
     }
 

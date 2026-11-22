@@ -19,7 +19,7 @@ import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
-import static org.lwjgl.vulkan.KHRSwapchain.*;
+import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 final class LavaFlowCommandEncoder implements CommandEncoderBackend {
@@ -380,7 +380,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen && context.dynamicRendering() && activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
             LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
             if (swapchainTexture != null && swapchainTexture.layout() == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-                transition(swapchainTexture, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                transition(swapchainTexture, VK_IMAGE_LAYOUT_PRESENT_SRC);
             }
         }
         if (renderPassOpen) submitRenderPass();
@@ -591,7 +591,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
                 LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
                 if (swapchainTexture != null) {
-                    swapchainTexture.layout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    swapchainTexture.layout(VK_IMAGE_LAYOUT_PRESENT_SRC);
                 }
             }
         } else {

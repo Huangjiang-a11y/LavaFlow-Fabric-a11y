@@ -155,7 +155,7 @@ public final class LavaFlowFrameStats {
             case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL -> "SAMPLED";
             case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL -> "XFER_SRC";
             case org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL -> "XFER_DST";
-            case org.lwjgl.vulkan.KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR -> "PRESENT";
+            case 1000001002 -> "PRESENT";
             default -> "0x" + Integer.toHexString(layout);
         };
     }
