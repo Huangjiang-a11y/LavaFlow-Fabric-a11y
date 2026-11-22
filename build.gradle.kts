@@ -21,6 +21,8 @@ val lwjglNatives = when {
 }
 
 repositories {
+    // Aliyun Maven mirror (avoids GitHub Actions rate limit on Maven Central)
+    maven("https://maven.aliyun.com/repository/central")
     mavenCentral()
     maven("https://maven.fabricmc.net/") {
         content {
