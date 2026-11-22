@@ -50,7 +50,8 @@ final class LavaFlowSync {
      * <p>所以它只留作对照开关：{@code -Dlavaflow.eagerCopyBarrier=true}。默认保持与
      * 0.1.6 逐字一致的延迟形态，免得在找 snapshot-10 的差异时混进一个自己改的动作。
      */
-    static final boolean EAGER_COPY_BARRIER = Boolean.getBoolean("lavaflow.eagerCopyBarrier");
+    static final boolean EAGER_COPY_BARRIER =
+            !"false".equals(System.getProperty("lavaflow.eagerCopyBarrier", "true"));
 
     /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
     static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
