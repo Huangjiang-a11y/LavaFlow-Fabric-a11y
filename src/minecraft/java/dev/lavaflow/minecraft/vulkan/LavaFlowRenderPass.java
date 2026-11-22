@@ -1455,3 +1455,4 @@ final class LavaFlowRenderPass implements RenderPassBackend {    private static 
 
     private static void unsupported() { throw new UnsupportedOperationException("LavaFlow graphics pipeline binding is not initialized"); }
 }
+// Force recompilation: 1795327617.5122187
