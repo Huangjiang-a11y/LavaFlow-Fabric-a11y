@@ -555,7 +555,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     && extensions.contains(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME)
                     && extensions.contains(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
             boolean divisorExtension = extensions.contains(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
-            boolean sync2Extension = extensions.contains(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+            boolean sync2Extension = extensions.contains(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)
+                    && Synchronization2Holder.HAS_KHR_SYNC2;
             VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicFeatures = dynamicExtension
                     ? VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default() : null;
             VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures = divisorExtension
@@ -781,7 +782,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             try {
                 Class.forName("org.lwjgl.vulkan.KHRSynchronization2");
                 ok = true;
-            } catch (ClassNotFoundException ignored) {}
+            } catch (Throwable ignored) {}
             HAS_KHR_SYNC2 = ok;
         }
     }
@@ -970,10 +971,11 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .srcAccessMask(0).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             for (int s = 0; s < subpasses.size(); s++) {
                 deps.get(di++).srcSubpass(s).dstSubpass(s)
-                        .srcStageMask(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)
+                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                         .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                         .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dependencyFlags(VK_DEPENDENCY_BY_REGION_BIT);
             }
             // 相邻子通道之间只需要"颜色/深度写入 -> 输入附件读取与颜色/深度再写"。
             // 这里给到 COLOR_ATTACHMENT_OUTPUT + EARLY/LATE_FRAGMENT_TESTS，片段阶段负责输入附件读取；

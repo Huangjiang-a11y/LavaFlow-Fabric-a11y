@@ -874,7 +874,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (!bufferWriteBarrierPending) return;
         bufferWriteBarrierPending = false;
         try (MemoryStack stack = stackPush()) {
-            VkMemoryBarrier.Buffer barrierBuf = VkMemoryBarrier.calloc(1, stack).sType$Default();
+            // Official backend global barrier: ALL_COMMANDS + MEMORY_READ|WRITE on both sides
+            VkMemoryBarrier.Buffer barrierBuf = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             VkMemoryBarrier barrier = barrierBuf.get(0);
             if (renderPassOpen) {
                 pendingMemoryBarriersIn.add(barrier);
@@ -882,7 +885,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 pendingMemoryBarriersOut.add(barrier);
             }
         }
-        bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
     }
 
@@ -947,7 +949,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
@@ -1007,7 +1009,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
@@ -1061,7 +1063,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
