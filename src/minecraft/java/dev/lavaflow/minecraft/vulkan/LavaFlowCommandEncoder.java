@@ -19,7 +19,9 @@ import dev.lavaflow.vulkan.VulkanException;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 final class LavaFlowCommandEncoder implements CommandEncoderBackend {
@@ -380,7 +382,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (renderPassOpen && context.dynamicRendering() && activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
             LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
             if (swapchainTexture != null && swapchainTexture.layout() == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-                transition(swapchainTexture, VK_IMAGE_LAYOUT_PRESENT_SRC);
+                transitionTo(swapchainTexture, 1000001002);
             }
         }
         if (renderPassOpen) submitRenderPass();
@@ -591,7 +593,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
                 LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
                 if (swapchainTexture != null) {
-                    swapchainTexture.layout(VK_IMAGE_LAYOUT_PRESENT_SRC);
+                    swapchainTexture.layout(1000001002);
                 }
             }
         } else {
@@ -617,7 +619,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     boolean renderPassOpen() { return renderPassOpen; }
 
-    void transition(LavaFlowGpuTexture texture, int targetLayout) {
+    /** 唯一的布局转换入口：统计、记录屏障、更新 LavaFlowGpuTexture.layout 字段。 */
+    void transitionTo(LavaFlowGpuTexture texture, int targetLayout) {
         endPassNow();
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
@@ -634,7 +637,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
         int previous = texture.layout();
-        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearColorValue clear = VkClearColorValue.calloc(stack).float32(stack.floats(color.x(), color.y(), color.z(), color.w()));
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -668,7 +671,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
         lastDepthCleared = texture.handle();
         int previous = texture.layout();
-        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearDepthStencilValue clear = VkClearDepthStencilValue.calloc(stack).depth((float)value).stencil(0);
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(LavaFlowVk.aspect(texture.getFormat()))
@@ -681,7 +684,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void clearStencilTexture(GpuTexture gpuTexture, byte value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
         int previous = texture.layout();
-        transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             // 只清 stencil 面（aspect = STENCIL），depth 字段此时被驱动忽略；官方 Vulkan 后端也是
             // 只填 stencil、只声明 STENCIL aspect。
@@ -765,7 +768,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
         flushBufferWriteBarrier();
-        LavaFlowGpuTexture texture = texture(target); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(target); transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         long offset = source.offset() + (long)(rowOffset + imageOffset * rowLength) * target.getFormat().blockSize();
         try (MemoryStack stack = stackPush()) {
             VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack).bufferOffset(offset)
@@ -775,7 +778,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             vkCmdCopyBufferToImage(commandBuffer, buffer(source).handle(), texture.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
         }
         if ((target.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, LavaFlowVk.sampledLayout());
+            transitionTo(texture, LavaFlowVk.sampledLayout());
         }
     }
     // 26.4 dropped both the Runnable callback and the whole-texture overload from CommandEncoderBackend:
@@ -783,7 +786,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // left for the backend to notify. Only the rectangle form is still abstract.
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, int mip, int x, int y, int width, int height) {
         flushBufferWriteBarrier();
-        LavaFlowGpuTexture texture = texture(source); transition(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        LavaFlowGpuTexture texture = texture(source); transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack).bufferOffset(offset);
             copy.imageSubresource().aspectMask(LavaFlowVk.aspect(source.getFormat())).mipLevel(mip).baseArrayLayer(0).layerCount(1);
@@ -796,7 +799,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public void copyTextureToTexture(GpuTexture source, GpuTexture target, int mip, int targetX, int targetY, int sourceX, int sourceY, int width, int height) {
         flushBufferWriteBarrier();
         LavaFlowGpuTexture src = texture(source), dst = texture(target);
-        transition(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); transition(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionTo(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); transitionTo(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkImageCopy.Buffer copy = VkImageCopy.calloc(1, stack);
             copy.srcSubresource().aspectMask(LavaFlowVk.aspect(source.getFormat())).mipLevel(mip).baseArrayLayer(0).layerCount(1);
@@ -1087,12 +1090,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      */
     private void restoreAfterClear(LavaFlowGpuTexture texture, int previousLayout) {
         if (previousLayout == VK_IMAGE_LAYOUT_UNDEFINED) restoreSampledLayout(texture);
-        else transition(texture, previousLayout);
+        else transitionTo(texture, previousLayout);
     }
 
     private void restoreSampledLayout(LavaFlowGpuTexture texture) {
         if ((texture.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
-            transition(texture, LavaFlowVk.sampledLayout());
+            transitionTo(texture, LavaFlowVk.sampledLayout());
         }
     }
 

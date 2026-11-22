@@ -535,8 +535,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 continue;
             }
             boolean clear = clears(attachment, resume);
+            // Use texture's tracked layout for imageLayout (single source of truth)
+            int layout = colorViews[slot] != null ? colorViews[slot].texture().layout() : VK_IMAGE_LAYOUT_UNDEFINED;
             renderingAttachment.imageView(colorViews[slot].handle())
-                    .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                    .imageLayout(layout)
                     .loadOp(loadOp(attachment, resume))
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
 
@@ -548,8 +550,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         VkRenderingAttachmentInfo depthAttachment = null;
         if (depthView != null) {
+            // Use texture's tracked layout for imageLayout
+            int depthLayout = depthView.texture().layout();
             depthAttachment = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
-                    .imageView(depthView.handle()).imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .imageView(depthView.handle()).imageLayout(depthLayout)
                     // 就地清深度时用 DONT_CARE 载入：省掉把旧 tile 读回来再整块覆盖的带宽。
                     .loadOp(pendingDepthClearInline ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(depth, resume))
                     .storeOp(depth.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
