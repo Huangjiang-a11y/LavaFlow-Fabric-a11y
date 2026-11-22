@@ -38,6 +38,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
     private int width;
     private int height;
     private int currentImage = NO_IMAGE;
+    // Track the layout of the current swap chain image for correct blit transitions
+    private int currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     private boolean suboptimal;
     private boolean outOfDate;
     private boolean closed;
@@ -243,16 +245,16 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
         encoder.transition(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         long destination = images[currentImage];
         try (MemoryStack stack = stackPush()) {
-            // An acquired swapchain image has undefined contents: the previous presentation does not
-            // promise what it left behind. Saying UNDEFINED instead of the last-recorded PRESENT_SRC lets
-            // the driver discard the old contents rather than transition from them.
+            // Use tracked layout instead of UNDEFINED for correct transition
+            int oldLayout = currentImageLayout;
             VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
-                    .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .oldLayout(oldLayout).newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                     .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(destination).srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
             toTransfer.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1)
                     .baseArrayLayer(0).layerCount(1);
-            vkCmdPipelineBarrier(encoder.commandBuffer(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vkCmdPipelineBarrier(encoder.commandBuffer(),
+                    oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
 
             VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
@@ -277,6 +279,8 @@ final class LavaFlowGpuSurface implements GpuSurfaceBackend {
             vkCmdPipelineBarrier(encoder.commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, null, null, toPresent);
         }
+        // Update tracked layout
+        currentImageLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         encoder.signal(presentSemaphores[currentImage]);
     }
 
