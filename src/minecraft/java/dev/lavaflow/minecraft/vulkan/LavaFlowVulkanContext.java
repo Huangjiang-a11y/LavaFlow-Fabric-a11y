@@ -745,7 +745,31 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             return List.copyOf(validationMessages);
         }
     }
-    boolean dynamicRendering() { return dynamicRendering && !forceLegacyRenderPass(); }
+    /**
+     * dynamic rendering 现在要显式开启：{@code -Dlavaflow.dynamicRendering=true}。
+     *
+     * <p>原因是真机上的三组对照（Mali-G76，MC 26.4-snapshot-10，同一个包 4694b3b）：
+     *
+     * <pre>
+     *   legacy   望天空  202-205fps  gpu 4.99-5.07   水面正常
+     *   dynamic  望天空  203-208fps  gpu 4.94-5.12   水面撕裂
+     * </pre>
+     *
+     * <p>性能一样，正确性不一样，所以默认必须是 legacy。dynamic 慢不了也快不了，但它把附件布局
+     * 交给 {@code VkRenderingAttachmentInfo.imageLayout} 里我们自己记账的值，而 legacy 把布局写进
+     * 真正的 {@code VkRenderPass}，由驱动验证并落地。Mali 不会为这个不一致报错，它直接在错的布局
+     * 上采样/写入，表现为半透明表面冒出拉长的三角形。补屏障、补提交都试过，症状不变，说明前提
+     * 本身不成立，而不是漏了一次同步。
+     *
+     * <p>{@code -Dlavaflow.forceLegacyRenderPass=true} 仍然有效（它是 baselineDevice 的一部分），
+     * 只是现在不再是"绕过默认路径"的那个开关。
+     */
+    private static final boolean DYNAMIC_RENDERING_OPT_IN =
+            Boolean.getBoolean("lavaflow.dynamicRendering");
+
+    boolean dynamicRendering() {
+        return dynamicRendering && DYNAMIC_RENDERING_OPT_IN && !forceLegacyRenderPass();
+    }
     boolean fillModeNonSolid() { return fillModeNonSolid; }
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
