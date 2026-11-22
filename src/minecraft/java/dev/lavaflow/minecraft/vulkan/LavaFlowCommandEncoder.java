@@ -25,6 +25,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private static final int SUBMIT_SLOTS = 3;
     private static final System.Logger LOGGER = System.getLogger(LavaFlowCommandEncoder.class.getName());
 
+    /** Record of a pending layout transition. Recreated at flush time. */
+    private static final class TransitionRecord {
+        public final LavaFlowGpuTexture texture;
+        public final int sourceLayout;
+        public final int targetLayout;
+        public TransitionRecord(LavaFlowGpuTexture t, int src, int dst) { texture = t; sourceLayout = src; targetLayout = dst; }
+    }
+
     private final LavaFlowVulkanContext context;
     private final LavaFlowDevice device;
     private final SubmitSlot[] slots = new SubmitSlot[SUBMIT_SLOTS];
@@ -38,13 +46,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean bufferWriteBarrierPending;
 
     // 通道外屏障累积（可用 ALL_COMMANDS / TRANSFER 等任意阶段）
-    private final java.util.ArrayList<BarrierWithStages> pendingImageBarriersOut = new java.util.ArrayList<>(8);
-    private final java.util.ArrayList<BarrierWithStages> pendingBufferBarriersOut = new java.util.ArrayList<>(4);
+    private final java.util.ArrayList<TransitionRecord> pendingImageTransitionsOut = new java.util.ArrayList<>(8);
     private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersOut = new java.util.ArrayList<>(2);
 
     // 通道内屏障累积（仅图形管线阶段：VERTEX/FRAGMENT/GEOMETRY/...）
-    private final java.util.ArrayList<BarrierWithStages> pendingImageBarriersIn = new java.util.ArrayList<>(8);
-    private final java.util.ArrayList<BarrierWithStages> pendingBufferBarriersIn = new java.util.ArrayList<>(4);
+    private final java.util.ArrayList<TransitionRecord> pendingImageTransitionsIn = new java.util.ArrayList<>(8);
     private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersIn = new java.util.ArrayList<>(2);
 
     // 待落地 layout 的纹理列表
