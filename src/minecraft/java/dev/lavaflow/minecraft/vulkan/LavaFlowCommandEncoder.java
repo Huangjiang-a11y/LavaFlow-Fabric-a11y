@@ -835,10 +835,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         // context.synchronization2() already checks both device support and LWJGL binding presence.
         if (context.synchronization2()) {
             VkMemoryBarrier2KHR.Buffer barrier = VkMemoryBarrier2KHR.calloc(1, stack).sType$Default()
-                    .srcStageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .srcAccessMask(VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT)
-                    .dstStageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .dstAccessMask(VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+                    .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                    .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_READ_BIT | org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT)
+                    .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                    .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_READ_BIT | org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT);
             org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
                     VkDependencyInfoKHR.calloc(stack).sType$Default().pMemoryBarriers(barrier));
         } else {
