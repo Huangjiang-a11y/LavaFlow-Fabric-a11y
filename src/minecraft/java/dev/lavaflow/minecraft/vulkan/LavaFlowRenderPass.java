@@ -536,7 +536,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             }
             boolean clear = clears(attachment, resume);
             // Use texture's tracked layout for imageLayout (single source of truth)
-            int layout = colorViews[slot] != null ? colorViews[slot].texture().layout() : VK_IMAGE_LAYOUT_UNDEFINED;
+            // If UNDEFINED (new texture), use COLOR_ATTACHMENT_OPTIMAL
+            int layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            if (colorViews[slot] != null) {
+                int tracked = colorViews[slot].texture().layout();
+                if (tracked != VK_IMAGE_LAYOUT_UNDEFINED) layout = tracked;
+            }
             renderingAttachment.imageView(colorViews[slot].handle())
                     .imageLayout(layout)
                     .loadOp(loadOp(attachment, resume))
@@ -551,7 +556,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         VkRenderingAttachmentInfo depthAttachment = null;
         if (depthView != null) {
             // Use texture's tracked layout for imageLayout
+            // If UNDEFINED (new texture), use DEPTH_STENCIL_ATTACHMENT_OPTIMAL
             int depthLayout = depthView.texture().layout();
+            if (depthLayout == VK_IMAGE_LAYOUT_UNDEFINED) depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
                     .imageView(depthView.handle()).imageLayout(depthLayout)
                     // 就地清深度时用 DONT_CARE 载入：省掉把旧 tile 读回来再整块覆盖的带宽。

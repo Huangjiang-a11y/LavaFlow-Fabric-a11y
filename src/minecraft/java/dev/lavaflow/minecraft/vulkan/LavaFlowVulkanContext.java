@@ -796,7 +796,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .loadOp(colorLoadOps[i])
                         .storeOp(colorStores[i] ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                        .initialLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                        .finalLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 colorReferences.get(i).attachment(attachmentIndex++)
                         .layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             }
@@ -806,7 +808,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .loadOp(depthLoadOp)
                         .storeOp(depthStore ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                        .initialLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                        .finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
                 depthReference = VkAttachmentReference.calloc(stack).attachment(attachmentIndex)
                         .layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             }
@@ -889,7 +893,9 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .storeOp((isDepth ? depthStore : storeFlags[i])
                                 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE)
                         .stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                        .stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+                        .initialLayout(layout)
+                        .finalLayout(layout);
             }
             VkSubpassDescription.Buffer descs = VkSubpassDescription.calloc(subpasses.size(), stack);
             for (int s = 0; s < subpasses.size(); s++) {
