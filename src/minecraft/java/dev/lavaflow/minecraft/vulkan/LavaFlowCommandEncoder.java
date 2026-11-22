@@ -377,13 +377,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (destroyed) throw new IllegalStateException("LavaFlow command encoder is destroyed");
         // 提交前把外部屏障全提交
         try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
-        // Transition swap chain back to PRESENT_SRC BEFORE submitRenderPass nulls activeRenderPass
-        if (renderPassOpen && context.dynamicRendering() && activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
-            LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
-            if (swapchainTexture != null && swapchainTexture.layout() == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-                transitionTo(swapchainTexture, 1000001002);
-            }
-        }
         if (renderPassOpen) submitRenderPass();
         endPassNow();
         // 这一帧里没有任何通道用到的深度清屏，在这里按旧写法补上，保证清屏语义不丢。
@@ -391,6 +384,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             for (var entry : pendingDepthClears.entrySet()) clearDepthImmediate(entry.getKey(), entry.getValue());
             pendingDepthClears.clear();
         }
+        // Flush any barriers queued by the trailing clears before ending the command buffer
+        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         try (MemoryStack stack = stackPush()) {
             memoryBarrier(stack);
         }
@@ -586,14 +581,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         pendingPassEnd = false;
         if (wasDynamic) {
             org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
-            // Dynamic render pass uses finalLayout = PRESENT_SRC for swap chain image,
-            // track this in our layout system via transitionTo (will be committed at next flush)
-            if (activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
-                LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
-                if (swapchainTexture != null && swapchainTexture.layout() != 1000001002) {
-                    transitionTo(swapchainTexture, 1000001002);
-                }
-            }
+            // Note: swapchain image layout is tracked separately in LavaFlowGpuSurface.swapchainImageLayouts
+            // The offscreen render target (colorViews[0]) does not transition to PRESENT_SRC;
+            // blitFromTexture handles the swapchain transition.
         } else {
             vkCmdEndRenderPass(commandBuffer);
         }

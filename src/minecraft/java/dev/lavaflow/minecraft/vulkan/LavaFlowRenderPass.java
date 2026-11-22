@@ -539,7 +539,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             // If UNDEFINED (new texture), use COLOR_ATTACHMENT_OPTIMAL
             int layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             if (colorViews[slot] != null) {
-                int tracked = colorViews[slot].texture().layout();
+                int tracked = colorViews[slot].texture().effectiveLayout();
                 if (tracked != VK_IMAGE_LAYOUT_UNDEFINED) layout = tracked;
             }
             renderingAttachment.imageView(colorViews[slot].handle())
