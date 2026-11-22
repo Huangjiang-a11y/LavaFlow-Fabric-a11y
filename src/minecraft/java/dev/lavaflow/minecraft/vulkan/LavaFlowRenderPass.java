@@ -998,7 +998,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
         if (PASS_SEQUENCE) seqDraws += drawCount;
-        flushPendingBufferBarrier();
+        if (encoder.renderPassOpen()) {
+            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+        }
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
         if (LavaFlowDataWatch.ENABLED) noteTerrainHandles();
