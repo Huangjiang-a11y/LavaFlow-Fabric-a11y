@@ -603,9 +603,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 提交通道外累积的屏障。在 beginRenderPass / submit 前调用。 */
     private void flushPendingBarriersOut(MemoryStack stack) {
-        if (pendingImageBarriersOut.isEmpty() && pendingBufferBarriersOut.isEmpty() && pendingMemoryBarriersOut.isEmpty()) return;
+        if (pendingImageTransitionsOut.isEmpty() && pendingMemoryBarriersOut.isEmpty()) return;
         java.util.List<java.util.List<VkImageMemoryBarrier>> imgGroups = new java.util.ArrayList<>();
-        java.util.List<java.util.List<VkBufferMemoryBarrier>> bufGroups = new java.util.ArrayList<>();
         java.util.List<java.util.List<VkMemoryBarrier>> memGroups = new java.util.ArrayList<>();
         java.util.List<Integer> srcStages = new java.util.ArrayList<>();
         java.util.List<Integer> dstStages = new java.util.ArrayList<>();
@@ -619,18 +618,18 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
             }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
-                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+                imgGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             // Create barrier on stack
-            try (MemoryStack stack = stackPush()) {
-                VkImageMemoryBarrier barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
+            try (MemoryStack barrierStack = stackPush()) {
+                VkImageMemoryBarrier.Buffer barrierBuf = VkImageMemoryBarrier.calloc(1, barrierStack).sType$Default()
                         .oldLayout(tr.sourceLayout).newLayout(tr.targetLayout)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(tr.texture.handle());
-                barrier.subresourceRange().aspectMask(LavaFlowVk.aspect(tr.texture.getFormat())).baseMipLevel(0)
+                barrierBuf.subresourceRange().aspectMask(LavaFlowVk.aspect(tr.texture.getFormat())).baseMipLevel(0)
                         .levelCount(tr.texture.getMipLevels()).baseArrayLayer(0).layerCount(tr.texture.getDepthOrLayers());
-                barrier.srcAccessMask(sourceAccessForLayout(tr.sourceLayout));
-                barrier.dstAccessMask(destinationAccessForLayout(tr.targetLayout));
-                imgGroups.get(idx).add(barrier);
+                barrierBuf.srcAccessMask(sourceAccessForLayout(tr.sourceLayout));
+                barrierBuf.dstAccessMask(destinationAccessForLayout(tr.targetLayout));
+                imgGroups.get(idx).add(barrierBuf.get(0));
             }
         }
 
@@ -656,7 +655,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
             if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
             if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
-            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, bufBuf, imgBuf);
+            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, null, imgBuf);
             LavaFlowFrameStats.barrierRecorded();
         }
         pendingImageTransitionsOut.clear();
@@ -668,7 +667,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void flushPendingBarriersIn(MemoryStack stack) {
         if (pendingImageBarriersIn.isEmpty() && pendingBufferBarriersIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
         java.util.List<java.util.List<VkImageMemoryBarrier>> imgGroups = new java.util.ArrayList<>();
-        java.util.List<java.util.List<VkBufferMemoryBarrier>> bufGroups = new java.util.ArrayList<>();
         java.util.List<java.util.List<VkMemoryBarrier>> memGroups = new java.util.ArrayList<>();
         java.util.List<Integer> srcStages = new java.util.ArrayList<>();
         java.util.List<Integer> dstStages = new java.util.ArrayList<>();
@@ -678,18 +676,18 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             int idx = -1;
             for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
-                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+                imgGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             // Create barrier on stack
-            try (MemoryStack stack = stackPush()) {
-                VkImageMemoryBarrier barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
+            try (MemoryStack barrierStack = stackPush()) {
+                VkImageMemoryBarrier.Buffer barrierBuf = VkImageMemoryBarrier.calloc(1, barrierStack).sType$Default()
                         .oldLayout(tr.sourceLayout).newLayout(tr.targetLayout)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(tr.texture.handle());
-                barrier.subresourceRange().aspectMask(LavaFlowVk.aspect(tr.texture.getFormat())).baseMipLevel(0)
+                barrierBuf.subresourceRange().aspectMask(LavaFlowVk.aspect(tr.texture.getFormat())).baseMipLevel(0)
                         .levelCount(tr.texture.getMipLevels()).baseArrayLayer(0).layerCount(tr.texture.getDepthOrLayers());
-                barrier.srcAccessMask(sourceAccessForLayout(tr.sourceLayout));
-                barrier.dstAccessMask(destinationAccessForLayout(tr.targetLayout));
-                imgGroups.get(idx).add(barrier);
+                barrierBuf.srcAccessMask(sourceAccessForLayout(tr.sourceLayout));
+                barrierBuf.dstAccessMask(destinationAccessForLayout(tr.targetLayout));
+                imgGroups.get(idx).add(barrierBuf.get(0));
             }
         }
         for (VkBufferMemoryBarrier b : pendingBufferBarriersIn) {
@@ -697,7 +695,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             int idx = -1;
             for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
-                imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
+                imgGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             bufGroups.get(idx).add(VkBufferMemoryBarrier.create(b.barrier));
         }
         // Memory barriers all use the same stages (BOTTOM_OF_PIPE -> VERTEX/FRAGMENT/COMPUTE)
@@ -721,7 +719,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (imgBuf != null) { for (int i = 0; i < imgGroups.get(g).size(); i++) imgBuf.put(i, imgGroups.get(g).get(i)); imgBuf.flip(); }
             if (bufBuf != null) { for (int i = 0; i < bufGroups.get(g).size(); i++) bufBuf.put(i, bufGroups.get(g).get(i)); bufBuf.flip(); }
             if (memBuf != null) { for (int i = 0; i < memGroups.get(g).size(); i++) memBuf.put(i, memGroups.get(g).get(i)); memBuf.flip(); }
-            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, bufBuf, imgBuf);
+            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, memBuf, null, imgBuf);
             LavaFlowFrameStats.barrierRecorded();
         }
         pendingImageTransitionsIn.clear();
