@@ -555,9 +555,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         VkRenderingAttachmentInfo depthAttachment = null;
         if (depthView != null) {
-            // Use texture's tracked layout for imageLayout
+            // Use texture's tracked layout for imageLayout (effectiveLayout includes pending)
             // If UNDEFINED (new texture), use DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-            int depthLayout = depthView.texture().layout();
+            int depthLayout = depthView.texture().effectiveLayout();
             if (depthLayout == VK_IMAGE_LAYOUT_UNDEFINED) depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAttachment = VkRenderingAttachmentInfo.calloc(stack).sType$Default()
                     .imageView(depthView.handle()).imageLayout(depthLayout)
@@ -757,14 +757,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         for (LavaFlowGpuTextureView view : colorViews) {
             if (view == null) continue;
-            int l = view.texture().layout();
+            int l = view.texture().effectiveLayout();
             if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
                 report("Color attachment " + System.identityHashCode(view.texture()) + " has pre-begin layout " + l
                         + " (expected GENERAL or COLOR_ATTACHMENT_OPTIMAL)");
             }
         }
         if (depthView != null) {
-            int l = depthView.texture().layout();
+            int l = depthView.texture().effectiveLayout();
             if (l != VK_IMAGE_LAYOUT_GENERAL && l != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
                 report("Depth attachment " + System.identityHashCode(depthView.texture()) + " has pre-begin layout " + l
                         + " (expected GENERAL or DEPTH_STENCIL_ATTACHMENT_OPTIMAL)");

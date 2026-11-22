@@ -624,7 +624,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
-        int previous = texture.layout();
+        int previous = texture.effectiveLayout();
         transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearColorValue clear = VkClearColorValue.calloc(stack).float32(stack.floats(color.x(), color.y(), color.z(), color.w()));
@@ -658,7 +658,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         // 第二次清之前这张深度只当过附件写过、之后再没有东西读它，所以直接跳过。
         if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
         lastDepthCleared = texture.handle();
-        int previous = texture.layout();
+        int previous = texture.effectiveLayout();
         transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             VkClearDepthStencilValue clear = VkClearDepthStencilValue.calloc(stack).depth((float)value).stencil(0);
@@ -671,7 +671,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     @Override public void clearStencilTexture(GpuTexture gpuTexture, byte value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
-        int previous = texture.layout();
+        int previous = texture.effectiveLayout();
         transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
             // 只清 stencil 面（aspect = STENCIL），depth 字段此时被驱动忽略；官方 Vulkan 后端也是
