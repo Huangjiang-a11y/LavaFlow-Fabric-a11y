@@ -609,8 +609,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         } else {
             pendingTransitionsOut.add(pt);
         }
-        // NOTE: layout is NOT updated here - it will be updated when the barrier is actually submitted in flush.
-        // Updating it here causes frontend to see "new" layout and trigger reverse transitions next frame.
+        texture.layout(targetLayout);
     }
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
@@ -964,10 +963,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             barriers.flip();
             vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, barriers);
             LavaFlowFrameStats.barrierRecorded();
-            // Apply layout changes for this group
-            for (PendingTransition pt : group) {
-                pt.texture.layout(pt.targetLayout);
-            }
         }
 
         if (!pendingMemoryBarriersIn.isEmpty()) {
@@ -1022,10 +1017,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             barriers.flip();
             vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, barriers);
             LavaFlowFrameStats.barrierRecorded();
-            // Apply layout changes for this group
-            for (PendingTransition pt : group) {
-                pt.texture.layout(pt.targetLayout);
-            }
         }
 
         if (!pendingMemoryBarriersIn.isEmpty()) {
