@@ -897,9 +897,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     allBarriers.get(barrierIdx).dstAccessMask(destinationAccessForLayout(pt.targetLayout));
                     barrierIdx++;
                 }
-                // Submit this group's barriers
-                VkImageMemoryBarrier.Buffer groupBarriers = allBarriers.buffer(barrierIdx - group.size(), group.size());
-                vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, groupBarriers);
+                // Submit this group's barriers using position/limit slice
+                allBarriers.position(barrierIdx - group.size()).limit(barrierIdx);
+                vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, allBarriers);
+                allBarriers.position(barrierIdx).limit(allBarriers.capacity());
                 LavaFlowFrameStats.barrierRecorded();
             }
             allBarriers.free();
