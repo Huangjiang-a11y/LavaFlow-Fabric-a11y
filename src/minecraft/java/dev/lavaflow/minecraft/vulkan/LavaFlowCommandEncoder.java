@@ -40,12 +40,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 通道外屏障累积（可用 ALL_COMMANDS / TRANSFER 等任意阶段）
     private final java.util.ArrayList<VkImageMemoryBarrier> pendingImageBarriersOut = new java.util.ArrayList<>(8);
     private final java.util.ArrayList<VkBufferMemoryBarrier> pendingBufferBarriersOut = new java.util.ArrayList<>(4);
-    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersOut = new java.util.ArrayList<>(2);
+    private final java.util.ArrayList<MemoryBarrierWithStages> pendingMemoryBarriersOut = new java.util.ArrayList<>(2);
 
     // 通道内屏障累积（仅图形管线阶段：VERTEX/FRAGMENT/GEOMETRY/...）
     private final java.util.ArrayList<VkImageMemoryBarrier> pendingImageBarriersIn = new java.util.ArrayList<>(8);
     private final java.util.ArrayList<VkBufferMemoryBarrier> pendingBufferBarriersIn = new java.util.ArrayList<>(4);
-    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersIn = new java.util.ArrayList<>(2);
+    private final java.util.ArrayList<MemoryBarrierWithStages> pendingMemoryBarriersIn = new java.util.ArrayList<>(2);
 
     // 待落地 layout 的纹理列表
     private final java.util.ArrayList<LavaFlowGpuTexture> pendingLayoutTextures = new java.util.ArrayList<>(8);
@@ -623,15 +623,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             bufGroups.get(idx).add(b);
         }
-        for (VkMemoryBarrier b : pendingMemoryBarriersOut) {
-            int src = b.srcStageMask(); int dst = b.dstStageMask();
+        for (MemoryBarrierWithStages b : pendingMemoryBarriersOut) {
+            int src = b.srcStageMask; int dst = b.dstStageMask;
             int idx = -1;
             for (int i = 0; i < srcStages.size(); i++) {
                 if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
             }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
                 imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
-            memGroups.get(idx).add(b);
+            memGroups.get(idx).add(b.barrier);
         }
         for (int g = 0; g < srcStages.size(); g++) {
             VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
@@ -677,13 +677,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
             bufGroups.get(idx).add(b);
         }
-        for (VkMemoryBarrier b : pendingMemoryBarriersIn) {
-            int src = b.srcStageMask(); int dst = b.dstStageMask();
+        for (MemoryBarrierWithStages b : pendingMemoryBarriersIn) {
+            int src = b.srcStageMask; int dst = b.dstStageMask;
             int idx = -1;
             for (int i = 0; i < srcStages.size(); i++) if (srcStages.get(i) == src && dstStages.get(i) == dst) { idx = i; break; }
             if (idx == -1) { idx = srcStages.size(); srcStages.add(src); dstStages.add(dst);
                 imgGroups.add(new java.util.ArrayList<>()); bufGroups.add(new java.util.ArrayList<>()); memGroups.add(new java.util.ArrayList<>()); }
-            memGroups.get(idx).add(b);
+            memGroups.get(idx).add(b.barrier);
         }
         for (int g = 0; g < srcStages.size(); g++) {
             VkImageMemoryBarrier.Buffer imgBuf = imgGroups.get(g).isEmpty() ? null
@@ -739,7 +739,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void recordBufferBarrierOut() {
         try (MemoryStack stack = stackPush()) {
             VkMemoryBarrier barrier = VkMemoryBarrier.calloc(1, stack).sType$Default();
-            pendingMemoryBarriersOut.add(barrier);
+            // Buffer write barrier: BOTTOM_OF_PIPE -> VERTEX/FRAGMENT/COMPUTE
+            pendingMemoryBarriersOut.add(new MemoryBarrierWithStages(barrier,
+                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                            | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT));
         }
     }
 
@@ -747,7 +751,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void recordBufferBarrierIn() {
         try (MemoryStack stack = stackPush()) {
             VkMemoryBarrier barrier = VkMemoryBarrier.calloc(1, stack).sType$Default();
-            pendingMemoryBarriersIn.add(barrier);
+            // Same stages as buffer write barrier
+            pendingMemoryBarriersIn.add(new MemoryBarrierWithStages(barrier,
+                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                            | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT));
         }
     }
 
