@@ -717,8 +717,38 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * those vertices" — the pass has to be split instead, the same shape as splitForSampledTransitions.
      */
     private void flushPendingBufferBarrier() {
-        if (!encoder.bufferWriteBarrierPending()) return;
+        if (!encoder.bufferWriteBarrierPending() && !encoder.indirectBarrierPending()) return;
+        if (begun && !ended && encoder.indirectBarrierPending()) {
+            splitPassForIndirectBarrier();
+            return;
+        }
         encoder.flushBufferWriteBarrier();
+    }
+
+    /**
+     * 把通道拆开，在通道外建立"间接参数写完 → 命令处理器可以读"的依赖，再带着载入操作重开。
+     *
+     * <p>为什么非拆不可：DRAW_INDIRECT 不是图形阶段。通道内的屏障只许命名图形阶段
+     * （VUID-vkCmdPipelineBarrier-None-07892），所以那条依赖在通道内表达不出来；而 ALL_GRAPHICS
+     * 本身不含 DRAW_INDIRECT，写它等于没写。26.4-snapshot-10 把地形改成 indirect 绘制，参数是
+     * vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的——不同步，命令处理器就会拿到
+     * 还没写完的 vertexOffset/indexCount。真机上的表现是一个顶点飞到极远。
+     *
+     * <p>管线、顶点/索引绑定、描述符、动态状态都是命令缓冲状态，跨通道边界保持，不需要重绑。
+     */
+    private void splitPassForIndirectBarrier() {
+        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+        else vkCmdEndRenderPass(encoder.commandBuffer());
+        encoder.markRenderPassClosed();
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            // 先落账（此时 renderPassOpen 已为 false，记到通道外那一侧），再在通道外发出去。
+            encoder.flushBufferWriteBarrier();
+            encoder.flushPendingBarriersOut(stack);
+            if (context.dynamicRendering()) beginDynamic(stack, true);
+            else beginLegacy(stack, true);
+        }
+        encoder.markRenderPassOpen();
+        encoder.clearIndirectBarrierPending();
     }
 
     /** Ends the pass, flushes the buffer-write barrier outside it, and resumes with load ops. */
@@ -1105,6 +1135,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
+        flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }
@@ -1183,6 +1214,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
+        flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }

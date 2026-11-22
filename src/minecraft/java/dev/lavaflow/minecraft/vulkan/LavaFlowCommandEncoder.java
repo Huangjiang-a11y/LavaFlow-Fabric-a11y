@@ -38,6 +38,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean renderPassOpen;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+    /**
+     * 有间接绘制参数写出了、但还没在通道外同步。
+     *
+     * <p>DRAW_INDIRECT 不是图形阶段：通道内的屏障不许命名它（VUID-vkCmdPipelineBarrier-None-07892），
+     * 而 ALL_GRAPHICS 里没有它。所以"间接参数写完 → 命令处理器可以读"这个依赖在通道内根本表达
+     * 不出来，只能在通道外发。这个标志留给渲染通道侧：在下一笔 indirect 绘制之前把通道拆开。
+     */
+    private boolean indirectBarrierPending;
     /** 外部/内部待刷的 buffer-write barrier 计数，flush 时在栈上批量构造，避免悬垂指针。 */
     private int pendingBufferWriteBarriersOut;
     private int pendingBufferWriteBarriersIn;
@@ -933,9 +941,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                     // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
                     // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
-                    // 三角形被拉得离谱"。ALL_GRAPHICS 含 VERTEX_INPUT 与颜色/深度附件输出，
-                    // 且渲染通道内也合法（ALL_COMMANDS 在通道内不合法）。
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    // 三角形被拉得离谱"。
+                    //
+                    // DRAW_INDIRECT 必须一起写上：26.4-snapshot-10 把地形改成 indirect 绘制，
+                    // 参数是 vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的。
+                    // ALL_GRAPHICS 不含 DRAW_INDIRECT，只写它就等于让命令处理器去读还没写完的
+                    // vertexOffset/indexCount —— 真机上就是一个顶点飞到极远。这里在通道外，
+                    // 两个阶段一起命名是合法的。
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
             pendingBufferWriteBarriersOut = 0;
@@ -1072,9 +1085,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                     // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
                     // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
-                    // 三角形被拉得离谱"。ALL_GRAPHICS 含 VERTEX_INPUT 与颜色/深度附件输出，
-                    // 且渲染通道内也合法（ALL_COMMANDS 在通道内不合法）。
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    // 三角形被拉得离谱"。
+                    //
+                    // DRAW_INDIRECT 必须一起写上：26.4-snapshot-10 把地形改成 indirect 绘制，
+                    // 参数是 vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的。
+                    // ALL_GRAPHICS 不含 DRAW_INDIRECT，只写它就等于让命令处理器去读还没写完的
+                    // vertexOffset/indexCount —— 真机上就是一个顶点飞到极远。这里在通道外，
+                    // 两个阶段一起命名是合法的。
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
             pendingBufferWriteBarriersIn = 0;
@@ -1091,11 +1109,19 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
 
+    /** 间接参数写了，但 DRAW_INDIRECT 侧的依赖还没建立（只能在通道外建立）。 */
+    boolean indirectBarrierPending() { return indirectBarrierPending; }
+    void clearIndirectBarrierPending() { indirectBarrierPending = false; }
+    void markRenderPassOpen() { renderPassOpen = true; }
+
 
     /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
     private void noteBufferWritten(GpuBufferSlice destination) {
         recentlyWrittenBuffers.add(buffer(destination).handle());
         bufferWriteBarrierPending = true;
+        if ((destination.buffer().usage() & GpuBuffer.USAGE_INDIRECT_PARAMETERS) != 0) {
+            indirectBarrierPending = true;
+        }
         // A write inside a pass cannot wait for the next flush point: the barrier would land in a later
         // command buffer (or outside the pass altogether) while the draw in this one already reads it —
         // for indirect draws that means the command processor reading parameters the copy has not written
