@@ -915,10 +915,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 LavaFlowFrameStats.barrierRecorded();
             }
             allBarriers.free();
-            // Commit layouts after barriers are recorded
-            for (PendingTransition pt : pendingTransitionsOut) {
-                pt.texture.commitLayout();
-            }
+        }
+
+        // 同上：提交不能挂在"这次有屏障要发"上，否则一次空转就丢掉已排队的转换。
+        for (PendingTransition pt : pendingTransitionsOut) {
+            pt.texture.commitLayout();
         }
 
         if (pendingBufferWriteBarriersOut > 0) {
@@ -1003,6 +1004,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             pendingBufferWriteBarriersIn = 0;
         }
 
+        // 屏障已经记进命令缓冲，这里必须把"已排队"落成"已生效"。漏掉这一步，pendingLayout 会
+        // 永远停在最后一次通道内转换的目标上：之后每次采样都把这张图判成布局不对，于是每帧都
+        // 拆一次渲染通道（真机：pass_splits_per_frame 从 0.00 变成 1.00，而且永不恢复）。
+        // flushPendingBarriersInAtEnd 一直是这么做的，这条通道内路径漏了。
+        for (PendingTransition pt : pendingTransitionsIn) {
+            pt.texture.commitLayout();
+        }
         pendingTransitionsIn.clear();
     }
 
