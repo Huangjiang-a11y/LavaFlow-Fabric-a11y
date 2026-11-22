@@ -216,3 +216,4 @@ tasks.register<Test>("minecraftTest") {
 tasks.named("check") {
     dependsOn("minecraftTest")
 }
+// CI retry Sun Nov 22 14:36:05 CST 2026
