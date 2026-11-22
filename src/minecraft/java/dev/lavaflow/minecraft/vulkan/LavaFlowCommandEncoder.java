@@ -596,7 +596,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
 
     /** Flush pending image transitions and memory barriers outside render passes. */
-    private void flushPendingBarriersOut(MemoryStack stack) {
+    void flushPendingBarriersOut(MemoryStack stack) {
         if (pendingTransitionsOut.isEmpty() && pendingMemoryBarriersOut.isEmpty()) return;
 
         // Group transitions by (srcStage, dstStage) for batching
@@ -639,7 +639,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         // Memory barriers (all use same stages)
         if (!pendingMemoryBarriersOut.isEmpty()) {
             VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingMemoryBarriersOut.size(), stack);
-            for (int i = 0; i < pendingMemoryBarriersOut.size(); i++) memBuf.put(i, pendingMemoryBarriersOut.get(i));
+            for (VkMemoryBarrier mb : pendingMemoryBarriersOut) memBuf.put(mb);
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
@@ -653,7 +653,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     /** Flush pending image transitions and memory barriers inside render passes. */
-    private void flushPendingBarriersIn(MemoryStack stack) {
+    void flushPendingBarriersIn(MemoryStack stack) {
         if (pendingTransitionsIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
 
         java.util.List<java.util.List<PendingTransition>> transGroups = new java.util.ArrayList<>();
@@ -693,7 +693,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
         if (!pendingMemoryBarriersIn.isEmpty()) {
             VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingMemoryBarriersIn.size(), stack);
-            for (int i = 0; i < pendingMemoryBarriersIn.size(); i++) memBuf.put(i, pendingMemoryBarriersIn.get(i));
+            for (VkMemoryBarrier mb : pendingMemoryBarriersIn) memBuf.put(mb);
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
