@@ -930,7 +930,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             }
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
+                    // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
+                    // 三角形被拉得离谱"。ALL_GRAPHICS 含 VERTEX_INPUT 与颜色/深度附件输出，
+                    // 且渲染通道内也合法（ALL_COMMANDS 在通道内不合法）。
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
             pendingBufferWriteBarriersOut = 0;
@@ -1050,7 +1054,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             }
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
+                    // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
+                    // 三角形被拉得离谱"。ALL_GRAPHICS 含 VERTEX_INPUT 与颜色/深度附件输出，
+                    // 且渲染通道内也合法（ALL_COMMANDS 在通道内不合法）。
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
             pendingBufferWriteBarriersIn = 0;
