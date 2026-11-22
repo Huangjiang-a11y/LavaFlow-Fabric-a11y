@@ -139,7 +139,18 @@ final class LavaFlowDataWatch {
         return holeAt < 0 ? text : text + " HOLE@+" + (holeAt - from);
     }
 
+    /**
+     * 地形顶点的排布在两个快照之间变过：snapshot-8 是 28 字节一行，snapshot-10 换成顶点拉取
+     * （{@code PulledFormats}，面记录 32 字节）。步长一旦猜错，从第二行起全部错位，读出来的坐标
+     * 就都是 1e38 那种垃圾 —— 那是工具的错，不是数据的错。所以这里两种步长各解析一遍并列打印，
+     * 让哪一种与实际排布吻合自己显出来。
+     */
     private static void checkVertices(String what, long handle, long offset, ByteBuffer data) {
+        parseVertices(what, handle, offset, data, VERTEX_STRIDE);
+        if (VERTEX_STRIDE != 32) parseVertices(what, handle, offset, data, 32);
+    }
+
+    private static void parseVertices(String what, long handle, long offset, ByteBuffer data, int VERTEX_STRIDE) {
         int remaining = data.remaining();
         if (remaining < VERTEX_STRIDE) return;
         ByteBuffer view = data.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -181,8 +192,8 @@ final class LavaFlowDataWatch {
                 ? " x=[" + minX + "," + maxX + "] y=[" + minY + "," + maxY + "] z=[" + minZ + "," + maxZ + "]"
                 : " <no finite positions>";
         System.getLogger("LavaFlow").log(suspicious ? System.Logger.Level.WARNING : System.Logger.Level.INFO,
-                "vertex upload " + what + " h=" + Long.toHexString(handle) + "@" + offset
-                        + " bytes=" + remaining + " rows=" + rows
+                "vertex upload " + what + " stride=" + VERTEX_STRIDE + " h=" + Long.toHexString(handle)
+                        + "@" + offset + " bytes=" + remaining + " rows=" + rows
                         + " nonFinite=" + nonFinite + " wild=" + wild + bounds);
     }
 

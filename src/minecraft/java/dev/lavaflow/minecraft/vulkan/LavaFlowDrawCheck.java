@@ -1,5 +1,7 @@
 package dev.lavaflow.minecraft.vulkan;
 
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.HashMap;
@@ -34,7 +36,12 @@ final class LavaFlowDrawCheck {
                       int vertexStride, int baseVertex, LavaFlowGpuBuffer indexBuffer, int indexElementBytes,
                       int firstIndex, int indexCount) {
         if (!ENABLED) return;
-        if (!pipelineName.contains("terrain") && !pipelineName.contains("water")) return;
+        // 认地形不能靠管线名：真机日志里 drawcheck 一条都没出来，说明 snapshot-10 的名字里不含
+        // terrain/water。改成按缓冲本身认 —— 用法带 VERTEX 且尺寸 >= 1 MiB 的场地就是地形那几块
+        // （GUI/字体/粒子都只有几十 KB）。名字仍打印出来，方便对号。
+        boolean arena = vertexBuffer != null && (vertexBuffer.usage() & GpuBuffer.USAGE_VERTEX) != 0
+                && vertexBuffer.size() >= (1L << 20);
+        if (!pipelineName.contains("terrain") && !pipelineName.contains("water") && !arena) return;
         if (lastCheckedFrame.getOrDefault(pipelineName, -1L) == frame) return;
         lastCheckedFrame.put(pipelineName, frame);
         if (lines >= LINE_CAP) return;
