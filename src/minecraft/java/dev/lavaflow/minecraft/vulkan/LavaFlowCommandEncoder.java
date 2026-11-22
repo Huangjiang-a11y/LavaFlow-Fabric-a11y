@@ -573,9 +573,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 真正结束挂起的那份通道；布局转换、提交之前都必须先调。 */
     void endPassNow() {
         if (!pendingPassEnd) return;
+        boolean wasDynamic = pendingPassDynamic;
         pendingPassEnd = false;
-        if (pendingPassDynamic) org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
+        if (wasDynamic) org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
         else vkCmdEndRenderPass(commandBuffer);
+        // After the render pass ends, we can now safely flush in-pass barriers.
+        try (MemoryStack stack = stackPush()) { flushPendingBarriersInAtEnd(stack); }
     }
 
     void releasePass(LavaFlowRenderPass pass) {
