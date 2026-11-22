@@ -27,6 +27,7 @@ import static org.lwjgl.vulkan.KHRPushDescriptor.VK_KHR_PUSH_DESCRIPTOR_EXTENSIO
 import static org.lwjgl.vulkan.KHRDynamicRendering.VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRDepthStencilResolve.VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRCreateRenderpass2.VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME;
 import static org.lwjgl.vulkan.EXTVertexAttributeDivisor.VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
@@ -75,6 +76,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private boolean multiDrawIndirect;
     private boolean drawIndirectFirstInstance;
     private boolean vertexAttributeDivisor;
+    private boolean synchronization2;
     private Set<String> enabledExtensions = Set.of();
     private final Map<LegacyRenderPassKey, Long> legacyRenderPasses = new HashMap<>();
     private final Map<LegacyFramebufferKey, Long> legacyFramebuffers = new HashMap<>();
@@ -94,7 +96,8 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     private record DeviceCapabilities(boolean swapchain, boolean pushDescriptors, boolean dynamicRendering,
                                       boolean fillModeNonSolid, boolean multiDrawIndirect,
                                       boolean drawIndirectFirstInstance,
-                                      boolean vertexAttributeDivisor, Set<String> extensions) {}
+                                      boolean vertexAttributeDivisor, boolean synchronization2,
+                                      Set<String> extensions) {}
 
     private static final class LegacyRenderPassKey {
         final int[] colorFormats;
@@ -398,6 +401,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 multiDrawIndirect = selectedCapabilities.multiDrawIndirect();
                 drawIndirectFirstInstance = selectedCapabilities.drawIndirectFirstInstance();
                 vertexAttributeDivisor = selectedCapabilities.vertexAttributeDivisor();
+                synchronization2 = selectedCapabilities.synchronization2();
                 enabledExtensions = selectedCapabilities.extensions();
             }
         }
@@ -413,6 +417,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
         boolean baselineDevice = Boolean.getBoolean("lavaflow.baselineDevice");
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
+        if (baselineDevice) synchronization2 = false;
 
 
         if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
@@ -550,10 +555,13 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     && extensions.contains(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME)
                     && extensions.contains(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
             boolean divisorExtension = extensions.contains(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+            boolean sync2Extension = extensions.contains(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
             VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicFeatures = dynamicExtension
                     ? VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack).sType$Default() : null;
             VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures = divisorExtension
                     ? VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT.calloc(stack).sType$Default() : null;
+            VkPhysicalDeviceSynchronization2FeaturesKHR sync2Features = sync2Extension
+                    ? VkPhysicalDeviceSynchronization2FeaturesKHR.calloc(stack).sType$Default() : null;
             // Vulkan 1.1 的特性位（shaderDrawParameters 等）不在 core VkPhysicalDeviceFeatures 里，
             // 只能从 VkPhysicalDeviceVulkan11Features 读。挂在链头，下面那次查询就顺带问出来了。
             VkPhysicalDeviceVulkan11Features vulkan11 = VkPhysicalDeviceVulkan11Features.calloc(stack)
@@ -566,6 +574,10 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             if (divisorFeatures != null) {
                 divisorFeatures.pNext(featureChain);
                 featureChain = divisorFeatures.address();
+            }
+            if (sync2Features != null) {
+                sync2Features.pNext(featureChain);
+                featureChain = sync2Features.address();
             }
             VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
                     .sType$Default().pNext(featureChain);
@@ -592,6 +604,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     dynamicFeatures != null && dynamicFeatures.dynamicRendering(),
                     core.fillModeNonSolid(), core.multiDrawIndirect(), core.drawIndirectFirstInstance(),
                     divisorFeatures != null && divisorFeatures.vertexAttributeInstanceRateDivisor(),
+                    sync2Features != null && sync2Features.synchronization2(),
                     Set.copyOf(extensions));
         }
     }
@@ -619,8 +632,12 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 featureChain = VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT.calloc(stack).sType$Default()
                         .vertexAttributeInstanceRateDivisor(true).pNext(featureChain).address();
             }
+            if (synchronization2) {
+                featureChain = VkPhysicalDeviceSynchronization2FeaturesKHR.calloc(stack).sType$Default()
+                        .synchronization2(true).pNext(featureChain).address();
+            }
             int extensionCount = 1 + (pushDescriptors ? 1 : 0) + (dynamicRendering ? 3 : 0)
-                    + (vertexAttributeDivisor ? 1 : 0);
+                    + (vertexAttributeDivisor ? 1 : 0) + (synchronization2 ? 1 : 0);
             PointerBuffer extensionNames = stack.mallocPointer(extensionCount);
             extensionNames.put(stack.UTF8(VK_KHR_SWAPCHAIN_EXTENSION_NAME));
             if (pushDescriptors) extensionNames.put(stack.UTF8(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME));
@@ -630,6 +647,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                 extensionNames.put(stack.UTF8(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME));
             }
             if (vertexAttributeDivisor) extensionNames.put(stack.UTF8(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME));
+            if (synchronization2) extensionNames.put(stack.UTF8(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME));
             extensionNames.flip();
             VkDeviceCreateInfo info = VkDeviceCreateInfo.calloc(stack).sType$Default().pQueueCreateInfos(queues)
                     .pNext(featureChain).pEnabledFeatures(enabled).ppEnabledExtensionNames(extensionNames);
@@ -750,6 +768,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     boolean multiDrawIndirect() { return multiDrawIndirect; }
     boolean drawIndirectFirstInstance() { return drawIndirectFirstInstance; }
     boolean vertexAttributeDivisor() { return vertexAttributeDivisor; }
+    boolean synchronization2() { return synchronization2; }
     Set<String> enabledExtensions() { return enabledExtensions; }
 
     private com.mojang.renderpearl.api.textures.GpuSampler defaultSampler;
