@@ -592,8 +592,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     void markRenderPassClosed() { renderPassOpen = false; }
 
-    java.util.ArrayList<LavaFlowGpuTexture> pendingLayoutTextures() { return pendingLayoutTextures; }
-
     boolean renderPassOpen() { return renderPassOpen; }
 
 

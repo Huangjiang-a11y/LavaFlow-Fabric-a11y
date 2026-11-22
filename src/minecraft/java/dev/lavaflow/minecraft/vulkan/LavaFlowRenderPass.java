@@ -962,8 +962,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (PASS_SEQUENCE) seqDraws++;
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
-            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
-            encoder.pendingLayoutTextures().clear();
         }
         pushDescriptors();
         noteDrawKind("drawIndexed");
@@ -1048,8 +1046,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
-            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
-            encoder.pendingLayoutTextures().clear();
         }
         pushDescriptors();
         noteDrawKind("drawIndexedIndirect");
@@ -1118,8 +1114,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (PASS_SEQUENCE) seqDraws++;
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
-            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
-            encoder.pendingLayoutTextures().clear();
         }
         pushDescriptors();
         noteDrawKind("draw");
@@ -1130,8 +1124,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
-            for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
-            encoder.pendingLayoutTextures().clear();
         }
         pushDescriptors();
         noteDrawKind("drawIndirect");
