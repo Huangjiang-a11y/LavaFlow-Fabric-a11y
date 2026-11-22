@@ -520,6 +520,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                     .loadOp(loadOp(attachment, resume))
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            // For swap chain image (slot 0), set initial/final layout for proper present transitions
+            if (slot == 0) {
+                renderingAttachment.initialLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+                        .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            }
             if (clear && attachment.clearValue().color() != null) {
                 Vector4fc value = attachment.clearValue().color();
                 renderingAttachment.clearValue().color()
