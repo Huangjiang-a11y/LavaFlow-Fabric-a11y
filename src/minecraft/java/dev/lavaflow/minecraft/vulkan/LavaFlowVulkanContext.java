@@ -942,25 +942,18 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                         .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             }
-            // 相邻子通道之间只需要"颜色/深度写入 -> 输入附件读取与颜色/深度再写"。
-            // 这里给到 COLOR_ATTACHMENT_OUTPUT + EARLY/LATE_FRAGMENT_TESTS，片段阶段负责输入附件读取；
-            // 比 ALL_GRAPHICS 窄，在瓦片式 GPU 上少一次整条图形管线的等待。
+            // 【单变量实验 wip/wide-subpass-dep】相邻子通道依赖放宽到 ALL_GRAPHICS 两侧。
+            // 原写法把 srcStageMask 收在 COLOR_ATTACHMENT_OUTPUT + EARLY/LATE_FRAGMENT_TESTS，
+            // 只有 srcAccess = COLOR_WRITE|DEPTH_WRITE。若上一子通道的写入到达片段阶段（输入附件
+            // 读取、或着色器侧对附件/缓冲的写），这条依赖既没声明那个阶段、也没声明那笔访问，
+            // 就什么也没保证。放宽回 ALL_GRAPHICS + MEMORY_READ|MEMORY_WRITE 是最厚的安全下界：
+            // 若水面因此恢复，说明问题就在这条依赖的收窄上，再逐个阶段往回收定位。
             for (int s = 1; s < subpasses.size(); s++) {
                 deps.get(di++).srcSubpass(s - 1).dstSubpass(s)
-                        .srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
-                                | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
-                        .dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
-                                | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
-                        .srcAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
-                                | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-                                | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT
-                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
-                                | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             }
             VkRenderPassCreateInfo info = VkRenderPassCreateInfo.calloc(stack).sType$Default()
                     .pAttachments(attachments).pSubpasses(descs).pDependencies(deps);
