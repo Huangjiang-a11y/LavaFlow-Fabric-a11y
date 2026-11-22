@@ -36,16 +36,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
     private boolean renderPassOpen;
-    private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+    /** 外部/内部待刷的 buffer-write barrier 计数，flush 时在栈上批量构造，避免悬垂指针。 */
+    private int pendingBufferWriteBarriersOut;
+    private int pendingBufferWriteBarriersIn;
 
     // Pending image layout transitions: (texture, sourceLayout, targetLayout)
     private final java.util.ArrayList<PendingTransition> pendingTransitionsOut = new java.util.ArrayList<>(8);
     private final java.util.ArrayList<PendingTransition> pendingTransitionsIn = new java.util.ArrayList<>(8);
-    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersOut = new java.util.ArrayList<>(2);
-    private final java.util.ArrayList<VkMemoryBarrier> pendingMemoryBarriersIn = new java.util.ArrayList<>(2);
-
     /** Simple record for a pending layout transition. */
     private static final class PendingTransition {
         final LavaFlowGpuTexture texture;
@@ -851,23 +850,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void flushBufferWriteBarrier() {
         if (!bufferWriteBarrierPending) return;
         bufferWriteBarrierPending = false;
-        try (MemoryStack stack = stackPush()) {
-            VkMemoryBarrier.Buffer barrierBuf = VkMemoryBarrier.calloc(1, stack).sType$Default();
-            VkMemoryBarrier barrier = barrierBuf.get(0);
-            if (renderPassOpen) {
-                pendingMemoryBarriersIn.add(barrier);
-            } else {
-                pendingMemoryBarriersOut.add(barrier);
-            }
-        }
-        bufferWriteBarrierPending = false;
+        if (renderPassOpen) pendingBufferWriteBarriersIn++;
+        else pendingBufferWriteBarriersOut++;
         recentlyWrittenBuffers.clear();
     }
 
 
     /** Flush pending image transitions and memory barriers outside render passes. */
     void flushPendingBarriersOut(MemoryStack stack) {
-        if (pendingTransitionsOut.isEmpty() && pendingMemoryBarriersOut.isEmpty()) return;
+        if (pendingTransitionsOut.isEmpty() && pendingBufferWriteBarriersOut == 0) return;
 
         // Group transitions by (srcStage, dstStage)
         java.util.List<java.util.List<PendingTransition>> transGroups = new java.util.ArrayList<>();
@@ -919,26 +910,29 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             }
         }
 
-        if (!pendingMemoryBarriersOut.isEmpty()) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingMemoryBarriersOut.size(), stack);
-            for (VkMemoryBarrier mb : pendingMemoryBarriersOut) memBuf.put(mb);
-            memBuf.flip();
+        if (pendingBufferWriteBarriersOut > 0) {
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersOut, stack);
+            for (int i = 0; i < pendingBufferWriteBarriersOut; i++) {
+                memBuf.get(i).sType$Default()
+                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            }
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            pendingBufferWriteBarriersOut = 0;
         }
 
         pendingTransitionsOut.clear();
-        pendingMemoryBarriersOut.clear();
     }
 
     /** Flush pending image transitions and memory barriers inside render passes.
      *  In dynamic rendering, vkCmdPipelineBarrier cannot be called inside a render pass instance,
      *  so we accumulate and flush at endPassNow() after the render pass ends. */
     void flushPendingBarriersIn(MemoryStack stack) {
-        if (pendingTransitionsIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
+        if (pendingTransitionsIn.isEmpty() && pendingBufferWriteBarriersIn == 0) return;
 
         if (context.dynamicRendering() && renderPassOpen) {
             return; // Will be flushed at endPassNow()
@@ -979,24 +973,27 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             LavaFlowFrameStats.barrierRecorded();
         }
 
-        if (!pendingMemoryBarriersIn.isEmpty()) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingMemoryBarriersIn.size(), stack);
-            for (VkMemoryBarrier mb : pendingMemoryBarriersIn) memBuf.put(mb);
-            memBuf.flip();
+        if (pendingBufferWriteBarriersIn > 0) {
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersIn, stack);
+            for (int i = 0; i < pendingBufferWriteBarriersIn; i++) {
+                memBuf.get(i).sType$Default()
+                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            }
             vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    0, memBuf, null, null);
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    VK_DEPENDENCY_BY_REGION_BIT, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            pendingBufferWriteBarriersIn = 0;
         }
 
         pendingTransitionsIn.clear();
-        pendingMemoryBarriersIn.clear();
     }
 
     /** Flush accumulated in-pass barriers at render pass end (works for both dynamic and legacy). */
     void flushPendingBarriersInAtEnd(MemoryStack stack) {
-        if (pendingTransitionsIn.isEmpty() && pendingMemoryBarriersIn.isEmpty()) return;
+        if (pendingTransitionsIn.isEmpty() && pendingBufferWriteBarriersIn == 0) return;
 
         java.util.List<java.util.List<PendingTransition>> transGroups = new java.util.ArrayList<>();
         java.util.List<Integer> srcStages = new java.util.ArrayList<>();
@@ -1033,15 +1030,19 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             LavaFlowFrameStats.barrierRecorded();
         }
 
-        if (!pendingMemoryBarriersIn.isEmpty()) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingMemoryBarriersIn.size(), stack);
-            for (VkMemoryBarrier mb : pendingMemoryBarriersIn) memBuf.put(mb);
-            memBuf.flip();
+        if (pendingBufferWriteBarriersIn > 0) {
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersIn, stack);
+            for (int i = 0; i < pendingBufferWriteBarriersIn; i++) {
+                memBuf.get(i).sType$Default()
+                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            }
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            pendingBufferWriteBarriersIn = 0;
         }
 
         // Commit layouts after barriers are recorded
@@ -1049,7 +1050,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             pt.texture.commitLayout();
         }
         pendingTransitionsIn.clear();
-        pendingMemoryBarriersIn.clear();
     }
 
 
