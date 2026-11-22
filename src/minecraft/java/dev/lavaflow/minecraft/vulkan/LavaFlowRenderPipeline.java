@@ -50,6 +50,20 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
 
     /** 前端的管线名，管线行与绘制行都靠它把两边对上号。 */
     String name() { return info.name(); }
+
+    /**
+     * slot 0 顶点缓冲的步长（字节）。地形顶点数据的排布在两个快照之间变过，诊断工具不能写死。
+     *
+     * <p>26.4-snapshot-8 的地形顶点是 28 字节一行；snapshot-10 换成了顶点拉取
+     * （{@code com.mojang.blaze3d.vertex.PulledFormats}，面记录 32 字节）。把步长写死成 28，
+     * 越界判定与坐标解析都会算错，正好把要找的东西藏起来。这里一律问管线要。
+     */
+    int vertexStride() {
+        for (CompiledRenderPipeline.CreateInfo.VertexBuffer vb : info.vertexBuffers()) {
+            if (vb.bufferSlot() == 0) return vb.stride();
+        }
+        return info.vertexBuffers().isEmpty() ? 0 : info.vertexBuffers().get(0).stride();
+    }
     private final List<Entry> entries;
     private final int[] descriptorTypes;
     private final int[] sampledIndices;

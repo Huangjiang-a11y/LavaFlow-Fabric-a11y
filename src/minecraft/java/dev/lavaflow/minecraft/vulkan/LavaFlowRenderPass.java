@@ -1058,7 +1058,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         noteDrawKind("drawIndexed");
         if (LavaFlowDrawCheck.ENABLED) {
             LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipeline == null ? "" : pipeline.name(),
-                    watchedVertexBuffer, watchedVertexOffset, baseVertex, watchedIndexBuffer,
+                    watchedVertexBuffer, watchedVertexOffset, pipeline == null ? 0 : pipeline.vertexStride(),
+                    baseVertex, watchedIndexBuffer,
                     encoder.boundIndexType() == VK_INDEX_TYPE_UINT16 ? 2 : 4, firstIndex, indexCount);
         }
         if (DEBUG_DRAWS) logIndexedDraw(indexCount, firstIndex, baseVertex);

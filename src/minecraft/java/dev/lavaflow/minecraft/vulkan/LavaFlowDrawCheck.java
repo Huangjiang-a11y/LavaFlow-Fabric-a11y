@@ -31,17 +31,18 @@ final class LavaFlowDrawCheck {
     private LavaFlowDrawCheck() {}
 
     static void check(long frame, String pipelineName, LavaFlowGpuBuffer vertexBuffer, long vertexOffset,
-                      int baseVertex, LavaFlowGpuBuffer indexBuffer, int indexElementBytes, int firstIndex,
-                      int indexCount) {
+                      int vertexStride, int baseVertex, LavaFlowGpuBuffer indexBuffer, int indexElementBytes,
+                      int firstIndex, int indexCount) {
         if (!ENABLED) return;
         if (!pipelineName.contains("terrain") && !pipelineName.contains("water")) return;
         if (lastCheckedFrame.getOrDefault(pipelineName, -1L) == frame) return;
         lastCheckedFrame.put(pipelineName, frame);
         if (lines >= LINE_CAP) return;
         lines++;
+        if (vertexStride <= 0) vertexStride = VERTEX_STRIDE;
         long bound = (long) Math.ceil(indexCount * VERTICES_PER_INDEX);
-        long vertexFrom = vertexOffset + (long) baseVertex * VERTEX_STRIDE;
-        long vertexTo = vertexFrom + bound * VERTEX_STRIDE;
+        long vertexFrom = vertexOffset + (long) baseVertex * vertexStride;
+        long vertexTo = vertexFrom + bound * vertexStride;
         long indexBytesNeeded = ((long) firstIndex + indexCount) * indexElementBytes;
         boolean vertexOverrun = vertexBuffer != null && vertexTo > vertexBuffer.size();
         boolean indexOverrun = indexBuffer != null && indexBytesNeeded > indexBuffer.size();
