@@ -957,26 +957,28 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
 
         if (pendingBufferWriteBarriersOut > 0) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersOut, stack);
-            for (int i = 0; i < pendingBufferWriteBarriersOut; i++) {
-                memBuf.get(i).sType$Default()
-                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            }
+            // 通道外，可以用 ALL_COMMANDS 当源阶段 —— 而且必须用它。
+            //
+            // 以前这里源阶段写 BOTTOM_OF_PIPE。那里不执行任何命令，写在 srcStageMask 上这条
+            // 屏障就不等待前面任何阶段完成，语义等于空操作：vkCmdCopyBuffer 的
+            // TRANSFER_WRITE 还没落地，后面的绘制已经开始读那块缓冲。缓冲区内容本身完全合法，
+            // 所以查内容、查覆盖、查越界全部通过，画面却是乱连的三角形 —— 这就是为什么所有
+            // CPU 侧诊断都看不见它。真机对照（2026-11-23）：eager 版（两侧 ALL_COMMANDS）
+            // 水面正常，延迟版（这个掩码）照样闪。
+            //
+            // 多条合并成一条：几条屏障的掩码逐字相同，且都落在同一段通道外区间（中间没有绘制，
+            // 只有连续的拷贝），合并与原意等价。以前按计数发 N 条 —— 一帧 8 笔拷贝就是 8 条
+            // 全屏屏障，Mali 上每条都要刷一遍 tile 状态，白付。
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
+            memBuf.get(0).sType$Default()
+                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
-                    // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
-                    // 三角形被拉得离谱"。
-                    //
-                    // DRAW_INDIRECT 必须一起写上：26.4-snapshot-10 把地形改成 indirect 绘制，
-                    // 参数是 vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的。
-                    // ALL_GRAPHICS 不含 DRAW_INDIRECT，只写它就等于让命令处理器去读还没写完的
-                    // vertexOffset/indexCount —— 真机上就是一个顶点飞到极远。这里在通道外，
-                    // 两个阶段一起命名是合法的。
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            LavaFlowFrameStats.copyBarrierRecorded();
             pendingBufferWriteBarriersOut = 0;
         }
 
@@ -1029,25 +1031,24 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
 
         if (pendingBufferWriteBarriersIn > 0) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersIn, stack);
-            for (int i = 0; i < pendingBufferWriteBarriersIn; i++) {
-                memBuf.get(i).sType$Default()
-                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            }
+            // 这里已经不在通道里了（调用点 endPassNow 先 vkCmdEndRenderPass 再调本方法），
+            // 所以可以、也必须用 ALL_COMMANDS。
+            //
+            // 原先的注释说"通道内不许把 TRANSFER 写进 srcStageMask，BOTTOM_OF_PIPE 是唯一
+            // 能覆盖 TRANSFER 又合法的写法"，前提错了：BOTTOM_OF_PIPE 里不执行任何命令，
+            // 当源阶段时这条屏障不等待前面任何阶段 —— 它不是"覆盖 TRANSFER"，而是什么都
+            // 不等。写没落地绘制就开读，水面上就是个别三角形被拉得极远，而缓冲内容本身合法，
+            // CPU 侧诊断全过。真机对照（2026-11-23）确认：换成 ALL_COMMANDS 后水面正常。
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
+            memBuf.get(0).sType$Default()
+                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             vkCmdPipelineBarrier(commandBuffer,
-                    // 源阶段必须是 BOTTOM_OF_PIPE，不能是 ALL_GRAPHICS。
-                    //
-                    // 顶点/索引是从暂存区用 vkCmdCopyBuffer 写进缓冲的，那是 TRANSFER 阶段。
-                    // ALL_GRAPHICS 当源阶段只等图形阶段，TRANSFER 的拷贝还没落地就放行绘制，
-                    // 读到的顶点是半截数据 —— 真机上就是个别三角形被拉得老长（水面/半透明最明显）。
-                    // 通道内又不许把 TRANSFER 写进 srcStageMask（VUID 00837/00838：非 EXTERNAL
-                    // 子通道的阶段位必须都被图形管线支持），BOTTOM_OF_PIPE 是唯一能覆盖 TRANSFER
-                    // 又合法的写法。0.1.6-alpha 用的就是这个形式。
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            LavaFlowFrameStats.copyBarrierRecorded();
             pendingBufferWriteBarriersIn = 0;
         }
 
@@ -1101,26 +1102,30 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
 
         if (pendingBufferWriteBarriersIn > 0) {
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(pendingBufferWriteBarriersIn, stack);
-            for (int i = 0; i < pendingBufferWriteBarriersIn; i++) {
-                memBuf.get(i).sType$Default()
-                        .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                        .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            }
+            // 这里的每一次拷贝写在录命令时都发生在通道内，而通道内的拷贝只可能是图形阶段发起的
+            // （vkCmdCopyBuffer 本身不允许录进渲染通道，真要走这里的是通道内的 clear / blit 与
+            // 前端安排的拷贝）。源阶段因此不能用 BOTTOM_OF_PIPE —— 那里不执行任何命令，写在
+            // srcStageMask 上这条屏障就不等待前面任何阶段完成，等于空操作，写没落地绘制就开读。
+            //
+            // 通道内也不能写 ALL_COMMANDS（VUID-vkCmdPipelineBarrier-None-07892 只允许图形
+            // 阶段），所以两侧都用 ALL_GRAPHICS：它覆盖 VERTEX_INPUT（顶点取数在
+            // VERTEX_INPUT，不是 VERTEX_SHADER）、各类着色器与颜色/深度写出。
+            //
+            // DRAW_INDIRECT 在通道内不能命名（不是图形阶段），间接参数那条依赖由通道外的
+            // 拆通道路径单独建立，见 LavaFlowRenderPass.splitPassForIndirectBarrier。
+            //
+            // 多条合并为一条：掩码逐字相同，且都落在同一段通道内区间（中间只有其它不读这些
+            // 缓冲的绘制），合并与原意等价，省下 Mali 上每条都要付的 tile 状态刷新。
+            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
+            memBuf.get(0).sType$Default()
+                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    // 顶点取数发生在 VERTEX_INPUT，不是 VERTEX_SHADER。只写 VS|FS|CS 等于没给
-                    // 顶点取数任何保证：缓冲区写还没落地，取数已经跑了，读到半截数据就是"个别
-                    // 三角形被拉得离谱"。
-                    //
-                    // DRAW_INDIRECT 必须一起写上：26.4-snapshot-10 把地形改成 indirect 绘制，
-                    // 参数是 vkCmdCopyBuffer 写完再由命令处理器在 DRAW_INDIRECT 阶段读的。
-                    // ALL_GRAPHICS 不含 DRAW_INDIRECT，只写它就等于让命令处理器去读还没写完的
-                    // vertexOffset/indexCount —— 真机上就是一个顶点飞到极远。这里在通道外，
-                    // 两个阶段一起命名是合法的。
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
+            LavaFlowFrameStats.copyBarrierRecorded();
             pendingBufferWriteBarriersIn = 0;
         }
 
