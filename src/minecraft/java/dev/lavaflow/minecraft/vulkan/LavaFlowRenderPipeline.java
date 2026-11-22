@@ -178,6 +178,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     // 顶点布局是这行的重点：binding 的 stride 和 attribute 的 offset/format 决定顶点怎么被读，
     // 布局与真正绑定的缓冲对不上，画面就是"顶点读偏"。管线懒创建且带缓存，一条只打一次，不会刷屏。
     private static final boolean DEBUG_PIPELINES = Boolean.getBoolean("lavaflow.debugPipelines");
+    /** 诊断开关：强制所有管线不剔除。用来二分"翻面是绕序/cull 判据，还是深度/布局"。
+     *  开启后若手臂恢复正常（变双面可见），问题在 cull 一侧；若依旧翻，问题在深度或布局。 */
+    private static final boolean FORCE_NO_CULL = Boolean.getBoolean("lavaflow.noCull");
     private static final System.Logger LOGGER = System.getLogger("LavaFlow.Pipeline");
 
     private static void logPipeline(CompiledRenderPipeline.CreateInfo info) {
@@ -185,6 +188,10 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         line.append("pipeline ").append(info.name())
                 .append(" topology=").append(info.primitiveTopology())
                 .append(" cull=").append(info.cull())
+                .append(" cullVk=").append((FORCE_NO_CULL || !info.cull()) ? "NONE" : "BACK")
+                .append(" frontFace=CW")
+                .append(" subpass=").append(info.subpass().index())
+                .append(" depthAtt=").append(info.subpass().depthStencilAttachment())
                 .append(" polygon=").append(info.polygonMode())
                 .append(" pushConstants=").append(info.pushConstantsSize())
                 .append(" depthFormat=").append(depthFormatOf(info))
@@ -440,7 +447,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             }
             VkPipelineRasterizationStateCreateInfo raster = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType$Default()
                     .polygonMode(polygonMode)
-                    .cullMode(info.cull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
+                    .cullMode((FORCE_NO_CULL || !info.cull()) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT)
                     .frontFace(VK_FRONT_FACE_CLOCKWISE).lineWidth(1.0f);
 
             VkPipelineDepthStencilStateCreateInfo depth = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default();
