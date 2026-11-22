@@ -702,10 +702,26 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         restoreAfterClear(texture, previous);
     }
 
+    /**
+     * {@code -Dlavaflow.forceIndirectExpand=true}：间接参数不走设备拷贝，直接写进它自己的常驻映射，
+     * 于是主机副本始终为准、绘制时可以在 CPU 上把参数读出来，全部展开成普通绘制。
+     *
+     * <p>用途是判定，不是长期方案：26.4-snapshot-10 把地形改成 indirect 绘制之后，同一个 0.1.6 制品
+     * 在 snapshot-8 正常、到 snapshot-10 闪。打开这个开关，整帧里就不再有 DRAW_INDIRECT —— 画面要是
+     * 恢复正常，那闪就钉在这条路径上；要是照样闪，indirect 就被排除，方向得换。
+     */
+    private static final boolean FORCE_INDIRECT_EXPAND = Boolean.getBoolean("lavaflow.forceIndirectExpand");
+
     @Override public void writeToBuffer(GpuBufferSlice destination, ByteBuffer source) {
         long size = source.remaining();
         if (size == 0) return;
         if (size > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
+        if (FORCE_INDIRECT_EXPAND && destination.buffer() instanceof LavaFlowGpuBuffer params
+                && (params.usage() & GpuBuffer.USAGE_INDIRECT_PARAMETERS) != 0
+                && params.writeMappedIfAvailable(destination.offset(), source)) {
+            // 字节已经落在 GPU 读的同一块内存里，主机副本为准；没有设备拷贝，也就没有要等的 TRANSFER。
+            return;
+        }
         // 自检交给 copyToBuffer 那一侧做：它读的是暂存区里即将被拷走的同一段字节。以前两头都扫，
         // 同一份顶点数据每笔上传被解析两遍，而区块网格的上传正在热路径上。
         GpuBufferSlice staging = transientMemory.uploadStaging(source, 1);

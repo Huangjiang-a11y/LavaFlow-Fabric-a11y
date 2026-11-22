@@ -188,6 +188,22 @@ final class LavaFlowGpuBuffer implements GpuBuffer {
      * <p>只给诊断用：常驻映射是同一块 VkDeviceMemory 的地址，主机能读回自己刚写进去的字节，于是
      * 拷贝进 GPU 缓冲之前就能把源字节查一遍，不必等一次 GPU 回读。
      */
+    /**
+     * 若常驻映射已经开着，把这段字节直接写进去，并把主机副本判定为准。
+     *
+     * <p>只给 {@code -Dlavaflow.forceIndirectExpand} 用：间接参数本来就由 CPU 生成，写进同一块
+     * host-visible 内存之后，CPU 立刻能读回购参数，于是绘制可以全部展开成普通 vkCmdDrawIndexed，
+     * GPU 侧不再需要 DRAW_INDIRECT —— 用来判定闪的画面是否由这条路径引入。
+     */
+    boolean writeMappedIfAvailable(long offset, ByteBuffer source) {
+        long base = mappedPhysicalBase;
+        if (base == 0 || !hostVisible()) return false;
+        if (offset < 0 || offset + source.remaining() > size) return false;
+        MemoryUtil.memCopy(MemoryUtil.memAddress(source), base + offset, source.remaining());
+        hostAuthoritative = true;
+        return true;
+    }
+
     ByteBuffer mappedView(long offset, long length) {
         long base = mappedPhysicalBase;
         if (base == 0 || offset < 0 || length < 0 || offset + length > size) return null;
