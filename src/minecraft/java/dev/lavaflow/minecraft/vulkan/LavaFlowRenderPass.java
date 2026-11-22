@@ -723,8 +723,22 @@ final class LavaFlowRenderPass implements RenderPassBackend {
 
     /** Ends the pass, flushes the buffer-write barrier outside it, and resumes with load ops. */
 
+    /** 每帧都在拆通道时，这里只打印一次"是谁拆的"，省得靠猜。 */
+    private static final java.util.Set<String> SPLIT_REPORTED = new java.util.HashSet<>();
+
     private void splitForSampledTransitions(List<LavaFlowGpuTexture> sampled) {
         LavaFlowFrameStats.passSplit();
+        int want = LavaFlowVk.sampledLayout();
+        StringBuilder why = new StringBuilder();
+        for (LavaFlowGpuTexture t : sampled) {
+            int have = t.effectiveLayout();
+            if (have != want) why.append(' ').append(t.label()).append('=').append(have);
+        }
+        String line = (pipeline == null ? "(no pipeline)" : pipeline.name()) + " ->" + why;
+        if (SPLIT_REPORTED.add(line)) {
+            System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                    "[split] " + line + " (want=" + want + ")");
+        }
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
         for (LavaFlowGpuTexture texture : sampled) {
