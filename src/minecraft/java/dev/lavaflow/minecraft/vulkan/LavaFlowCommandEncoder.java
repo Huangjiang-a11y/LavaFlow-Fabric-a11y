@@ -737,7 +737,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      */
     private void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination, String origin) {
         if (source.length() > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
-        if (!LavaFlowSync.NARROW_BARRIER) {
+        if (!LavaFlowSync.NARROW_BARRIER && !LavaFlowSync.EAGER_COPY_BARRIER) {
             long sourceHandle = buffer(source).handle();
             long destinationHandle = buffer(destination).handle();
             // 连续拷贝整段只需要一条屏障：只有这笔真的会读到刚写过的东西（同缓冲、或源/目标在
@@ -772,8 +772,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                         .buffer(buffer(destination).handle()).offset(destination.offset()).size(source.length());
                 vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                         destinationStages, 0, null, barrier, null);
+            } else if (LavaFlowSync.EAGER_COPY_BARRIER && !renderPassOpen) {
+                // 4c0a957 的写法：每笔拷贝后立刻一条官方全局屏障。不推断、不记账、不延迟。
+                // 通道外的 ALL_COMMANDS 合法；通道内不许用它（VUID 07892 只允许图形阶段），
+                // 那种情况仍留给通道内那条屏障，见 flushPendingBarriersIn。
+                memoryBarrier(stack);
             } else {
-                // 默认：官方式全局屏障（ALL_COMMANDS + MEMORY_READ|MEMORY_WRITE，两侧相同）。
+                // 延迟发：只记一笔"这个缓冲被写过"，等下一个落账点再发。
                 // 真机 A/B 证明窄屏障会漏同步，画面表现为半透明表面的几何扭曲，见 LavaFlowSync 的说明。
                 noteBufferWritten(destination);
             }

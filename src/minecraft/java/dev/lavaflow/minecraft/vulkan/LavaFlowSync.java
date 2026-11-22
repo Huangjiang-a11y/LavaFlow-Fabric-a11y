@@ -31,6 +31,21 @@ package dev.lavaflow.minecraft.vulkan;
 final class LavaFlowSync {
     /** 走旧写法：按用途位推出的窄屏障。默认 false，即使用官方那种全局屏障。 */
     static final boolean NARROW_BARRIER = Boolean.getBoolean("lavaflow.narrowBarrier");
+    /**
+     * 每笔拷贝之后立刻发那条官方全局屏障（ALL_COMMANDS → ALL_COMMANDS，MEMORY_READ|MEMORY_WRITE）。
+     *
+     * <p>这就是 4c0a957 那一版的写法，也是 2026-10-28 真机 A/B 里把"半透明表面几何扭曲、个别三角形
+     * 被拉得长到离谱"修好的那一版。19a3b8d 之后为省开销改成"记账 + 延迟发"，前提是"拷贝和读它的
+     * 绘制之间一定隔着一次 createRenderPass"——而后来通道内缓冲写屏障的出现证明这个前提不成立。
+     *
+     * <p>延迟发属于"推出来的正确"：只要有一条用法没被推全，那一处就漏同步，画面就是乱连的三角形，
+     * 而任何靠读自己记账的诊断都看不见它。默认回到无条件发。
+     *
+     * <p>{@code -Dlavaflow.eagerCopyBarrier=false} 回到延迟发（测开销用）。
+     */
+    static final boolean EAGER_COPY_BARRIER =
+            !"false".equals(System.getProperty("lavaflow.eagerCopyBarrier", "true"));
+
     /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
     static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
 
@@ -38,7 +53,8 @@ final class LavaFlowSync {
 
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
-                "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)")
+                "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)"
+                        : EAGER_COPY_BARRIER ? "global(eager, per copy)" : "global(deferred)")
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
 }
