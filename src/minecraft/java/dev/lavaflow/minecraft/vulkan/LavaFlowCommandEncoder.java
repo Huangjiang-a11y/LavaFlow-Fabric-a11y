@@ -877,21 +877,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
         for (int g = 0; g < srcStages.size(); g++) {
             java.util.List<PendingTransition> group = transGroups.get(g);
-            VkImageMemoryBarrier.Buffer barriers = VkImageMemoryBarrier.calloc(group.size(), stack);
-            for (int i = 0; i < group.size(); i++) {
-                PendingTransition pt = group.get(i);
-                barriers.get(i).sType$Default()
-                        .oldLayout(pt.sourceLayout).newLayout(pt.targetLayout)
-                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                        .image(pt.texture.handle());
-                barriers.get(i).subresourceRange().aspectMask(LavaFlowVk.aspect(pt.texture.getFormat())).baseMipLevel(0)
-                        .levelCount(pt.texture.getMipLevels()).baseArrayLayer(0).layerCount(pt.texture.getDepthOrLayers());
-                barriers.get(i).srcAccessMask(sourceAccessForLayout(pt.sourceLayout));
-                barriers.get(i).dstAccessMask(destinationAccessForLayout(pt.targetLayout));
+            try (MemoryStack subStack = stackPush()) {
+                VkImageMemoryBarrier.Buffer barriers = VkImageMemoryBarrier.calloc(group.size(), subStack);
+                for (int i = 0; i < group.size(); i++) {
+                    PendingTransition pt = group.get(i);
+                    barriers.get(i).sType$Default()
+                            .oldLayout(pt.sourceLayout).newLayout(pt.targetLayout)
+                            .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                            .image(pt.texture.handle());
+                    barriers.get(i).subresourceRange().aspectMask(LavaFlowVk.aspect(pt.texture.getFormat())).baseMipLevel(0)
+                            .levelCount(pt.texture.getMipLevels()).baseArrayLayer(0).layerCount(pt.texture.getDepthOrLayers());
+                    barriers.get(i).srcAccessMask(sourceAccessForLayout(pt.sourceLayout));
+                    barriers.get(i).dstAccessMask(destinationAccessForLayout(pt.targetLayout));
+                }
+                barriers.flip();
+                vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, barriers);
+                LavaFlowFrameStats.barrierRecorded();
             }
-            barriers.flip();
-            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, barriers);
-            LavaFlowFrameStats.barrierRecorded();
         }
 
         if (!pendingMemoryBarriersOut.isEmpty()) {
