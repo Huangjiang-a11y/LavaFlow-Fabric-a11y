@@ -755,17 +755,24 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                     "[split] " + line + " (want=" + want + ")");
         }
-        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
-        else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (LavaFlowGpuTexture texture : sampled) {
-            int layout = LavaFlowVk.sampledLayout();
-            if (texture.effectiveLayout() != layout) {
-                encoder.transitionTo(texture, layout);
-            }
-        }
         try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            // 必须先让 encoder 收尾：dynamic 渲染下通道内屏障没法录，只能攒到通道结束。
+            // 原来这里直接调 vkCmdEndRenderingKHR，绕过了 endPassNow()，于是积压的屏障和
+            // 布局提交全被跳过，renderPassOpen 也还是 true——后面的转换继续往那个队列里塞，
+            // 重新开始的通道里着色器就在旧布局上采样。legacy 撑得住是因为通道内能录屏障，
+            // dynamic 撑不住，而 dynamic 才是默认路径。
+            encoder.splitOpenPass(stack);
+            for (LavaFlowGpuTexture texture : sampled) {
+                int layout = LavaFlowVk.sampledLayout();
+                if (texture.effectiveLayout() != layout) {
+                    encoder.transitionTo(texture, layout);
+                }
+            }
+            // 现在这些转换进的是通道外队列，立刻发出去，让重新开始的通道拿到真布局。
+            encoder.flushPendingBarriersOut(stack);
             if (context.dynamicRendering()) beginDynamic(stack, true);
             else beginLegacy(stack, true);
+            encoder.markRenderPassOpen();
         }
     }
 

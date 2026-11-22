@@ -613,6 +613,33 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
     }
 
+    /**
+     * 结束当前渲染实例，但通道在逻辑上仍然打开，好让积压的"通道内"屏障落到通道外真正发出去。
+     *
+     * <p>dynamic 渲染下 {@code vkCmdPipelineBarrier} 不能在实例内录，{@code flushPendingBarriersIn}
+     * 只能把它们攒到通道结束。可一旦某张贴图要在通道中途被采样，攒着就等于让着色器在旧布局上
+     * 采样——Mali-G76 上的表现是半透明表面冒出拉长的三角形。这里先结束实例、把屏障连同布局提交
+     * 一起发出去，调用方随后用 beginDynamic/beginLegacy 的 resume 形态重新开始，并
+     * {@link #markRenderPassOpen()}。
+     */
+    void splitOpenPass(MemoryStack stack) {
+        if (!renderPassOpen) return;
+        if (pendingPassEnd) {
+            // 已经结束过并且已经冲刷过，再发一次就是重复结束。
+            endPassNow();
+        } else {
+            if (context.dynamicRendering()) {
+                org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
+            } else {
+                vkCmdEndRenderPass(commandBuffer);
+            }
+            flushPendingBarriersInAtEnd(stack);
+        }
+        renderPassOpen = false;
+    }
+
+    void markRenderPassOpen() { renderPassOpen = true; }
+
     void markRenderPassClosed() { renderPassOpen = false; }
 
     boolean renderPassOpen() { return renderPassOpen; }
