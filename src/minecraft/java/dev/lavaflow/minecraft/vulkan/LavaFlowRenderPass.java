@@ -34,9 +34,6 @@ import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import static org.lwjgl.vulkan.KHRPushDescriptor.vkCmdPushDescriptorSetKHR;
 import static org.lwjgl.vulkan.VK10.*;
 
-// VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002 (from VK_KHR_swapchain)
-private static final int VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002;
-
 /**
  * Vulkan 1.1 render-pass attachment and draw state.
  *
@@ -526,8 +523,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
             // For swap chain image (slot 0), set initial/final layout for proper present transitions
             if (slot == 0) {
-                renderingAttachment.initialLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
-                        .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                renderingAttachment.initialLayout(1000001002)
+                        .finalLayout(1000001002);
             }
             if (clear && attachment.clearValue().color() != null) {
                 Vector4fc value = attachment.clearValue().color();
