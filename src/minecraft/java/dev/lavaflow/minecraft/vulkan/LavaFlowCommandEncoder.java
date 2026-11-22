@@ -577,18 +577,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (!pendingPassEnd) return;
         boolean wasDynamic = pendingPassDynamic;
         pendingPassEnd = false;
-        if (wasDynamic) {
-            // Transition swap chain image back to PRESENT_SRC for present
-            if (activeRenderPass != null && activeRenderPass.colorViews[0] != null) {
-                LavaFlowGpuTexture swapchainTexture = activeRenderPass.colorViews[0].texture();
-                if (swapchainTexture != null && swapchainTexture.layout() == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-                    transition(swapchainTexture, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-                }
-            }
-            org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
-        } else {
-            vkCmdEndRenderPass(commandBuffer);
-        }
+        if (wasDynamic) org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(commandBuffer);
+        else vkCmdEndRenderPass(commandBuffer);
         // After the render pass ends, we can now safely flush in-pass barriers.
         try (MemoryStack stack = stackPush()) { flushPendingBarriersInAtEnd(stack); }
     }
