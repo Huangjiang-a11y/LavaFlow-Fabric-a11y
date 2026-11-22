@@ -622,7 +622,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             VkImageMemoryBarrier.Buffer barriers = VkImageMemoryBarrier.calloc(group.size(), stack);
             for (int i = 0; i < group.size(); i++) {
                 PendingTransition pt = group.get(i);
-                barriers.put(i).sType$Default()
+                barriers.get(i).sType$Default()
                         .oldLayout(pt.sourceLayout).newLayout(pt.targetLayout)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(pt.texture.handle());
@@ -677,7 +677,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             VkImageMemoryBarrier.Buffer barriers = VkImageMemoryBarrier.calloc(group.size(), stack);
             for (int i = 0; i < group.size(); i++) {
                 PendingTransition pt = group.get(i);
-                barriers.put(i).sType$Default()
+                barriers.get(i).sType$Default()
                         .oldLayout(pt.sourceLayout).newLayout(pt.targetLayout)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(pt.texture.handle());

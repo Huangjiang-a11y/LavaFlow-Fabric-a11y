@@ -374,7 +374,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
         // would put pipeline work between the tile load and the tile store this is meant to measure.
         timedPass = encoder.beginTimedPass(this::passLabel);
-        try (MemoryStack stack = stackPush()) {
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, false);
             else beginLegacy(stack, false);
             applyViewport(stack);
@@ -387,7 +387,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         if (pipeline != null) recordPipelineBind();
         if (pendingVertexMask != 0) {
-            try (MemoryStack stack = stackPush()) {
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                 for (int slot = 0; slot < pendingVertexBuffers.length; slot++) {
                     if ((pendingVertexMask & (1 << slot)) == 0) continue;
                     LavaFlowFrameStats.vertexBufferBindRecorded();
@@ -451,7 +451,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         LavaFlowGpuTexture depthTexture = depthView.texture();
         Double value = encoder.takePendingDepthClear(depthTexture);
         if (value == null) return;
-        try (MemoryStack stack = stackPush()) {
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
             VkClearAttachment.Buffer clear = VkClearAttachment.calloc(1, stack)
                     .aspectMask(LavaFlowVk.aspect(depthTexture.getFormat())).colorAttachment(0);
             clear.clearValue().depthStencil().depth(value.floatValue()).stencil(0);
@@ -702,7 +702,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 encoder.transition(texture, layout);
             }
         }
-        try (MemoryStack stack = stackPush()) {
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, true);
             else beginLegacy(stack, true);
         }
@@ -754,7 +754,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         viewportHeight = height;
         // 渲染通道外记录 vkCmdSetViewport 是非法的，所以通道还没开始时只记下来，begin 时一并下发。
         if (begun) {
-            try (MemoryStack stack = stackPush()) {
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                 applyViewport(stack);
             }
         }
@@ -887,7 +887,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void enableScissor(int x, int y, int width, int height) {
         if (begun) {
-            try (MemoryStack stack = stackPush()) { setScissor(stack, x, y, width, height); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { setScissor(stack, x, y, width, height); }
         } else {
             scissorX = x;
             scissorY = y;
@@ -928,7 +928,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         LavaFlowFrameStats.vertexBufferBindCalled(repeated);
         if (repeated) return;
         if (begun) {
-            try (MemoryStack stack = stackPush()) {
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                 LavaFlowFrameStats.vertexBufferBindRecorded();
                 vkCmdBindVertexBuffers(encoder.commandBuffer(), slot, stack.longs(handle), stack.longs(offset));
             }
@@ -961,7 +961,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
         if (encoder.renderPassOpen()) {
-            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
             for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
             encoder.pendingLayoutTextures().clear();
         }
@@ -999,7 +999,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (drawCount <= 0) return;
         if (PASS_SEQUENCE) seqDraws += drawCount;
         if (encoder.renderPassOpen()) {
-            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }
         pushDescriptors();
         noteDrawKind("multiDrawIndexed");
@@ -1047,7 +1047,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         if (encoder.renderPassOpen()) {
-            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
             for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
             encoder.pendingLayoutTextures().clear();
         }
@@ -1117,7 +1117,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
         if (encoder.renderPassOpen()) {
-            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
             for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
             encoder.pendingLayoutTextures().clear();
         }
@@ -1129,7 +1129,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
         if (encoder.renderPassOpen()) {
-            try (MemoryStack stack = stackPush()) { encoder.flushPendingBarriersIn(stack); }
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
             for (LavaFlowGpuTexture t : encoder.pendingLayoutTextures()) t.commitLayout();
             encoder.pendingLayoutTextures().clear();
         }
@@ -1216,7 +1216,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         LavaFlowFrameStats.descriptorPushed();
         if (context.pushDescriptors()) {
-            try (MemoryStack stack = stackPush()) {
+            try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                 vkCmdPushDescriptorSetKHR(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.pipelineLayout(), 0, buildWrites(stack, entries, 0, false));
             }
@@ -1292,7 +1292,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         long descriptorSet = cache.lookup(key);
         boolean reused = descriptorSet != 0;
         if (reused) LavaFlowFrameStats.descriptorSetReused();
-        try (MemoryStack stack = stackPush()) {
+        try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
             if (!reused) {
                 descriptorSet = cache.allocateAndStore(key, pipeline.descriptorSetLayout(),
                         java.util.Arrays.copyOf(resourceHandles, handleCount));
