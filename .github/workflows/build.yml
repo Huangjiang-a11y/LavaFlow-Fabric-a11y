@@ -288,10 +288,20 @@ jobs:
       - name: Smoke-test the renderer under the validation layer
         run: |
           export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          # bash -e would abort here on a non-zero exit before the log was ever shown, which is
+          # how this step failed silently for a whole session: the reason it failed was written
+          # to build/smoke.log and never read. Capture the status, print the log, then fail.
+          set +e
           xvfb-run -a -s "-screen 0 1280x720x24" \
             env JAVA_OPTS=-Dlavaflow.validation=true \
             build/install/lavaflow/bin/lavaflow --frames=600 > build/smoke.log 2>&1
-          cat build/smoke.log
+          status=$?
+          set -e
+          cat build/smoke.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=smoke exited $status::$(tail -c 1500 build/smoke.log 2>/dev/null | tr '\n' '|')"
+            exit "$status"
+          fi
           grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke.log
           if grep -q "\[LavaFlow Vulkan validation\]" build/smoke.log; then
             echo "::error::the validation layer reported findings during the smoke run"
@@ -304,10 +314,17 @@ jobs:
       - name: Smoke-test the GENERAL sampled layout (the opt-out) under the validation layer
         run: |
           export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          set +e
           xvfb-run -a -s "-screen 0 1280x720x24" \
             env JAVA_OPTS="-Dlavaflow.validation=true -Dlavaflow.sampledReadOnlyLayout=false" \
             build/install/lavaflow/bin/lavaflow --frames=600 > build/smoke-readonly.log 2>&1
-          cat build/smoke-readonly.log
+          status=$?
+          set -e
+          cat build/smoke-readonly.log || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=smoke (general) exited $status::$(tail -c 1500 build/smoke-readonly.log 2>/dev/null | tr '\n' '|')"
+            exit "$status"
+          fi
           grep -q "validation enabled through the VK_LAYER_KHRONOS_validation layer" build/smoke-readonly.log
           if grep -q "\[LavaFlow Vulkan validation\]" build/smoke-readonly.log; then
             echo "::error::the validation layer reported findings with the sampled-read-only layout"
