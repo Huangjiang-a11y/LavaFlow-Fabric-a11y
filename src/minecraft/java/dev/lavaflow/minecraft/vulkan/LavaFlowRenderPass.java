@@ -360,7 +360,18 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (fullArea) pendingDepthClearInline = true;
             else encoder.flushPendingDepthClear(depthView.texture());
         }
+        // Collect color attachment textures to avoid double-transition
+        java.util.Set<LavaFlowGpuTexture> colorAttachmentTextures = new java.util.HashSet<>();
+        for (LavaFlowGpuTextureView view : colorViews) {
+            if (view != null) colorAttachmentTextures.add(view.texture());
+        }
+        if (depthView != null) colorAttachmentTextures.add(depthView.texture());
+
         for (LavaFlowGpuTexture sampled : sampledTextures()) {
+            // Skip if this texture is also a color/depth attachment in this pass
+            // The render pass will handle its layout, avoiding ping-pong between
+            // SAMPLED and COLOR_ATTACHMENT_OPTIMAL
+            if (colorAttachmentTextures.contains(sampled)) continue;
             int layout = LavaFlowVk.sampledLayout();
             if (sampled.layout() != layout) {
                 encoder.transition(sampled, layout);
