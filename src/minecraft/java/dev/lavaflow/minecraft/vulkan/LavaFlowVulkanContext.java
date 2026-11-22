@@ -970,7 +970,7 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
                     .srcAccessMask(0).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
             for (int s = 0; s < subpasses.size(); s++) {
                 deps.get(di++).srcSubpass(s).dstSubpass(s)
-                        .srcStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
+                        .srcStageMask(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)
                         .dstStageMask(VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)
                         .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
