@@ -831,34 +831,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     private void memoryBarrier(MemoryStack stack) {
-        // Use Synchronization2 API when available (matches official backend behavior for copy barriers)
-        // context.synchronization2() already checks both device support and LWJGL binding presence.
-        if (context.synchronization2()) {
-            VkMemoryBarrier2KHR.Buffer barrier = VkMemoryBarrier2KHR.calloc(1, stack).sType$Default()
-                    .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_READ_BIT | org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT)
-                    .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_READ_BIT | org.lwjgl.vulkan.VK13.VK_ACCESS_2_MEMORY_WRITE_BIT);
-            org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
-                    VkDependencyInfoKHR.calloc(stack).sType$Default().pMemoryBarriers(barrier));
-        } else {
-            // Fallback: old API but semantically identical stages/access (ALL_COMMANDS + MEMORY_READ|WRITE)
-            // Log once per encoder to diagnose why we're on fallback path
-            if (!fallbackLogged) {
-                fallbackLogged = true;
-                boolean devSupports = context.enabledExtensions().contains("VK_KHR_synchronization2");
-                String reason = devSupports ? "LWJGL binding missing (3.4.1)" : "device lacks VK_KHR_synchronization2";
-                LOGGER.log(System.Logger.Level.INFO, "LavaFlow memoryBarrier fallback: {0}", reason);
-            }
-            VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
-        }
+        VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
+                .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
+                .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
     }
-    /** One-time log for fallback reason. */
-    private boolean fallbackLogged = false;
 
     /**
      * Records the barrier that makes the pending buffer writes visible to the next draw.
@@ -874,10 +852,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (!bufferWriteBarrierPending) return;
         bufferWriteBarrierPending = false;
         try (MemoryStack stack = stackPush()) {
-            // Official backend global barrier: ALL_COMMANDS + MEMORY_READ|WRITE on both sides
-            VkMemoryBarrier.Buffer barrierBuf = VkMemoryBarrier.calloc(1, stack).sType$Default()
-                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            VkMemoryBarrier.Buffer barrierBuf = VkMemoryBarrier.calloc(1, stack).sType$Default();
             VkMemoryBarrier barrier = barrierBuf.get(0);
             if (renderPassOpen) {
                 pendingMemoryBarriersIn.add(barrier);
@@ -885,6 +860,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 pendingMemoryBarriersOut.add(barrier);
             }
         }
+        bufferWriteBarrierPending = false;
         recentlyWrittenBuffers.clear();
     }
 
@@ -949,7 +925,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
@@ -1009,7 +985,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
@@ -1063,7 +1039,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             memBuf.flip();
             vkCmdPipelineBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     0, memBuf, null, null);
             LavaFlowFrameStats.barrierRecorded();
         }
