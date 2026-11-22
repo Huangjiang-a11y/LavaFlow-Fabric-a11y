@@ -527,6 +527,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public RenderPassBackend createRenderPass(RenderPassDescriptor descriptor) {
         if (renderPassOpen) throw new IllegalStateException("A render pass is already open");
         flushBufferWriteBarrier();
+        // 通道外积压的转换和屏障必须在这里落地，不能留到 submit() 末尾。
+        //
+        // 原因：顶点/间接参数是用 vkCmdCopyBuffer 写进去的，那是 TRANSFER 阶段；而通道内的
+        // 屏障受子依赖约束，srcStageMask 只能是图形阶段（VUID 00837/00838），等不到 TRANSFER。
+        // 唯一能覆盖 TRANSFER 的位置就在通道之外。放在这里时 renderPassOpen 还是 false，合法。
+        //
+        // 若留到 submit()：屏障会排在通道之后，通道内的 draw 早已读过还没 make available 的
+        // 顶点——真机表现就是个别三角形被拉长（水面/半透明表面最明显）。Out 屏障用的
+        // srcStageMask=BOTTOM_OF_PIPE 展开后含 TRANSFER，dstStageMask 是 VERTEX|FRAGMENT，
+        // 放在通道前正好构成完整依赖。
+        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
         renderPassOpen = true;
         LavaFlowRenderPass recycled = passPool.pollFirst();
         activeRenderPass = recycled == null ? new LavaFlowRenderPass(this, descriptor) : recycled.reset(descriptor);
