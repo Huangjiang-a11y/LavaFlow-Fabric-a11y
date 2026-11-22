@@ -36,8 +36,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * no longer exists and must not be reintroduced.
  */
 final class LavaFlowRenderPipeline implements BackendRenderPipeline {
-    /** 输入附件刻意不在此列：见 buildEntries 里把 INPUT_ATTACHMENT 降级为采样图那段。 */
-    enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, TEXEL_BUFFER }
+    enum EntryType { UNIFORM_BUFFER, SAMPLED_IMAGE, INPUT_ATTACHMENT, TEXEL_BUFFER }
     record Entry(EntryType type, String name, GpuFormat texelFormat) {}
 
     final LavaFlowDevice device;
@@ -230,11 +229,10 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 case UNIFORM_BUFFER -> EntryType.UNIFORM_BUFFER;
                 case COMBINED_IMAGE_SAMPLER -> EntryType.SAMPLED_IMAGE;
                 case TEXEL_BUFFER -> EntryType.TEXEL_BUFFER;
-                // 输入附件这条路被整体否掉：Vulkan 的 subpassLoad 需要 INPUT_ATTACHMENT 描述符，
-                // 且描述符的 imageLayout 必须与该附件在读取子通道时的布局严格一致。LavaFlow 从来没
-                // 把这条链走通（EntryType 里也不再保留这个取值），所以这里一律降级成采样图并在第一次
-                // 遇到时告警：宁可画面可疑，也不要静默错绑。前端真要用 input attachment，得先让
-                // 渲染通道的 pInputAttachments 与描述符布局成对设计，不是改一个常量能解决的。
+                // 6 新增：subpass 的 input attachment（片元着色器里按 subpass input 采样，Vulkan 上
+                // 需要 VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT，与采样图不是同一种描述符）。LavaFlow
+                // 目前没有这条路径，先按采样图绑定并在第一次遇到时告警——宁可画面可疑也不要静默
+                // 错绑；真用上了，补一个输入附件描述符类型即可。
                 case INPUT_ATTACHMENT -> {
                     if (INPUT_ATTACHMENT_WARNED.compareAndSet(false, true)) {
                         System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
@@ -530,6 +528,7 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
             case UNIFORM_BUFFER -> dynamicUniforms
                     ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             case SAMPLED_IMAGE -> VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case INPUT_ATTACHMENT -> VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
             case TEXEL_BUFFER -> VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
         };
     }
