@@ -47,10 +47,7 @@ import static org.lwjgl.vulkan.VK10.*;
  * attachment writes and shader reads. State set before the first draw is buffered and replayed when
  * the pass begins; a pass that never draws records nothing at all unless it carries clears.
  */
-final class LavaFlowRenderPass implements RenderPassBackend {
-    // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002 (from VK_KHR_swapchain)
-    private static final int VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002;
-    private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
+final class LavaFlowRenderPass implements RenderPassBackend {    private static final String LAYOUT_DEBUG = System.getProperty("lavaflow.debugLayoutChecks", "");
     // Layout of the VkMultiDrawIndexedInfoEXT records that multiDrawIndexed receives, as int indices.
     private static final int INDEXED_INFO_INTS = VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES;
     private static final int INDEXED_INFO_FIRST_INDEX = VkMultiDrawIndexedInfoEXT.FIRSTINDEX / Integer.BYTES;
@@ -525,8 +522,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                     .storeOp(attachment.store() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
             // For swap chain image (slot 0), set initial/final layout for proper present transitions
             if (slot == 0) {
-                renderingAttachment.initialLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
-                        .finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                renderingAttachment.initialLayout(1000001002)
+                        .finalLayout(1000001002);
             }
             if (clear && attachment.clearValue().color() != null) {
                 Vector4fc value = attachment.clearValue().color();
