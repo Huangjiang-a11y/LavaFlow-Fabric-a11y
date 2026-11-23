@@ -1063,6 +1063,12 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
+        // 和两条 indirect 路径同一件事：绘制前必须把"缓冲被写过"的依赖建立起来。
+        // 这条以前漏了 —— 只有 drawIndirect / drawIndexedIndirect 会调它，于是凡是通过
+        // drawIndexed 读刚上传的顶点/索引缓冲的绘制都没有同步。快照-10 把地形改成 indirect
+        // 之后，剩下的非间接绘制（实体、方块实体、第一人称手臂）正好走这条路，真机表现就是
+        // 尖刺变少但没消失。
+        flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }
@@ -1100,6 +1106,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
         if (PASS_SEQUENCE) seqDraws += drawCount;
+        flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }
@@ -1217,6 +1224,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
+        flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
         }
