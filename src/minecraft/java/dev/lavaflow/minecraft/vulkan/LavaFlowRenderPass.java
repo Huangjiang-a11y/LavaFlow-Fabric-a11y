@@ -81,6 +81,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static final boolean DROP_DEPTH = !Boolean.getBoolean("lavaflow.noDropDepth");
     private static final java.util.Set<String> DROP_DEPTH_LABELS =
             java.util.Set.of("Item in hand", "3d crosshair");
+    /**
+     * 通道构成一次性报告：每个标签第一次建通道时打一行，说明它的颜色/深度附件到底是谁。
+     *
+     * <p>手臂那个通道的特别之处是"颜色来自主目标、深度来自别处"（26.4 的 hud_3d_depth）。
+     * 只要这一行能看出它拿到的深度是不是 hud_3d_depth、以及是不是根本没有深度，就不必再猜。
+     */
+    private static final java.util.Set<String> PASS_REPORTED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -339,7 +347,42 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         scissorY = area.y();
         scissorWidth = area.width();
         scissorHeight = area.height();
+        reportPassShape();
         return this;
+    }
+
+    /** 每个标签只打一次，避免每帧几十行。 */
+    private void reportPassShape() {
+        String label = passLabel();
+        if (!PASS_REPORTED.add(label)) return;
+        StringBuilder sb = new StringBuilder("[pass] \"").append(label).append("\" ");
+        sb.append("colors=").append(colorViews.length).append('[');
+        for (int slot = 0; slot < colorViews.length; slot++) {
+            if (slot > 0) sb.append(", ");
+            LavaFlowGpuTextureView view = colorViews[slot];
+            if (view == null) { sb.append('-'); continue; }
+            RenderPassDescriptor.Attachment attachment = colorAttachment(slot);
+            sb.append(view.texture().label()).append(' ')
+                    .append(loadOpName(attachment == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(attachment, false)))
+                    .append(attachment != null && attachment.store() ? "/store" : "/drop");
+        }
+        sb.append("] depth=");
+        if (depthView == null) {
+            sb.append("none");
+        } else {
+            RenderPassDescriptor.Attachment attachment = depthAttachment();
+            sb.append(depthView.texture().label()).append(' ')
+                    .append(loadOpName(attachment == null ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : loadOp(attachment, false)))
+                    .append(attachment != null && attachment.store() ? "/store" : "/drop");
+        }
+        sb.append(" extent=").append(outputWidth).append('x').append(outputHeight);
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO, sb.toString());
+    }
+
+    private static String loadOpName(int op) {
+        if (op == VK_ATTACHMENT_LOAD_OP_CLEAR) return "clear";
+        if (op == VK_ATTACHMENT_LOAD_OP_LOAD) return "load";
+        return "dontcare";
     }
 
     /**
