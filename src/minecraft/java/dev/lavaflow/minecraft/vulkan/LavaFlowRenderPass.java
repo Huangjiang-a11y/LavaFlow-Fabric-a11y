@@ -717,9 +717,19 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      * those vertices" — the pass has to be split instead, the same shape as splitForSampledTransitions.
      */
     private void flushPendingBufferBarrier() {
-        if (!encoder.bufferWriteBarrierPending() && !encoder.indirectBarrierPending()) return;
-        if (begun && !ended && encoder.indirectBarrierPending()) {
-            splitPassForIndirectBarrier();
+        if (!encoder.bufferWriteBarrierPending() && !encoder.indirectBarrierPending()
+                && !encoder.inPassBufferWritePending()) return;
+        // 通道内记下的缓冲写屏障必须在这里就拆通道发出去，不能等通道结束。
+        //
+        // 等通道结束的后果：同一通道里后面那个绘制读的是刚被拷贝写过的顶点/索引缓冲，而屏障
+        // 还排在 vkCmdEndRenderPass 之后 —— 读的时候屏障根本没到，读到的是半截数据。真机上
+        // 的表现就是个别的三角形被拉得极远，而且只偶尔出现（取决于那帧有没有在通道内录拷贝）。
+        //
+        // 通道内也发不出来：屏障在通道里只许命名图形阶段，写缓冲区的是 vkCmdCopyBuffer
+        // （TRANSFER），图形阶段覆盖不到它的写。唯一合法的办法就是把通道拆开，在通道外用
+        // ALL_COMMANDS 发，再带着载入操作重开。
+        if (begun && !ended && (encoder.indirectBarrierPending() || encoder.inPassBufferWritePending())) {
+            splitPassForBufferBarrier();
             return;
         }
         encoder.flushBufferWriteBarrier();
@@ -736,12 +746,14 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      *
      * <p>管线、顶点/索引绑定、描述符、动态状态都是命令缓冲状态，跨通道边界保持，不需要重绑。
      */
-    private void splitPassForIndirectBarrier() {
+    private void splitPassForBufferBarrier() {
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
         encoder.markRenderPassClosed();
         try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
             // 先落账（此时 renderPassOpen 已为 false，记到通道外那一侧），再在通道外发出去。
+            // 通道内记下的那几笔也要一起搬出来 —— 它们同样只能用 ALL_COMMANDS 发。
+            encoder.moveInPassBufferWriteBarriersOut();
             encoder.flushBufferWriteBarrier();
             encoder.flushPendingBarriersOut(stack);
             if (context.dynamicRendering()) beginDynamic(stack, true);

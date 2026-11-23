@@ -775,7 +775,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             } else if (LavaFlowSync.EAGER_COPY_BARRIER && !renderPassOpen) {
                 // 4c0a957 的写法：每笔拷贝后立刻一条官方全局屏障。不推断、不记账、不延迟。
                 // 通道外的 ALL_COMMANDS 合法；通道内不许用它（VUID 07892 只允许图形阶段），
-                // 那种情况仍留给通道内那条屏障，见 flushPendingBarriersIn。
+                // 那种情况由 LavaFlowRenderPass.flushPendingBufferBarrier 拆通道后在通道外发。
                 memoryBarrier(stack);
             } else {
                 // 延迟发：只记一笔"这个缓冲被写过"，等下一个落账点再发。
@@ -1032,24 +1032,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
         if (pendingBufferWriteBarriersIn > 0) {
             // 这里已经不在通道里了（调用点 endPassNow 先 vkCmdEndRenderPass 再调本方法），
-            // 所以可以、也必须用 ALL_COMMANDS。
+            // 所以搬回通道外那一侧，用 ALL_COMMANDS 发 —— 不能就地用 ALL_GRAPHICS。
             //
-            // 原先的注释说"通道内不许把 TRANSFER 写进 srcStageMask，BOTTOM_OF_PIPE 是唯一
-            // 能覆盖 TRANSFER 又合法的写法"，前提错了：BOTTOM_OF_PIPE 里不执行任何命令，
-            // 当源阶段时这条屏障不等待前面任何阶段 —— 它不是"覆盖 TRANSFER"，而是什么都
-            // 不等。写没落地绘制就开读，水面上就是个别三角形被拉得极远，而缓冲内容本身合法，
-            // CPU 侧诊断全过。真机对照（2026-11-23）确认：换成 ALL_COMMANDS 后水面正常。
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
-            memBuf.get(0).sType$Default()
-                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                    0, memBuf, null, null);
-            LavaFlowFrameStats.barrierRecorded();
-            LavaFlowFrameStats.copyBarrierRecorded();
-            pendingBufferWriteBarriersIn = 0;
+            // 原因：写缓冲区的是 vkCmdCopyBuffer，属于 TRANSFER 阶段。ALL_GRAPHICS 只等图形
+            // 阶段，覆盖不到 TRANSFER 的写，等于又一次漏同步。
+            moveInPassBufferWriteBarriersOut();
+            flushPendingBarriersOut(stack);
         }
 
         // 屏障已经记进命令缓冲，这里必须把"已排队"落成"已生效"。漏掉这一步，pendingLayout 会
@@ -1101,33 +1089,19 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             LavaFlowFrameStats.barrierRecorded();
         }
 
-        if (pendingBufferWriteBarriersIn > 0) {
-            // 这里的每一次拷贝写在录命令时都发生在通道内，而通道内的拷贝只可能是图形阶段发起的
-            // （vkCmdCopyBuffer 本身不允许录进渲染通道，真要走这里的是通道内的 clear / blit 与
-            // 前端安排的拷贝）。源阶段因此不能用 BOTTOM_OF_PIPE —— 那里不执行任何命令，写在
-            // srcStageMask 上这条屏障就不等待前面任何阶段完成，等于空操作，写没落地绘制就开读。
-            //
-            // 通道内也不能写 ALL_COMMANDS（VUID-vkCmdPipelineBarrier-None-07892 只允许图形
-            // 阶段），所以两侧都用 ALL_GRAPHICS：它覆盖 VERTEX_INPUT（顶点取数在
-            // VERTEX_INPUT，不是 VERTEX_SHADER）、各类着色器与颜色/深度写出。
-            //
-            // DRAW_INDIRECT 在通道内不能命名（不是图形阶段），间接参数那条依赖由通道外的
-            // 拆通道路径单独建立，见 LavaFlowRenderPass.splitPassForIndirectBarrier。
-            //
-            // 多条合并为一条：掩码逐字相同，且都落在同一段通道内区间（中间只有其它不读这些
-            // 缓冲的绘制），合并与原意等价，省下 Mali 上每条都要付的 tile 状态刷新。
-            VkMemoryBarrier.Buffer memBuf = VkMemoryBarrier.calloc(1, stack);
-            memBuf.get(0).sType$Default()
-                    .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
-                    .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-            vkCmdPipelineBarrier(commandBuffer,
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                    VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                    0, memBuf, null, null);
-            LavaFlowFrameStats.barrierRecorded();
-            LavaFlowFrameStats.copyBarrierRecorded();
-            pendingBufferWriteBarriersIn = 0;
-        }
+        // 缓冲写屏障不在这里发。
+        //
+        // 这里可能真的在通道内：legacy 通道（本机 dynamicRendering=false）时绘制调用会在
+        // renderPassOpen 期间调本方法。而通道内只许命名图形阶段，写缓冲区的是 vkCmdCopyBuffer，
+        // 属于 TRANSFER 阶段，图形阶段覆盖不到它的写 —— 这条依赖在通道内没有合法写法。
+        //
+        // 所以账留在 pendingBufferWriteBarriersIn 上不动，由调用方先拆通道再发：
+        // LavaFlowRenderPass.flushPendingBufferBarrier 发现 inPassBufferWritePending 就拆，
+        // 拆完 moveInPassBufferWriteBarriersOut 把它搬到通道外那侧，用 ALL_COMMANDS 发。
+        //
+        // 以前这里是 BOTTOM_OF_PIPE → ALL_GRAPHICS：BOTTOM_OF_PIPE 不等待前面任何阶段，
+        // 等于空操作；ALL_GRAPHICS 又覆盖不到 TRANSFER。两头都不成立，真机上就是个别三角形
+        // 被拉得极远。改成 ALL_GRAPHICS → ALL_GRAPHICS 也没用，源端仍不是 TRANSFER。
 
         // Commit layouts after barriers are recorded
         for (PendingTransition pt : pendingTransitionsIn) {
@@ -1137,6 +1111,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
 
+
+    /** 通道内记下的缓冲写屏障条数 > 0 时，下一个绘制前必须先把通道拆开。 */
+    boolean inPassBufferWritePending() { return pendingBufferWriteBarriersIn > 0; }
+
+    /**
+     * 把通道内记下的缓冲写屏障挪到通道外那一侧。
+     *
+     * <p>通道内的屏障只许命名图形阶段（VUID-vkCmdPipelineBarrier-None-07892），而缓冲区是被
+     * {@code vkCmdCopyBuffer} 写的，那是 TRANSFER 阶段 —— 图形阶段覆盖不到它的写。所以"拷贝
+     * 落地到可以被读"这件事在通道内根本表达不出来，只能在拆开通道后、在通道外用 ALL_COMMANDS
+     * 发。这里只搬账，真正发屏障还是 flushPendingBarriersOut。
+     */
+    void moveInPassBufferWriteBarriersOut() {
+        if (pendingBufferWriteBarriersIn == 0) return;
+        pendingBufferWriteBarriersOut += pendingBufferWriteBarriersIn;
+        pendingBufferWriteBarriersIn = 0;
+    }
 
     boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
 
@@ -1153,11 +1144,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if ((destination.buffer().usage() & GpuBuffer.USAGE_INDIRECT_PARAMETERS) != 0) {
             indirectBarrierPending = true;
         }
-        // A write inside a pass cannot wait for the next flush point: the barrier would land in a later
-        // command buffer (or outside the pass altogether) while the draw in this one already reads it —
-        // for indirect draws that means the command processor reading parameters the copy has not written
-        // yet, which is a garbage index count in the hands of the GPU. The in-pass barrier is legal now that
-        // the render pass carries its self-dependency, so flush here.
+        // 通道内记一笔，等绘制前拆通道时发（LavaFlowRenderPass.flushPendingBufferBarrier）。
+        // 不能在通道内就地发：写缓冲区的是 vkCmdCopyBuffer，TRANSFER 阶段，而通道内的屏障只许
+        // 命名图形阶段 —— 覆盖不到，等于没发。也不能等通道结束才发：同一通道里后面那个绘制
+        // 已经在读这块缓冲了。
         if (renderPassOpen) flushBufferWriteBarrier();
     }
 
