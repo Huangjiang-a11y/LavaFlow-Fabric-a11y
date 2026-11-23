@@ -30,6 +30,15 @@ public final class LavaFlowFrameStats {
     private static int debugFrameHead;
     private static long debugPreviousFrameNanos;
     private static final long REPORT_INTERVAL_NANOS = 5_000_000_000L;
+    /**
+     * 超过这个间隔的"帧"不是渲染出来的帧，而是停下来过：暂停菜单、切后台、系统卡住。
+     *
+     * <p>它们必须整个丢掉，而且要把窗口清空。均值是在最近 {@link #WINDOW} 帧上算的，
+     * 180 fps 下这 600 帧只有 3.3 秒；一个 30 秒的暂停样本混进去，均值会从 5.6 毫秒变成
+     * 55 毫秒，报出来就是 18 fps —— 而且这个错值要在窗口里待满 600 帧才被顶出去。
+     * 按一下键弹出暂停菜单、再按回去，就能把后面几秒的读数全部污染。
+     */
+    private static final long DISCONTINUITY_NANOS = 1_000_000_000L;
 
     private static final long[] intervals = new long[WINDOW];
     private static int count;
@@ -490,12 +499,20 @@ public final class LavaFlowFrameStats {
     private static synchronized void record() {
         long now = System.nanoTime();
         if (previousFrameNanos != 0) {
-            if (count < WINDOW) {
-                intervals[count++] = now - previousFrameNanos;
+            long interval = now - previousFrameNanos;
+            if (interval >= DISCONTINUITY_NANOS) {
+                // 不是一帧：中间停过（暂停、切后台、系统卡顿）。丢掉这个样本，并且整窗清空，
+                // 否则这一个样本会在接下来 WINDOW 帧里一直拖着均值。
+                count = 0;
+                lastReportNanos = now;
             } else {
-                intervals[(int) (totalFrames % WINDOW)] = now - previousFrameNanos;
+                if (count < WINDOW) {
+                    intervals[count++] = interval;
+                } else {
+                    intervals[(int) (totalFrames % WINDOW)] = interval;
+                }
+                totalFrames++;
             }
-            totalFrames++;
         }
         previousFrameNanos = now;
         if (lastReportNanos == 0) lastReportNanos = now;

@@ -62,8 +62,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
-    /** 本帧已经为哪些目标缓冲补过 WAR 屏障（同一块一帧只需要一次）。 */
-    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet warGuardedThisFrame = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    /**
+     * 本帧是否已经补过 WAR 屏障。
+     *
+     * <p>一条就够，不需要每块缓冲一条：管线屏障的源作用域覆盖的是"此前提交到这个队列的全部
+     * 命令"，所以本帧第一次拷贝前那一条已经把之后所有拷贝都排在旧读后面了。以前按缓冲逐条发，
+     * 一帧 7 条全屏屏障，Mali 上每条都要刷一遍 tile 状态 —— 白付。
+     */
+    private boolean warBarrierDoneThisFrame;
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
@@ -216,7 +222,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
-        warGuardedThisFrame.clear();
+        warBarrierDoneThisFrame = false;
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
         boundIndexHandle = 0;
         boundIndexType = -1;
@@ -761,8 +767,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             // 图形阶段），TRANSFER 也不是图形阶段，所以通道内没有合法写法表达"等上一批读结束"。
             // 通道内录拷贝本身就少见（本机 dynamicRendering=false 时主要走通道外的上传路径），
             // 这一格暂时留着，详见 LavaFlowSync.COPY_WAR_BARRIER。
-            if (LavaFlowSync.COPY_WAR_BARRIER && !renderPassOpen
-                    && warGuardedThisFrame.add(buffer(destination).handle())) {
+            if (LavaFlowSync.COPY_WAR_BARRIER && !renderPassOpen && !warBarrierDoneThisFrame) {
+                warBarrierDoneThisFrame = true;
                 globalBarrier(stack);
                 LavaFlowFrameStats.barrierRecorded();
             }
