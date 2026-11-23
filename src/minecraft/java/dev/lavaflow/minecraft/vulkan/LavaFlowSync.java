@@ -47,11 +47,29 @@ final class LavaFlowSync {
      * 26.4-snapshot-8 上画面干净、拖到 snapshot-10 才闪。也就是说 87d3afe 这条全局屏障
      * 早在 0.1.6 里就以延迟形态存在，它解释不了"同一个包 8 好 10 坏"。
      *
-     * <p>所以它只留作对照开关：{@code -Dlavaflow.eagerCopyBarrier=true}。默认保持与
-     * 0.1.6 逐字一致的延迟形态，免得在找 snapshot-10 的差异时混进一个自己改的动作。
+     * <p>它现在是默认：真机上每笔拷贝后发一条 ALL_COMMANDS → ALL_COMMANDS，与官方
+     * VulkanCommandEncoder.memoryBarrier 逐字一致。延迟路径（
+     * {@code -Dlavaflow.eagerCopyBarrier=false}）保留作对照。
      */
     static final boolean EAGER_COPY_BARRIER =
             !"false".equals(System.getProperty("lavaflow.eagerCopyBarrier", "true"));
+
+    /**
+     * 拷贝<b>之前</b>也发一条全局屏障（写后读 / WAR）。
+     *
+     * <p>已有的屏障都在拷贝之后，管的是"这次写完之后谁能读"（RAW）。缺的是另一半：这块缓冲
+     * 可能刚被上一帧还在跑的绘制读过，而区块重建又会把新数据写进同一片区域 —— 写必须等那些读
+     * 结束。同一队列上提交是按序提交的，但执行可以重叠，没有屏障时拷贝就能踩进正在进行的读取。
+     * 读到的旧 draw 拿着旧的顶点数去解释新数据，就是"个别三角形被拉得极远"。
+     *
+     * <p>真机症状只在移动时出现，正好对应区块重建（静止时没有新分配、没有重用）。
+     *
+     * <p>官方后端同样只在拷贝后发屏障 —— 但官方后端不支持 Android，从未在 Mali 上运行过，
+     * 它的形状不构成"这样写是安全的"的证据。真机对照以这个开关为准：
+     * {@code -Dlavaflow.copyWarBarrier=false} 关掉。
+     */
+    static final boolean COPY_WAR_BARRIER =
+            !"false".equals(System.getProperty("lavaflow.copyWarBarrier", "true"));
 
     /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
     static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
@@ -62,6 +80,7 @@ final class LavaFlowSync {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)"
                         : EAGER_COPY_BARRIER ? "global(eager, per copy)" : "global(deferred)")
+                        + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
 }

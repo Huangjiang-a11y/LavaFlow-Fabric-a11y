@@ -62,6 +62,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    /** 本帧已经为哪些目标缓冲补过 WAR 屏障（同一块一帧只需要一次）。 */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet warGuardedThisFrame = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
@@ -214,6 +216,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
         commandBuffer = slot.commandBuffer;
         transientMemory = slot.transientMemory;
+        warGuardedThisFrame.clear();
         for (int i = 0; i < vertexSlotBound.length; i++) vertexSlotBound[i] = false;
         boundIndexHandle = 0;
         boundIndexType = -1;
@@ -748,6 +751,21 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             }
         }
         try (MemoryStack stack = stackPush()) {
+            // WAR：这块目标缓冲可能刚被上一帧（或本帧更早）的绘制读过，而区块重建会把新数据写进
+            // 同一片区域。写必须等那些读结束 —— 同一队列只是按序提交，执行可以重叠。缺这一条时，
+            // 还在跑的旧 draw 会读到被踩掉一半的新数据，真机表现就是个别三角形被拉得极远，
+            // 而且只在移动、区块重建时出现（静止时没有新分配、没有区域重用）。
+            //
+            // 每帧每块缓冲只要一次：之后同帧内的拷贝都排在这条屏障后面，受同一个顺序约束。
+            // 只在通道外发：通道内 ALL_COMMANDS 非法（VUID-vkCmdPipelineBarrier-None-07892 只允许
+            // 图形阶段），TRANSFER 也不是图形阶段，所以通道内没有合法写法表达"等上一批读结束"。
+            // 通道内录拷贝本身就少见（本机 dynamicRendering=false 时主要走通道外的上传路径），
+            // 这一格暂时留着，详见 LavaFlowSync.COPY_WAR_BARRIER。
+            if (LavaFlowSync.COPY_WAR_BARRIER && !renderPassOpen
+                    && warGuardedThisFrame.add(buffer(destination).handle())) {
+                globalBarrier(stack);
+                LavaFlowFrameStats.barrierRecorded();
+            }
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(source.offset())
                     .dstOffset(destination.offset()).size(source.length());
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
@@ -869,12 +887,17 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, handle, index);
     }
 
-    private void memoryBarrier(MemoryStack stack) {
+    /** 只发不记统计：全局屏障的公共部分。 */
+    private void globalBarrier(MemoryStack stack) {
         VkMemoryBarrier.Buffer barrier = VkMemoryBarrier.calloc(1, stack).sType$Default()
                 .srcAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT)
                 .dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, barrier, null, null);
+    }
+
+    private void memoryBarrier(MemoryStack stack) {
+        globalBarrier(stack);
         // 这条以前不记统计，于是 eager 那一局报出来的 barriers_per_frame=8.4 里一条拷贝屏障
         // 都没算进去，和延迟路径的 11.4（含 copy_barriers=3.3）根本没法比。补上，两边的数
         // 才可比。
