@@ -36,6 +36,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private LavaFlowTransientMemory transientMemory;
     private VkCommandBuffer commandBuffer;
     private boolean renderPassOpen;
+    /** 每次开通道 +1：清屏跳过的判断靠它知道"这中间有没有人写过深度"。 */
+    private long renderPassEpoch;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
     /**
@@ -227,6 +229,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boundIndexHandle = 0;
         boundIndexType = -1;
         lastDepthCleared = 0;
+        depthClearPassEpoch = renderPassEpoch;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -678,13 +681,28 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 同一帧内同一张深度图第二次清屏的跳过开关（-Dlavaflow.noSkipRepeatDepthClear=true 退回）。 */
     private static final boolean SKIP_REPEAT_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipRepeatDepthClear");
     private long lastDepthCleared;
+    /**
+     * 上次清屏之后有没有开过渲染通道。
+     *
+     * <p>这个跳过优化必须知道"两次清之间到底有没有人往这张深度图里写过"。原先的假设是
+     * "第二次清之前它只当过附件写过、之后没东西读它"——但真正的情况正好相反：Minecraft 每帧
+     * 清两次同一张主深度图，一次在帧开始（世界），一次在<b>画第一人称手臂之前</b>
+     * （GameRenderer 里 clearDepthTexture(depth, 0.0) 紧接着 renderItemInHand）。两次之间整
+     * 个世界都画完了，深度图里塞满了世界几何；第二次清正是让手臂永远显示在最前面的那一步。
+     *
+     * <p>跳过它，手臂就拿世界的深度去做深度测试，近处的方块会在手臂上切出一道口子 —— 真机上
+     * 就是"手臂被方块穿过"。
+     */
+    private long depthClearPassEpoch;
 
     /** 旧的清深度写法：转到 TRANSFER_DST 清掉，再回到清之前的布局。 */
     void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
-        // 同一帧里同一张深度图被清两次：两次都是整屏深度写 + 两次整图布局转换。
-        // 第二次清之前这张深度只当过附件写过、之后再没有东西读它，所以直接跳过。
-        if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()) return;
+        // 只有在"上次清完之后没有任何通道开过"时才跳过：那种情况下这张深度确实没人写过。
+        // 中间只要开过通道（世界、实体、粒子任何一样），深度里就有新的内容，这一清必须发。
+        if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()
+                && depthClearPassEpoch == renderPassEpoch) return;
         lastDepthCleared = texture.handle();
+        depthClearPassEpoch = renderPassEpoch;
         int previous = texture.effectiveLayout();
         transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
@@ -1163,7 +1181,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 间接参数写了，但 DRAW_INDIRECT 侧的依赖还没建立（只能在通道外建立）。 */
     boolean indirectBarrierPending() { return indirectBarrierPending; }
     void clearIndirectBarrierPending() { indirectBarrierPending = false; }
-    void markRenderPassOpen() { renderPassOpen = true; }
+    void markRenderPassOpen() {
+        renderPassOpen = true;
+        renderPassEpoch++;
+    }
 
 
     /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
