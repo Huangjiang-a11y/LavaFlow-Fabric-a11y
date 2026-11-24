@@ -40,6 +40,15 @@ public final class LavaFlowFrameStats {
      */
     private static final long DISCONTINUITY_NANOS = 1_000_000_000L;
 
+    /**
+     * 每帧开过的通道序列。只数总量说明不了"多在哪"：HUD 显示与 F1 隐藏差 1.5ms，
+     * 而屏障只差 2 条、绑定只差 4 次，都不足以解释 —— 那多半是某条全屏通道被多开了一次。
+     * 把整帧的 label 串记下来按出现次数排序，序列本身的差别就是答案。
+     */
+    private static final StringBuilder framePassSequence = new StringBuilder(256);
+    private static final Map<String, Long> passSequences = new ConcurrentHashMap<>();
+    private static final Map<String, Long> passSequencesAtReport = new ConcurrentHashMap<>();
+
     private static final long[] intervals = new long[WINDOW];
     private static int count;
     private static long previousFrameNanos;
@@ -482,6 +491,16 @@ public final class LavaFlowFrameStats {
 
     private LavaFlowFrameStats() {}
 
+    /** 帧统计开着时才值得拼通道序列；关着时调用点是零成本。 */
+    public static boolean tracingPasses() { return ENABLED; }
+
+    /** 一个渲染通道开始了，记进本帧序列。只在渲染线程调用。 */
+    public static void notePass(String label) {
+        if (!ENABLED) return;
+        if (framePassSequence.length() > 0) framePassSequence.append('>');
+        framePassSequence.append(label);
+    }
+
     /** Records one rendered frame. */
     public static void framePresented() {
         long now = System.nanoTime();
@@ -497,6 +516,13 @@ public final class LavaFlowFrameStats {
     }
 
     private static synchronized void record() {
+        // 上一帧的通道序列归档。放在计时之前：它记的是刚画完的那一帧。
+        if (framePassSequence.length() > 0) {
+            String seq = framePassSequence.toString();
+            if (seq.length() > 512) seq = seq.substring(0, 512) + "…";
+            passSequences.merge(seq, 1L, Long::sum);
+            framePassSequence.setLength(0);
+        }
         long now = System.nanoTime();
         if (previousFrameNanos != 0) {
             long interval = now - previousFrameNanos;
@@ -689,6 +715,31 @@ public final class LavaFlowFrameStats {
             passGpuMillisAtReport.put(entry.getKey(), entry.getValue().clone());
         }
         timedPassesAtReport = timedPasses;
+        reportPassSequences();
+    }
+
+    /**
+     * 把这一报告窗里最常见的几种通道序列打出来。HUD 显示与 F1 隐藏的 1.5ms 差价，
+     * 在屏障数（差 2 条）和绑定数（差 4 次）上都找不到解释，那剩下的可能就是把某条
+     * 全屏通道多开了一次 —— 而这件事只有序列看得见。
+     */
+    private static void reportPassSequences() {
+        List<Map.Entry<String, Long>> diffs = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : passSequences.entrySet()) {
+            long delta = entry.getValue() - passSequencesAtReport.getOrDefault(entry.getKey(), 0L);
+            if (delta > 0) diffs.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), delta));
+        }
+        passSequencesAtReport.clear();
+        passSequencesAtReport.putAll(passSequences);
+        if (diffs.isEmpty()) return;
+        diffs.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        StringBuilder out = new StringBuilder("pass_seq:");
+        for (int i = 0; i < Math.min(3, diffs.size()); i++) {
+            String seq = diffs.get(i).getKey();
+            if (seq.length() > 160) seq = seq.substring(0, 160) + "...";
+            out.append(" [").append(diffs.get(i).getValue()).append("x ").append(seq).append(']');
+        }
+        LOGGER.log(System.Logger.Level.INFO, out.toString());
     }
 
     /**
