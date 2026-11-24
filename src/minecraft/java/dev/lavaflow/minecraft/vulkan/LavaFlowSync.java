@@ -47,12 +47,19 @@ final class LavaFlowSync {
      * 26.4-snapshot-8 上画面干净、拖到 snapshot-10 才闪。也就是说 87d3afe 这条全局屏障
      * 早在 0.1.6 里就以延迟形态存在，它解释不了"同一个包 8 好 10 坏"。
      *
-     * <p>它现在是默认：真机上每笔拷贝后发一条 ALL_COMMANDS → ALL_COMMANDS，与官方
+     * <p>它现在默认关闭：真机上改为延迟合并发，与官方
      * VulkanCommandEncoder.memoryBarrier 逐字一致。延迟路径（
-     * {@code -Dlavaflow.eagerCopyBarrier=false}）保留作对照。
+     * {@code -Dlavaflow.deferredCopyBarrier=false}）保留作对照。
      */
-    static final boolean EAGER_COPY_BARRIER =
-            !"false".equals(System.getProperty("lavaflow.eagerCopyBarrier", "true"));
+    /**
+     * 延迟合并发拷贝屏障（deferred）：不在每笔拷贝后立即发全局屏障，而是
+     * 攒到下一个落账点（beginRenderPass 前或提交前）合并成一条发出。
+     * 默认开启，与 0.1.6 的延迟发行为一致，减少全屏屏障数量。
+     *
+     * <p>如需回到每笔拷贝后立即发屏障（eager），传 {@code -Dlavaflow.deferredCopyBarrier=false}。
+     */
+    static final boolean DEFERRED_COPY_BARRIER =
+            !"false".equals(System.getProperty("lavaflow.deferredCopyBarrier", "true"));
 
     /**
      * 拷贝<b>之前</b>也发一条全局屏障（写后读 / WAR）。
@@ -79,7 +86,7 @@ final class LavaFlowSync {
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)"
-                        : EAGER_COPY_BARRIER ? "global(eager, per copy)" : "global(deferred)")
+        : "global(" + (DEFERRED_COPY_BARRIER ? "deferred" : "eager") + ", per copy)"
                         + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
