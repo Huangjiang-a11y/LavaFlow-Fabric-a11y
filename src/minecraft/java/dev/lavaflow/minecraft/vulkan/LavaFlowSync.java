@@ -52,14 +52,14 @@ final class LavaFlowSync {
      * {@code -Dlavaflow.deferredCopyBarrier=false}）保留作对照。
      */
     /**
-     * 延迟合并发拷贝屏障（deferred）：不在每笔拷贝后立即发全局屏障，而是
-     * 攒到下一个落账点（beginRenderPass 前或提交前）合并成一条发出。
-     * 默认开启，与 0.1.6 的延迟发行为一致，减少全屏屏障数量。
+     * 是否在每笔拷贝后立即发一条全局拷贝屏障（eager）。
+     * 默认关闭：拷贝屏障会被攒到下一个落账点合并成一条发（deferred），
+     * 与 0.1.6 的延迟发行为一致，减少全屏屏障数量。
      *
-     * <p>如需回到每笔拷贝后立即发屏障（eager），传 {@code -Dlavaflow.deferredCopyBarrier=false}。
+     * <p>如需回到每笔拷贝后立即发屏障，传 {@code -Dlavaflow.copyBarrierEager=true}。
      */
-    static final boolean DEFERRED_COPY_BARRIER =
-            !"false".equals(System.getProperty("lavaflow.deferredCopyBarrier", "true"));
+    static final boolean COPY_BARRIER_EAGER =
+            "true".equals(System.getProperty("lavaflow.copyBarrierEager", "false"));
 
     /**
      * 拷贝<b>之前</b>也发一条全局屏障（写后读 / WAR）。
@@ -86,7 +86,7 @@ final class LavaFlowSync {
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)"
-        : "global(" + (DEFERRED_COPY_BARRIER ? "deferred" : "eager") + ", per copy)"
+        : "global(" + (COPY_BARRIER_EAGER ? "eager" : "deferred") + ", per copy)"
                         + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
