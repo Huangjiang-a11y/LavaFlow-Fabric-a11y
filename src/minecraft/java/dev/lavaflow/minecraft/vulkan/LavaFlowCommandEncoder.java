@@ -674,9 +674,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
-        // 能当渲染目标的深度图（主深度就是）走到通道里用 vkCmdClearAttachments 清，
-        // 省掉两次整图布局转换；其余（例如要采样后才清一次的非通道用图）按旧写法立即清。
-        if (context.dynamicRendering() && (texture.usage() & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0) {
+        // 能当渲染目标的深度图（主深度就是）一律推迟到它那个通道开头就地清：
+        // legacy 通道是 DONT_CARE + vkCmdClearAttachments，动态渲染是 loadOp，两种都省掉
+        // 两次整图布局转换。以前这条只给 dynamicRendering 开着，于是本机
+        // （dynamicRendering=false）每帧两次清深度全走 TRANSFER_DST：一次全屏写 +
+        // 两条屏障，白白付掉。其余（例如清完要采样、不当附件的图）仍按旧写法立即清。
+        if ((texture.usage() & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0) {
             pendingDepthClears.put(texture, value);
             return;
         }

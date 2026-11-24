@@ -415,6 +415,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             // The render pass will handle its layout, avoiding ping-pong between
             // SAMPLED and COLOR_ATTACHMENT_OPTIMAL
             if (colorAttachmentTextures.contains(sampled)) continue;
+            // 这张图上还挂着一笔推迟的深度清屏，而它现在要被当采样输入读：先在通道外
+            // 把它清掉，否则读到的就是清之前的内容。（endPassNow 此时无事可做，
+            // pendingPassEnd 为 false。）
+            if (encoder.hasPendingDepthClear(sampled)) encoder.flushPendingDepthClear(sampled);
             int layout = LavaFlowVk.sampledLayout();
             if (sampled.layout() != layout) {
                 encoder.transitionTo(sampled, layout);
