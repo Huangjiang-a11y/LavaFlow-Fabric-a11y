@@ -658,7 +658,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             int previous = texture.effectiveLayout();
             transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             // transitionTo 只是排队，真正发屏障要等 flushPendingBarriersOut。清屏命令一旦跑在
-            // 旧布局上，Turnip 直接丢弃这条清除 —— 内容没清、也不报错。所以先把转换逼出来。
+            // 旧布局上，驱动直接丢弃这条清除 —— 内容没清、也不报错。所以先把转换逼出来。
             flushPendingBarriersOut(stack);
             VkClearColorValue clear = VkClearColorValue.calloc(stack).float32(stack.floats(color.x(), color.y(), color.z(), color.w()));
             VkImageSubresourceRange range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -711,7 +711,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         try (MemoryStack stack = stackPush()) {
             int previous = texture.effectiveLayout();
             transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            // 见 clearColorTexture：不立刻发屏障，清除就落在旧布局上，Turnip 静默丢弃。
+            // 见 clearColorTexture：不立刻发屏障，清除就落在旧布局上，Mali（19.0.0）静默丢弃。
             // 真机证据（2026-11-23）：游戏每帧画手臂前清主深度，这一清从未生效过 —— 深度里
             // 始终是世界几何，手臂通道 depth load=load，于是手臂被方块切穿。
             flushPendingBarriersOut(stack);
