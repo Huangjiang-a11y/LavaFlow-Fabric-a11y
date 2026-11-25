@@ -520,7 +520,11 @@ public final class LavaFlowFrameStats {
         if (framePassSequence.length() > 0) {
             String seq = framePassSequence.toString();
             if (seq.length() > 512) seq = seq.substring(0, 512) + "…";
-            passSequences.merge(seq, 1L, Long::sum);
+            // 序列的种类理论上有限，但 UI 开关、动态通道顺序能让组合慢慢变多。给个上限：
+            // 超过之后只继续累加已知序列，不再收新键，免得长时间运行把这张表撑大。
+            if (passSequences.size() < 256 || passSequences.containsKey(seq)) {
+                passSequences.merge(seq, 1L, Long::sum);
+            }
             framePassSequence.setLength(0);
         }
         long now = System.nanoTime();

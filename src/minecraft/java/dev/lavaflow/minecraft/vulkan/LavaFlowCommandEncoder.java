@@ -72,6 +72,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      * 一帧 7 条全屏屏障，Mali 上每条都要刷一遍 tile 状态 —— 白付。
      */
     private boolean warBarrierDoneThisFrame;
+    /** 通道内清颜色这件事只可能是调用方错了，报一次就够了。 */
+    private boolean warnedClearInsidePass;
     private long waitSemaphore;
     private long signalSemaphore;
     private LavaFlowRenderPass activeRenderPass;
@@ -230,6 +232,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boundIndexType = -1;
         lastDepthCleared = 0;
         depthClearPassEpoch = renderPassEpoch;
+        // 正常路径由 submit() 收尾清空；这里再清一次是防御——若某条异常路径跳过了 submit，
+        // 残留的待办清屏会被带进这一帧末尾才执行，那已经不是调用方要的时机。
+        pendingDepthClears.clear();
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -654,6 +659,13 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
+        if (renderPassOpen && !warnedClearInsidePass) {
+            warnedClearInsidePass = true;
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "clearColorTexture called while a render pass is open: its layout transition "
+                    + "queues into the in-pass list and the clear would run in the old layout. "
+                    + "The caller has to end the pass first.");
+        }
         try (MemoryStack stack = stackPush()) {
             int previous = texture.effectiveLayout();
             transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

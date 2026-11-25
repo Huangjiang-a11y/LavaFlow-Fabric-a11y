@@ -394,12 +394,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     void ensureBegun() {
         if (begun) return;
         begun = true;
+        if (LavaFlowFrameStats.tracingPasses()) LavaFlowFrameStats.notePass(passLabel());
         // 有推迟下来的深度清屏时，先判断这个通道能不能就地清：要求渲染区域覆盖整张深度图，
         // 否则被裁掉的部分会留下旧内容——那种情况退回"进通道前先转 TRANSFER_DST 清掉"。
         if (depthView != null && encoder.hasPendingDepthClear(depthView.texture())) {
             RenderPass.RenderArea area = descriptor.renderArea();
+            // 按深度图自己的尺寸判断，不是颜色附件的：两者分辨率不同（半分辨率深度、
+            // mip 链）时，用 output 尺寸会把"只覆盖一部分"误判成整张覆盖，剩下那块留旧值。
             boolean fullArea = area.x() == 0 && area.y() == 0
-                    && area.width() == outputWidth && area.height() == outputHeight;
+                    && area.width() == depthView.texture().getWidth(0)
+                    && area.height() == depthView.texture().getHeight(0);
             if (fullArea) pendingDepthClearInline = true;
             else encoder.flushPendingDepthClear(depthView.texture());
         }
@@ -523,7 +527,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             clear.clearValue().depthStencil().depth(value.floatValue()).stencil(0);
             VkClearRect.Buffer rect = VkClearRect.calloc(1, stack);
             rect.rect().offset().set(0, 0);
-            rect.rect().extent().set(outputWidth, outputHeight);
+            rect.rect().extent().set(depthTexture.getWidth(0), depthTexture.getHeight(0));
             rect.baseArrayLayer(0).layerCount(depthTexture.getDepthOrLayers());
             vkCmdClearAttachments(encoder.commandBuffer(), clear, rect);
         }

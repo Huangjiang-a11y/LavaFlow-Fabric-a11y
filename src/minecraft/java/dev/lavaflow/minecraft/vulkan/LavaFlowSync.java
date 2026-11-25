@@ -3,10 +3,12 @@ package dev.lavaflow.minecraft.vulkan;
 /**
  * 同步策略。
  *
- * <p>默认：拷贝之后用<b>官方式全局屏障</b>。开关：
+ * <p>默认：拷贝屏障<b>延迟合并发</b>（deferred）——每笔拷贝只记一笔账，攒到下一个落账点
+ * （{@code beginRenderPass} 前或提交前）发一条<b>官方式全局屏障</b>。开关：
  *
  * <pre>
- *   -Dlavaflow.narrowBarrier=true    回到旧写法：按目标用途位推出来的窄屏障（仅作对照/测性能）
+ *   -Dlavaflow.copyBarrierEager=true 每笔拷贝后立刻发一条全局屏障（4c0a957 的写法）
+ *   -Dlavaflow.narrowBarrier=true    回到更旧的窄屏障写法（仅作对照/测性能）
  *   -Dlavaflow.serializeSubmit=true  提交后立刻等这一次跑完（在飞提交压到 1）
  * </pre>
  *
@@ -22,7 +24,8 @@ package dev.lavaflow.minecraft.vulkan;
  * （{@code TRANSFER/TRANSFER_WRITE} → 按用途位推出的 {@code VERTEX_INPUT}/顶点·索引读，且限定在
  * 那一段字节）从语义上看是对的，但那是"推出来的正确"：只要有一条用法没被推全，那一处就会漏同步，
  * 而漏掉的后果不是崩溃、是读到还没写完的缓冲——画面上就是乱连的三角形，任何读自己记账的诊断都看不见。
- * 官方的写法不依赖任何推断，这也是这一版把它定为默认的原因。
+ * 官方的写法不依赖任何推断，这也是屏障一直沿用它的掩码（ALL_COMMANDS → ALL_COMMANDS）的原因；
+ * 发得早还是晚是另一件事，推迟到落账点不会改变掩码的含义。
  *
  * <p>{@code serializeSubmit} 保留但默认关闭：它压的是"跨提交"的在飞数（官方那边提交后会
  * {@code awaitSubmitCompletion(currentSubmitIndex - 2)}，LavaFlow 是 3 个槽各一条 fence）。屏障定为
@@ -31,26 +34,6 @@ package dev.lavaflow.minecraft.vulkan;
 final class LavaFlowSync {
     /** 走旧写法：按用途位推出的窄屏障。默认 false，即使用官方那种全局屏障。 */
     static final boolean NARROW_BARRIER = Boolean.getBoolean("lavaflow.narrowBarrier");
-    /**
-     * 每笔拷贝之后立刻发那条官方全局屏障（ALL_COMMANDS → ALL_COMMANDS，MEMORY_READ|MEMORY_WRITE）。
-     *
-     * <p>这就是 4c0a957 那一版的写法，也是 2026-10-28 真机 A/B 里把"半透明表面几何扭曲、个别三角形
-     * 被拉得长到离谱"修好的那一版。19a3b8d 之后为省开销改成"记账 + 延迟发"，前提是"拷贝和读它的
-     * 绘制之间一定隔着一次 createRenderPass"——而后来通道内缓冲写屏障的出现证明这个前提不成立。
-     *
-     * <p>延迟发属于"推出来的正确"：只要有一条用法没被推全，那一处就漏同步，画面就是乱连的三角形，
-     * 而任何靠读自己记账的诊断都看不见它。默认回到无条件发。
-     *
-     * <p><b>但这一版默认关闭，因为证据不支持它</b>：0.1.6 用的正是延迟发
-     * （{@code copyToBuffer → noteBufferWritten}，{@code noteBufferWritten} 里对
-     * {@code renderPassOpen} 立即冲刷，反编译 6602c20.jar 确认），而 0.1.6 在
-     * 26.4-snapshot-8 上画面干净、拖到 snapshot-10 才闪。也就是说 87d3afe 这条全局屏障
-     * 早在 0.1.6 里就以延迟形态存在，它解释不了"同一个包 8 好 10 坏"。
-     *
-     * <p>它现在默认关闭：真机上改为延迟合并发，与官方
-     * VulkanCommandEncoder.memoryBarrier 逐字一致。延迟路径（
-     * {@code -Dlavaflow.deferredCopyBarrier=false}）保留作对照。
-     */
     /**
      * 是否在每笔拷贝后立即发一条全局拷贝屏障（eager）。
      * 默认关闭：拷贝屏障会被攒到下一个落账点合并成一条发（deferred），
@@ -86,7 +69,7 @@ final class LavaFlowSync {
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)"
-        : "global(" + (COPY_BARRIER_EAGER ? "eager" : "deferred") + ", per copy)"
+        : "global(" + (COPY_BARRIER_EAGER ? "eager" : "deferred") + ", per copy)")
                         + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
