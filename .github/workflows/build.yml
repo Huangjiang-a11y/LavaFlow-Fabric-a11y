@@ -85,7 +85,6 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x720x24" \
             gradle --no-daemon clean check jar installDist
 
-      # The context test skips itself when DISPLAY is unset (Assumptions.assumeTrue), and a skipped
       # These tests depend on a software driver and a validation layer whose versions differ between
       # the runner image and any developer machine, and the raw Gradle log is not readable without
       # repository admin. So a failure is surfaced as an annotation, which anyone who can see the run
@@ -120,9 +119,6 @@ jobs:
           echo "::notice title=test reports present::$(ls build/test-results/*/ 2>/dev/null | tr '\n' ' ' | cut -c1-600)"
           echo "::notice title=descriptor path cases::$(grep -o '<testcase name="[^"]*"\|/>\|<skipped\|</testcase>' build/test-results/*/TEST-*LavaFlowDescriptorPathTest.xml 2>/dev/null | tr '\n' ' ' | cut -c1-900)"
 
-      # test leaves the build green all the same. Without this step a reordered workflow would
-      # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
-      # failure this test exists to catch.
       # A mixin whose target drifted compiles fine and fails when the game starts, so it is checked against the
       # jar the build just resolved rather than left to the first run. Names and the static/instance form are
       # checked; mixins aimed at other mods are skipped by name.
@@ -138,6 +134,10 @@ jobs:
           test -f "$jar" || { echo "::error::the Minecraft $version jar is not in the loom cache"; exit 1; }
           python3 tools/check_mixin_targets.py "$jar"
 
+      # The context test skips itself when DISPLAY is unset (Assumptions.assumeTrue), and a skipped
+      # test leaves the build green all the same. Without this step a reordered workflow would
+      # silently drop the only runtime coverage of the Minecraft-side context, which is exactly the
+      # failure this test exists to catch.
       - name: Assert the context test ran rather than skipped
         run: |
           report=build/test-results/minecraftTest/TEST-dev.lavaflow.minecraft.vulkan.LavaFlowVulkanContextTest.xml
