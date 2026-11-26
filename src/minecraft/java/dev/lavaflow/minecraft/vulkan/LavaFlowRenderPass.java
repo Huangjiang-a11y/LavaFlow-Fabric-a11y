@@ -78,9 +78,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
     /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
     private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
-    private static final boolean DROP_DEPTH = !Boolean.getBoolean("lavaflow.noDropDepth");
-    private static final java.util.Set<String> DROP_DEPTH_LABELS =
-            java.util.Set.of("Item in hand", "3d crosshair");
     /**
      * 通道构成一次性报告：每个标签第一次建通道时打一行，说明它的颜色/深度附件到底是谁。
      *
@@ -223,6 +220,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int[] colorLoadOps;
     private boolean[] colorStores;
     private long resumeRenderPass;
+    private long clearDepthRenderPass;
     /** 多子通道通道：按 layout 顺序排的附件视图、格式与加载操作，以及深度附件的 layout 下标。 */
     private long[] layoutViews;
     private int[] layoutFormats;
@@ -265,6 +263,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         colorTargetMismatchReported = false;
         timedPass = -1;
         resumeRenderPass = 0;
+        clearDepthRenderPass = 0;
         pendingDepthClearInline = false;
 
         int colorSlots = colorSlotCount();
@@ -295,10 +294,6 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             colorViews[slot] = view(attachment.textureView());
             clearAny |= clears(attachment, false);
         }
-        // 手持物品/准心这两个整屏通道：附件里带深度，但管线不测世界深度。
-        // 去掉深度附件后它们的附件集合与 HUD 一致，HUD 通道就能并进来，
-        // 省掉一整个整屏通道的开合费（-Dlavaflow.noDropDepth=true 退回）。
-        if (DROP_DEPTH && depth != null && DROP_DEPTH_LABELS.contains(passLabel())) depth = null;
         depthView = depth == null ? null : view(depth.textureView());
         hasClears = clearAny;
 
@@ -653,7 +648,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             if (clears(depth, resume)) clearValues.get(attachmentIndex).depthStencil()
                     .depth(depth.clearValue().depth()).stencil(depth.clearValue().stencil());
         }
-        long beginRenderPass = resume ? resumeRenderPass() : renderPass;
+        long beginRenderPass = resume ? resumeRenderPass()
+                : (pendingDepthClearInline ? clearDepthRenderPass() : renderPass);
         long framebuffer = context.legacyFramebuffer(beginRenderPass,
                 layoutViews != null ? layoutViews : views, outputWidth, outputHeight);
         legacyFramebuffer = framebuffer;
@@ -748,6 +744,30 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         resumeRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores, depthFormat,
                 depthStoreFlag ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStoreFlag);
         return resumeRenderPass;
+    }
+
+    /**
+     * 当通道带推迟的就地清深度时，开通道所用的 RenderPass 变体（depthLoadOp 为 DONT_CARE）。
+     *
+     * <p>Mali-G76 这类移动 Tile 架构若传入 LOAD，会将 1080p 的整屏深度从 DDR 读回 Tile 缓存，
+     * 随后紧接着的 recordPendingDepthClear() 又立刻将其整面覆盖，白白浪费 8.3MB 带宽与 ~1ms
+     * 耗时。改为 DONT_CARE 后，Tile 缓存直接就地清屏，Vulkan 规范明文保证与原 RenderPass 兼容。
+     */
+    private long clearDepthRenderPass() {
+        if (clearDepthRenderPass != 0) return clearDepthRenderPass;
+        if (layoutFormats != null) {
+            int depthLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            clearDepthRenderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
+                    layoutLoadOps, layoutStoreFlags, depthLayoutIndex, depthLoadOp, depthStore);
+            return clearDepthRenderPass;
+        }
+        int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
+                : LavaFlowVk.format(depthView.texture().getFormat());
+        RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
+        boolean depthStoreFlag = depthAttachment == null || depthAttachment.store();
+        clearDepthRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores, depthFormat,
+                VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStoreFlag);
+        return clearDepthRenderPass;
     }
 
     /**
