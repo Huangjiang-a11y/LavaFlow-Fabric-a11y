@@ -850,16 +850,28 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (LavaFlowGpuTexture texture : sampled) {
-            int layout = LavaFlowVk.sampledLayout();
-            if (texture.effectiveLayout() != layout) {
-                encoder.transitionTo(texture, layout);
-            }
-        }
+        // 通道已经结束，编码器也必须知道 —— 否则 transitionTo 看到 renderPassOpen 还是 true，
+        // 把转换排进"通道内"那一队。而 flushPendingBarriersIn 在每个绘制入口都排在
+        // pushDescriptors() 之前，split 又正好发生在 pushDescriptors() 里面：这笔转换要等到
+        // 下一次绘制才落地，触发 split 的那一次采样读的是旧布局的纹理。
+        //
+        // dynamicRendering 下更糟：通道内那一队在 renderPassOpen 期间整段不发（留给 endPassNow），
+        // 于是重开的通道从头到尾都在旧布局上采样，直到通道结束才补屏障。
+        encoder.markRenderPassClosed();
         try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            for (LavaFlowGpuTexture texture : sampled) {
+                int layout = LavaFlowVk.sampledLayout();
+                if (texture.effectiveLayout() != layout) {
+                    encoder.transitionTo(texture, layout);
+                }
+            }
+            // 此刻 renderPassOpen 已是 false，转换落在通道外那一侧；立刻发出去再重开通道，
+            // 和 splitPassForBufferBarrier 一个形状。
+            encoder.flushPendingBarriersOut(stack);
             if (context.dynamicRendering()) beginDynamic(stack, true);
             else beginLegacy(stack, true);
         }
+        encoder.markRenderPassOpen();
     }
 
     /**
