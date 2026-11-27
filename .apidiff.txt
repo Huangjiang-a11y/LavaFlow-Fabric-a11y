@@ -1,0 +1,495 @@
+===== com.mojang.blaze3d.platform.NativeLibrariesBootstrap
+5d4
+<   private static boolean vulkanLoaderAvailable;
+7a7
+>   private static void loadJNA();
+12c12
+<   private static void loadLibrary(java.util.function.Supplier<java.lang.String>, java.lang.String, java.lang.Runnable);
+---
+>   private static void loadLWJGLLibrary(java.util.function.Supplier<java.lang.String>, java.lang.String, java.lang.Runnable);
+21d20
+<   public static boolean isVulkanLoaderAvailable();
+27,31c26,30
+<   private static java.lang.String lambda$loadLibrary$4() throws java.lang.Exception;
+<   private static java.lang.String lambda$loadLibrary$3() throws java.lang.Exception;
+<   private static java.lang.String lambda$loadLibrary$2(java.lang.String) throws java.lang.Exception;
+<   private static java.lang.String lambda$loadLibrary$1(java.lang.String) throws java.lang.Exception;
+<   private static java.lang.String lambda$loadLibrary$0(java.lang.String) throws java.lang.Exception;
+---
+>   private static java.lang.String lambda$loadLWJGLLibrary$4() throws java.lang.Exception;
+>   private static java.lang.String lambda$loadLWJGLLibrary$3() throws java.lang.Exception;
+>   private static java.lang.String lambda$loadLWJGLLibrary$2(java.lang.String) throws java.lang.Exception;
+>   private static java.lang.String lambda$loadLWJGLLibrary$1(java.lang.String) throws java.lang.Exception;
+>   private static java.lang.String lambda$loadLWJGLLibrary$0(java.lang.String) throws java.lang.Exception;
+32a32
+>   private static java.lang.String lambda$loadJNA$0(java.lang.String) throws java.lang.Exception;
+===== com.mojang.blaze3d.systems.RenderSystem
+5d4
+<   public static final int MINIMUM_ATLAS_TEXTURE_SIZE;
+9a9
+>   private static com.mojang.blaze3d.pipeline.PipelineBuilder PIPELINE_BUILDER;
+26d25
+<   private static final com.mojang.blaze3d.systems.ScissorState scissorStateForRenderTypeDraws;
+34,35c33,34
+<   public static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline getCompiledPipelineNullable(com.mojang.renderpearl.api.pipeline.RenderPipeline);
+<   public static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline getCompiledPipeline(com.mojang.renderpearl.api.pipeline.RenderPipeline);
+---
+>   public static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline getCompiledPipelineNullable(com.mojang.blaze3d.pipeline.RenderPipeline, com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass);
+>   public static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline getCompiledPipeline(com.mojang.blaze3d.pipeline.RenderPipeline, com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass);
+47,49d45
+<   public static void enableScissorForRenderTypeDraws(int, int, int, int);
+<   public static void disableScissorForRenderTypeDraws();
+<   public static com.mojang.blaze3d.systems.ScissorState getScissorStateForRenderTypeDraws();
+70a67
+>   public static com.mojang.blaze3d.pipeline.PipelineBuilder getPipelineBuilder();
+74a72
+>   public static boolean isMultidrawIndirectAvailable();
+===== com.mojang.renderpearl.api.commands.RenderPass
+3d2
+<   public static final int MAX_VERTEX_BUFFERS;
+5a5,7
+>   public abstract com.mojang.renderpearl.api.pipeline.RenderPassLayout layout();
+>   public abstract com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass activeSubpass();
+>   public abstract void nextSubpass();
+9a12
+>   public abstract void setUniform(java.lang.String, com.mojang.renderpearl.api.textures.GpuTextureView);
+13a17
+>   public abstract void setViewport(int, int, int, int);
+22c26
+<   public abstract <T> void drawMultipleIndexed(java.util.Collection<com.mojang.renderpearl.api.commands.RenderPass$Draw<T>>, com.mojang.renderpearl.api.buffers.GpuBuffer, com.mojang.renderpearl.api.pipeline.IndexType, java.util.Collection<java.lang.String>, T);
+---
+>   public abstract <T> void drawMultipleIndexed(java.util.Collection<com.mojang.renderpearl.api.commands.RenderPass$Draw<T>>, java.util.Collection<java.lang.String>, T);
+===== com.mojang.renderpearl.api.commands.RenderPassDescriptor
+4,5c4,5
+<   private final java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.Optional<org.joml.Vector4fc>>> colorAttachments;
+<   private final com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.OptionalDouble> depthAttachment;
+---
+>   private final com.mojang.renderpearl.api.pipeline.RenderPassLayout layout;
+>   private final java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment> attachments;
+7,8c7,9
+<   public com.mojang.renderpearl.api.commands.RenderPassDescriptor(java.util.function.Supplier<java.lang.String>, java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.Optional<org.joml.Vector4fc>>>, com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.OptionalDouble>, com.mojang.renderpearl.api.commands.RenderPass$RenderArea);
+<   public static com.mojang.renderpearl.api.commands.RenderPassDescriptor$Builder builder(java.util.function.Supplier<java.lang.String>);
+---
+>   public com.mojang.renderpearl.api.commands.RenderPassDescriptor(java.util.function.Supplier<java.lang.String>, com.mojang.renderpearl.api.pipeline.RenderPassLayout, java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment>, com.mojang.renderpearl.api.commands.RenderPass$RenderArea);
+>   public static com.mojang.renderpearl.api.commands.RenderPassDescriptor$Builder builder(com.mojang.renderpearl.api.pipeline.RenderPassLayout);
+>   public static com.mojang.renderpearl.api.commands.RenderPassDescriptor$Builder builder(java.util.function.Supplier<java.lang.String>, com.mojang.renderpearl.api.pipeline.RenderPassLayout);
+13,14c14,15
+<   public java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.Optional<org.joml.Vector4fc>>> colorAttachments();
+<   public com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment<java.util.OptionalDouble> depthAttachment();
+---
+>   public com.mojang.renderpearl.api.pipeline.RenderPassLayout layout();
+>   public java.util.List<com.mojang.renderpearl.api.commands.RenderPassDescriptor$Attachment> attachments();
+===== com.mojang.renderpearl.api.device.GpuBackend
+7c7
+<   public abstract com.mojang.renderpearl.api.device.GpuDevice createDevice(com.mojang.renderpearl.api.device.GpuDebugOptions) throws com.mojang.renderpearl.api.device.BackendCreationException;
+---
+>   public abstract com.mojang.renderpearl.api.device.GpuDevice createDevice(java.lang.String, int, com.mojang.renderpearl.api.device.GpuDebugOptions) throws com.mojang.renderpearl.api.device.BackendCreationException;
+===== com.mojang.renderpearl.api.device.GpuDebugOptions
+7c7,9
+<   public com.mojang.renderpearl.api.device.GpuDebugOptions(int, boolean, boolean, boolean);
+---
+>   private final boolean shaderDebug;
+>   private final boolean strictValidation;
+>   public com.mojang.renderpearl.api.device.GpuDebugOptions(int, boolean, boolean, boolean, boolean, boolean);
+14a17,18
+>   public boolean shaderDebug();
+>   public boolean strictValidation();
+===== com.mojang.renderpearl.api.device.GpuDevice
+3c3
+<   public abstract com.mojang.renderpearl.api.device.GpuSurface createSurface(long, java.util.function.BooleanSupplier);
+---
+>   public abstract com.mojang.renderpearl.api.device.GpuSurface createSurface(long, java.util.function.BooleanSupplier, boolean);
+14c14,15
+<   public abstract java.util.concurrent.CompletableFuture<com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$Pending> compilePipeline(com.mojang.renderpearl.api.pipeline.RenderPipeline, com.mojang.renderpearl.api.pipeline.ShaderSource, java.util.concurrent.Executor);
+---
+>   public abstract com.mojang.renderpearl.api.pipeline.SpvModule createSpvModule(java.lang.String, java.nio.ByteBuffer, com.mojang.renderpearl.api.pipeline.ShaderType, java.lang.String) throws com.mojang.renderpearl.util.ShaderCompileException;
+>   public abstract com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$CreateInfo);
+===== com.mojang.renderpearl.api.pipeline.ColorTargetState
+4d3
+<   private final com.mojang.renderpearl.api.GpuFormat format;
+16c15
+<   public com.mojang.renderpearl.api.pipeline.ColorTargetState(java.util.Optional<com.mojang.renderpearl.api.pipeline.BlendFunction>, com.mojang.renderpearl.api.GpuFormat, int);
+---
+>   public com.mojang.renderpearl.api.pipeline.ColorTargetState(java.util.Optional<com.mojang.renderpearl.api.pipeline.BlendFunction>, int);
+25d23
+<   public com.mojang.renderpearl.api.GpuFormat format();
+===== com.mojang.renderpearl.api.pipeline.DepthStencilState
+6a7
+>   private final com.mojang.renderpearl.api.pipeline.StencilTest stencilTest;
+7a9
+>   public com.mojang.renderpearl.api.pipeline.DepthStencilState(com.mojang.renderpearl.api.pipeline.StencilTest);
+9a12,13
+>   public com.mojang.renderpearl.api.pipeline.DepthStencilState(com.mojang.renderpearl.api.pipeline.CompareOp, boolean, com.mojang.renderpearl.api.pipeline.StencilTest);
+>   public com.mojang.renderpearl.api.pipeline.DepthStencilState(com.mojang.renderpearl.api.pipeline.CompareOp, boolean, float, float, com.mojang.renderpearl.api.pipeline.StencilTest);
+16a21
+>   public com.mojang.renderpearl.api.pipeline.StencilTest stencilTest();
+===== com.mojang.renderpearl.api.pipeline.RenderPassLayout
+0a1,27
+> Compiled from "RenderPassLayout.java"
+> public class com.mojang.renderpearl.api.pipeline.RenderPassLayout {
+>   public static final int MAXIMUM_ATTACHMENTS;
+>   public static final int MAXIMUM_SUBPASSES;
+>   public static final int MAX_COLOR_ATTACHMENTS;
+>   public static final int MAX_INPUT_ATTACHMENTS;
+>   public static final int ATTACHMENT_UNUSED;
+>   private final java.lang.String name;
+>   private final java.util.List<com.mojang.renderpearl.api.GpuFormat> attachmentFormats;
+>   private final java.util.List<com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass> subpasses;
+>   private final it.unimi.dsi.fastutil.bytes.ByteList compatibilityKey;
+>   private final int compatabilityHash;
+>   static final boolean $assertionsDisabled;
+>   public static com.mojang.renderpearl.api.pipeline.RenderPassLayout$Builder builder(java.lang.String);
+>   public static com.mojang.renderpearl.api.pipeline.RenderPassLayout simple(java.lang.String, com.mojang.renderpearl.api.GpuFormat, int);
+>   public static com.mojang.renderpearl.api.pipeline.RenderPassLayout simple(java.lang.String, com.mojang.renderpearl.api.GpuFormat, int, com.mojang.renderpearl.api.GpuFormat);
+>   public static com.mojang.renderpearl.api.pipeline.RenderPassLayout simple(java.lang.String, com.mojang.renderpearl.api.GpuFormat, com.mojang.renderpearl.api.GpuFormat...);
+>   private static com.mojang.renderpearl.api.pipeline.RenderPassLayout simple(java.lang.String, com.mojang.renderpearl.api.GpuFormat[]);
+>   private com.mojang.renderpearl.api.pipeline.RenderPassLayout(java.lang.String, java.util.List<com.mojang.renderpearl.api.pipeline.RenderPassLayout$Builder$Attachment>, java.util.List<com.mojang.renderpearl.api.pipeline.RenderPassLayout$Builder$Subpass>);
+>   public java.lang.String name();
+>   public java.util.List<com.mojang.renderpearl.api.GpuFormat> attachmentFormats();
+>   public java.util.List<com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass> subpasses();
+>   public com.mojang.renderpearl.api.pipeline.RenderPassLayout$Subpass subpass(int);
+>   public int hashCode();
+>   public boolean equals(java.lang.Object);
+>   static {};
+> }
+===== com.mojang.renderpearl.api.pipeline.ShaderType
+5d4
+<   private static final com.mojang.renderpearl.api.pipeline.ShaderType[] TYPES;
+12d10
+<   public static com.mojang.renderpearl.api.pipeline.ShaderType byLocation(net.minecraft.resources.Identifier);
+14c12
+<   public net.minecraft.resources.FileToIdConverter idConverter();
+---
+>   public java.lang.String getExtension();
+===== com.mojang.renderpearl.api.pipeline.SpvModule
+0a1,9
+> Compiled from "SpvModule.java"
+> public interface com.mojang.renderpearl.api.pipeline.SpvModule extends com.mojang.renderpearl.util.UncheckedAutoCloseable {
+>   public abstract java.lang.String name();
+>   public abstract java.nio.ByteBuffer spv();
+>   public abstract com.mojang.renderpearl.api.pipeline.ShaderType type();
+>   public abstract java.lang.String entryPoint();
+>   public abstract com.mojang.renderpearl.api.pipeline.SpvModule$Reflection reflect() throws com.mojang.renderpearl.util.ShaderCompileException;
+>   public abstract com.mojang.renderpearl.api.pipeline.SpvModule$Reflection getReflectionInfoIfAvailable();
+> }
+===== com.mojang.renderpearl.api.pipeline.UniformType
+5a6
+>   public static final com.mojang.renderpearl.api.pipeline.UniformType INPUT_ATTACHMENT;
+===== com.mojang.renderpearl.backend.api.CommandEncoderBackend
+9d8
+<   public abstract void clearColorAndDepthTextures(com.mojang.renderpearl.api.textures.GpuTexture, org.joml.Vector4fc, com.mojang.renderpearl.api.textures.GpuTexture, double, int, int, int, int, int);
+10a10
+>   public abstract void clearStencilTexture(com.mojang.renderpearl.api.textures.GpuTexture, byte);
+15,16c15
+<   public abstract void copyTextureToBuffer(com.mojang.renderpearl.api.textures.GpuTexture, com.mojang.renderpearl.api.buffers.GpuBuffer, long, java.lang.Runnable, int);
+<   public abstract void copyTextureToBuffer(com.mojang.renderpearl.api.textures.GpuTexture, com.mojang.renderpearl.api.buffers.GpuBuffer, long, java.lang.Runnable, int, int, int, int, int);
+---
+>   public abstract void copyTextureToBuffer(com.mojang.renderpearl.api.textures.GpuTexture, com.mojang.renderpearl.api.buffers.GpuBuffer, long, int, int, int, int, int);
+===== com.mojang.renderpearl.backend.api.GpuDeviceBackend
+3c3
+<   public abstract com.mojang.renderpearl.backend.api.GpuSurfaceBackend createSurface(long, java.util.function.BooleanSupplier);
+---
+>   public abstract com.mojang.renderpearl.backend.api.GpuSurfaceBackend createSurface(long, java.util.function.BooleanSupplier, boolean);
+12c12
+<   public abstract com.mojang.renderpearl.backend.api.BackendRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.backend.api.BackendRenderPipeline$CreateInfo);
+---
+>   public abstract com.mojang.renderpearl.backend.api.BackendRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$CreateInfo);
+===== com.mojang.renderpearl.backend.api.RenderPassBackend
+2a3
+>   public abstract void nextSubpass();
+7a9
+>   public abstract void setViewport(int, int, int, int);
+===== com.mojang.renderpearl.backend.api.SpvModule
+1,8d0
+< Compiled from "SpvModule.java"
+< public interface com.mojang.renderpearl.backend.api.SpvModule extends java.lang.AutoCloseable {
+<   public abstract void close();
+<   public abstract java.nio.ByteBuffer spv();
+<   public abstract com.mojang.renderpearl.api.pipeline.ShaderType type();
+<   public abstract com.mojang.renderpearl.backend.api.SpvModule$Reflection reflect() throws com.mojang.renderpearl.util.ShaderCompileException;
+<   public abstract com.mojang.renderpearl.backend.api.SpvModule$Reflection getReflectionInfoIfAvailable();
+< }
+===== com.mojang.renderpearl.backend.vulkan.VulkanDevice
+14a15
+>   private final com.mojang.renderpearl.backend.vulkan.RenderPassCache renderPassCache;
+25c26
+<   public com.mojang.renderpearl.backend.api.GpuSurfaceBackend createSurface(long, java.util.function.BooleanSupplier);
+---
+>   public com.mojang.renderpearl.backend.api.GpuSurfaceBackend createSurface(long, java.util.function.BooleanSupplier, boolean);
+34c35
+<   public com.mojang.renderpearl.backend.api.BackendRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.backend.api.BackendRenderPipeline$CreateInfo);
+---
+>   public com.mojang.renderpearl.backend.api.BackendRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$CreateInfo);
+37a39
+>   public com.mojang.renderpearl.backend.vulkan.RenderPassCache renderpassCache();
+===== com.mojang.renderpearl.frontend.FrontendGpuDevice
+4d3
+<   public static final boolean STRICT_VALIDATION;
+8,10c7,9
+<   private final com.mojang.renderpearl.frontend.shaders.PipelineBuilder pipelineBuilder;
+<   public com.mojang.renderpearl.frontend.FrontendGpuDevice(com.mojang.renderpearl.backend.api.GpuDeviceBackend);
+<   public com.mojang.renderpearl.api.device.GpuSurface createSurface(long, java.util.function.BooleanSupplier);
+---
+>   public final boolean strictValidation;
+>   public com.mojang.renderpearl.frontend.FrontendGpuDevice(com.mojang.renderpearl.backend.api.GpuDeviceBackend, com.mojang.renderpearl.api.device.GpuDebugOptions);
+>   public com.mojang.renderpearl.api.device.GpuSurface createSurface(long, java.util.function.BooleanSupplier, boolean);
+23c22,23
+<   public java.util.concurrent.CompletableFuture<com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$Pending> compilePipeline(com.mojang.renderpearl.api.pipeline.RenderPipeline, com.mojang.renderpearl.api.pipeline.ShaderSource, java.util.concurrent.Executor);
+---
+>   public com.mojang.renderpearl.api.pipeline.SpvModule createSpvModule(java.lang.String, java.nio.ByteBuffer, com.mojang.renderpearl.api.pipeline.ShaderType, java.lang.String) throws com.mojang.renderpearl.util.ShaderCompileException;
+>   public com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$Pending compilePipeline(com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$CreateInfo);
+27a28
+>   private static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline lambda$compilePipeline$0(com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline$CreateInfo, com.mojang.renderpearl.backend.api.BackendRenderPipeline$Pending, it.unimi.dsi.fastutil.ints.IntList, it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap);
+===== net.minecraft.client.Minecraft
+29a30
+>   private final net.minecraft.client.multiplayer.signaling.SignalingClient signalingClient;
+75a77
+>   private final net.minecraft.server.players.ProfileResolver localProfileResolver;
+121a124
+>   private void showWindow();
+222a226
+>   public boolean canUseRestrictedDebugFeatures();
+296a301
+>   public net.minecraft.server.players.ProfileResolver localProfileResolver();
+===== net.minecraft.client.core.registries.ClientRegistries
+0a1,19
+> Compiled from "ClientRegistries.java"
+> public class net.minecraft.client.core.registries.ClientRegistries {
+>   public static final net.minecraft.resources.Identifier ROOT_REGISTRY_NAME;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider<?, ?>>> BLOCK_ENTITY_RENDERER;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.renderer.item.properties.conditional.ConditionalItemModelProperty>>> CONDITIONAL_ITEM_MODEL_PROPERTY_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.gui.components.debug.DebugScreenEntry>> DEBUG_SCREEN_ENTRY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.renderer.entity.EntityRendererProvider<?>>> ENTITY_RENDERER;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.renderer.item.ItemModel$Unbaked>>> ITEM_MODEL_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.color.item.ItemTintSource>>> ITEM_TINT_SOURCE_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.gui.screens.MenuScreens$ScreenConstructor<?, ?>>> MENU_SCREEN;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.particle.ParticleProvider<?>>> PARTICLE_PROVIDER;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.renderer.item.properties.numeric.RangeSelectItemModelProperty>>> RANGE_SELECT_ITEM_MODEL_PROPERTY_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.client.renderer.item.properties.select.SelectItemModelProperty$Type<?, ?>>> SELECT_ITEM_MODEL_PROPERTY_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.renderer.special.SpecialModelRenderer$Unbaked<?>>>> SPECIAL_MODEL_RENDERER_TYPE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<com.mojang.serialization.MapCodec<? extends net.minecraft.client.renderer.texture.atlas.SpriteSource>>> SPRITE_SOURCE_TYPE;
+>   public net.minecraft.client.core.registries.ClientRegistries();
+>   private static <T> net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<T>> createRegistryKey(java.lang.String);
+>   static {};
+> }
+===== net.minecraft.client.gui.components.debug.DebugScreenDisplayer
+4,6c4,7
+<   public abstract void addLine(java.lang.String);
+<   public abstract void addToGroup(net.minecraft.resources.Identifier, java.util.Collection<java.lang.String>);
+<   public abstract void addToGroup(net.minecraft.resources.Identifier, java.lang.String);
+---
+>   public abstract void addToGroup(net.minecraft.client.gui.components.debug.DebugGroup, java.util.Collection<java.lang.String>);
+>   public abstract void addToGroup(net.minecraft.client.gui.components.debug.DebugGroup, java.lang.String);
+>   public abstract void addFactToGroup(net.minecraft.client.gui.components.debug.DebugGroup, java.lang.String, java.util.function.Consumer<net.minecraft.client.gui.components.debug.DebugFact>);
+>   public abstract void addToGroup(net.minecraft.client.gui.components.debug.DebugGroup, net.minecraft.client.gui.components.debug.DebugCustomRenderer);
+===== net.minecraft.client.gui.components.debug.DebugScreenEntries
+3,50c3,54
+<   private static final java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntry> ENTRIES_BY_ID;
+<   public static final net.minecraft.resources.Identifier GAME_VERSION;
+<   public static final net.minecraft.resources.Identifier FPS;
+<   public static final net.minecraft.resources.Identifier TPS;
+<   public static final net.minecraft.resources.Identifier MEMORY;
+<   public static final net.minecraft.resources.Identifier DETAILED_MEMORY;
+<   public static final net.minecraft.resources.Identifier SYSTEM_SPECS;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_BLOCK_STATE;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_BLOCK_TAGS;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_FLUID_STATE;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_FLUID_TAGS;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_ENTITY;
+<   public static final net.minecraft.resources.Identifier LOOKING_AT_ENTITY_TAGS;
+<   public static final net.minecraft.resources.Identifier CHUNK_RENDER_STATS;
+<   public static final net.minecraft.resources.Identifier CHUNK_GENERATION_STATS;
+<   public static final net.minecraft.resources.Identifier ENTITY_RENDER_STATS;
+<   public static final net.minecraft.resources.Identifier PARTICLE_RENDER_STATS;
+<   public static final net.minecraft.resources.Identifier CHUNK_SOURCE_STATS;
+<   public static final net.minecraft.resources.Identifier PLAYER_POSITION;
+<   public static final net.minecraft.resources.Identifier PLAYER_SECTION_POSITION;
+<   public static final net.minecraft.resources.Identifier PLAYER_SPEED;
+<   public static final net.minecraft.resources.Identifier LIGHT_LEVELS;
+<   public static final net.minecraft.resources.Identifier HEIGHTMAP;
+<   public static final net.minecraft.resources.Identifier BIOME;
+<   public static final net.minecraft.resources.Identifier LOCAL_DIFFICULTY;
+<   public static final net.minecraft.resources.Identifier DAY_COUNT;
+<   public static final net.minecraft.resources.Identifier ENTITY_SPAWN_COUNTS;
+<   public static final net.minecraft.resources.Identifier SOUND_MOOD;
+<   public static final net.minecraft.resources.Identifier SOUND_CACHE;
+<   public static final net.minecraft.resources.Identifier POST_EFFECTS;
+<   public static final net.minecraft.resources.Identifier ENTITY_HITBOXES;
+<   public static final net.minecraft.resources.Identifier CHUNK_BORDERS;
+<   public static final net.minecraft.resources.Identifier THREE_DIMENSIONAL_CROSSHAIR;
+<   public static final net.minecraft.resources.Identifier CHUNK_SECTION_PATHS;
+<   public static final net.minecraft.resources.Identifier GPU_UTILIZATION;
+<   public static final net.minecraft.resources.Identifier SIMPLE_PERFORMANCE_IMPACTORS;
+<   public static final net.minecraft.resources.Identifier CHUNK_SECTION_OCTREE;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_WATER_LEVELS;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_HEIGHTMAP;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_COLLISION_BOXES;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_ENTITY_SUPPORTING_BLOCKS;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_BLOCK_LIGHT_LEVELS;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_SKY_LIGHT_LEVELS;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_SOLID_FACES;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_CHUNKS_ON_SERVER;
+<   public static final net.minecraft.resources.Identifier VISUALIZE_SKY_LIGHT_SECTIONS;
+<   public static final net.minecraft.resources.Identifier CHUNK_SECTION_VISIBILITY;
+<   public static final java.util.Map<net.minecraft.client.gui.components.debug.DebugScreenProfile, java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus>> PROFILES;
+---
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> GAME_VERSION;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> FPS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> TPS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> MEMORY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> DETAILED_MEMORY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> SYSTEM_SPECS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_BLOCK_STATE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_BLOCK_TAGS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_FLUID_STATE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_FLUID_TAGS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_ENTITY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOOKING_AT_ENTITY_TAGS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_RENDER_STATS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_GENERATION_STATS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_SOURCE_STATS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> ENTITY_RENDER_STATS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> PARTICLE_RENDER_STATS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_SECTION_STATUS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_LOAD_STATUS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> PLAYER_POSITION;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> PLAYER_SECTION_POSITION;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> PLAYER_SPEED;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LIGHT_LEVELS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LIGHTMAP_TEXTURE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> HEIGHTMAP;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> BIOME;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> LOCAL_DIFFICULTY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> DAY_COUNT;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> ENTITY_SPAWN_COUNTS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> SOUND_MOOD;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> SOUND_CACHE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> POST_EFFECTS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> ENTITY_HITBOXES;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_BORDERS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> THREE_DIMENSIONAL_CROSSHAIR;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_SECTION_PATHS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> GPU_UTILIZATION;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> SIMPLE_PERFORMANCE_IMPACTORS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_SECTION_OCTREE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_WATER_LEVELS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_HEIGHTMAP;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_COLLISION_BOXES;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_ENTITY_SUPPORTING_BLOCKS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_BLOCK_LIGHT_LEVELS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_SKY_LIGHT_LEVELS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_SOLID_FACES;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_CHUNKS_ON_SERVER;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_SKY_LIGHT_SECTIONS;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> CHUNK_SECTION_VISIBILITY;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> ENVIRONMENT_ATTRIBUTE;
+>   public static final net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> VISUALIZE_ENVIRONMENT_ATTRIBUTE;
+>   public static final java.util.Map<net.minecraft.client.gui.components.debug.DebugScreenProfile, java.util.Map<net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus>> PROFILES;
+52,55c56,57
+<   private static net.minecraft.resources.Identifier register(java.lang.String, net.minecraft.client.gui.components.debug.DebugScreenEntry);
+<   private static net.minecraft.resources.Identifier register(net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntry);
+<   public static java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntry> allEntries();
+<   public static net.minecraft.client.gui.components.debug.DebugScreenEntry getEntry(net.minecraft.resources.Identifier);
+---
+>   private static net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry> key(java.lang.String);
+>   public static void bootstrap(net.minecraft.core.WritableRegistry<net.minecraft.client.gui.components.debug.DebugScreenEntry>);
+===== net.minecraft.client.gui.components.debug.DebugScreenEntryList
+5,6c5,6
+<   private final java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus> allStatuses;
+<   private final java.util.List<net.minecraft.resources.Identifier> currentlyEnabled;
+---
+>   private final java.util.Map<net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus> allStatuses;
+>   private final java.util.List<net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>> currentlyEnabled;
+14c14
+<   private void resetStatuses(java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus>);
+---
+>   private void resetStatuses(java.util.Map<net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus>);
+17,21c17,21
+<   public net.minecraft.client.gui.components.debug.DebugScreenEntryStatus getStatus(net.minecraft.resources.Identifier);
+<   public boolean isCurrentlyEnabled(net.minecraft.resources.Identifier);
+<   public void setStatus(net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus);
+<   public boolean toggleStatus(net.minecraft.resources.Identifier);
+<   public java.util.Collection<net.minecraft.resources.Identifier> getCurrentlyEnabled();
+---
+>   public net.minecraft.client.gui.components.debug.DebugScreenEntryStatus getStatus(net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>);
+>   public boolean isCurrentlyEnabled(net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>);
+>   public void setStatus(net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus);
+>   public boolean toggleStatus(net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>);
+>   public java.util.Collection<net.minecraft.resources.ResourceKey<net.minecraft.client.gui.components.debug.DebugScreenEntry>> getCurrentlyEnabled();
+29c29
+<   private void lambda$rebuildCurrentList$0(boolean, net.minecraft.resources.Identifier, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus);
+---
+>   private void lambda$rebuildCurrentList$0(boolean, net.minecraft.resources.ResourceKey, net.minecraft.client.gui.components.debug.DebugScreenEntryStatus);
+===== net.minecraft.client.renderer.texture.TextureAtlas
+2c2
+< public class net.minecraft.client.renderer.texture.TextureAtlas extends net.minecraft.client.renderer.texture.AbstractTexture implements net.minecraft.client.renderer.texture.TickableTexture,net.minecraft.client.renderer.texture.Dumpable {
+---
+> public class net.minecraft.client.renderer.texture.TextureAtlas implements java.lang.AutoCloseable {
+10a11,12
+>   private net.minecraft.client.renderer.texture.TextureResources texture;
+>   private final net.minecraft.client.renderer.texture.TextureManager textureManager;
+19c21
+<   public net.minecraft.client.renderer.texture.TextureAtlas(net.minecraft.resources.Identifier);
+---
+>   public net.minecraft.client.renderer.texture.TextureAtlas(net.minecraft.client.renderer.texture.TextureManager, net.minecraft.resources.Identifier);
+23,24c25
+<   public void dumpContents(net.minecraft.resources.Identifier, java.nio.file.Path) throws java.io.IOException;
+<   private static void dumpSpriteNames(java.nio.file.Path, java.lang.String, java.util.Map<net.minecraft.resources.Identifier, net.minecraft.client.renderer.texture.TextureAtlasSprite>);
+---
+>   public void dumpSpriteNames(net.minecraft.resources.Identifier, java.nio.file.Path);
+27d27
+<   public void tick();
+31d30
+<   protected void releaseTextures();
+35,36c34
+<   int getWidth();
+<   int getHeight();
+---
+>   public net.minecraft.client.renderer.texture.TextureResources getTexture();
+38d35
+<   private static int lambda$dumpContents$0(int);
+===== net.minecraft.core.Registry
+26a27
+>   public static <T> T register(net.minecraft.core.WritableRegistry<? super T>, java.lang.String, T);
+27a29
+>   public static <V, T extends V> T register(net.minecraft.core.WritableRegistry<V>, net.minecraft.resources.Identifier, T);
+28a31
+>   public static <V, T extends V> T register(net.minecraft.core.WritableRegistry<V>, net.minecraft.resources.ResourceKey<V>, T);
+36d38
+<   public default java.lang.Iterable<net.minecraft.core.Holder<T>> getTagOrEmpty(net.minecraft.tags.TagKey<T>);
+38a41
+>   public default java.lang.Iterable<net.minecraft.core.Holder$Reference<T>> holders();
+40a44
+>   private java.util.Iterator lambda$holders$0();
+===== net.minecraft.resources.ResourceKey
+2a3
+>   public static final com.mojang.serialization.Codec<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> REGISTRY_CODEC;
+9c10,11
+<   public static <T> net.minecraft.resources.ResourceKey<T> create(net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<T>>, net.minecraft.resources.Identifier);
+---
+>   public static <T> net.minecraft.resources.ResourceKey<T> create(net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<? extends T>>, net.minecraft.resources.Identifier);
+>   public static <T> net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<T>> createRegistryKey(net.minecraft.resources.Identifier, net.minecraft.resources.Identifier);
+===== net.minecraft.world.level.Level
+20d19
+<   private final boolean isDebug;
+33d31
+<   private final net.minecraft.world.level.biome.BiomeManager biomeManager;
+39c37
+<   protected net.minecraft.world.level.Level(net.minecraft.world.level.storage.WritableLevelData, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, net.minecraft.core.RegistryAccess, net.minecraft.core.Holder<net.minecraft.world.level.dimension.DimensionType>, boolean, boolean, long, int);
+---
+>   protected net.minecraft.world.level.Level(net.minecraft.world.level.storage.WritableLevelData, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, net.minecraft.core.RegistryAccess, net.minecraft.core.Holder<net.minecraft.world.level.dimension.DimensionType>, boolean, int);
+79a78
+>   public void playLocalSound(net.minecraft.core.BlockPos, net.minecraft.core.Holder<net.minecraft.sounds.SoundEvent>, net.minecraft.sounds.SoundSource, float, float, boolean);
+80a80
+>   public void playLocalSound(net.minecraft.world.entity.Entity, net.minecraft.core.Holder<net.minecraft.sounds.SoundEvent>, net.minecraft.sounds.SoundSource, float, float);
+98d97
+<   public abstract java.lang.String gatherChunkSourceStats();
+163,164d161
+<   public net.minecraft.world.level.biome.BiomeManager getBiomeManager();
+<   public final boolean isDebug();
+174a172
+>   private java.lang.String lambda$fillReportDetails$3() throws java.lang.Exception;
+176d173
+<   private java.lang.String lambda$fillReportDetails$1() throws java.lang.Exception;
+177a175
+>   private static java.lang.String lambda$fillReportDetails$1(net.minecraft.world.entity.player.Player);
