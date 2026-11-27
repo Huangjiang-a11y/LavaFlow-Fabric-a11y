@@ -31,12 +31,22 @@ final class LavaFlowSync {
     static final boolean NARROW_BARRIER = Boolean.getBoolean("lavaflow.narrowBarrier");
     /** 提交后立刻等这一次完成，把在飞提交压到 1（最强排序，代价是不再并行）。 */
     static final boolean SERIALIZE_SUBMIT = Boolean.getBoolean("lavaflow.serializeSubmit");
+    /**
+     * 拷贝前补一条 WAR 屏障：区块重建会把新数据写进上一帧（或本帧更早）的绘制还在读的区域。
+     *
+     * <p>同一队列只保证按序提交，执行可以重叠；缺这一条时，还在跑的旧 draw 会读到被踩掉一半的
+     * 新数据，真机表现是个别三角形被拉得极远，而且只在移动、区块重建时出现（静止时没有新分配、
+     * 也就没有区域重用）。每帧每块缓冲一次就够：之后同帧的拷贝都排在它后面。
+     */
+    static final boolean COPY_WAR_BARRIER =
+            !"false".equals(System.getProperty("lavaflow.copyWarBarrier", "true"));
 
     private LavaFlowSync() {}
 
     static void logConfiguration() {
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                 "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)")
+                        + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }
 }

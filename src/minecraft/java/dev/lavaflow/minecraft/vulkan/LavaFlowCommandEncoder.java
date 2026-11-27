@@ -36,6 +36,8 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean renderPassOpen;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+    /** 本帧是否已经为拷贝发过 WAR 屏障（见 LavaFlowSync.COPY_WAR_BARRIER）。 */
+    private boolean warBarrierDoneThisFrame;
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet recentlyWrittenBuffers =
             new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
@@ -175,6 +177,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boundIndexHandle = 0;
         boundIndexType = -1;
         lastDepthCleared = 0;
+        warBarrierDoneThisFrame = false;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -636,6 +639,14 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             }
         }
         try (MemoryStack stack = stackPush()) {
+            // WAR：这块目标缓冲可能刚被上一帧（或本帧更早）的绘制读过，而区块重建会把新数据写进
+            // 同一片区域，写必须等那些读结束。只在通道外发：通道内 ALL_COMMANDS 非法（只允许图形
+            // 阶段），TRANSFER 也不是图形阶段，通道内没有合法写法表达"等上一批读结束"。
+            if (LavaFlowSync.COPY_WAR_BARRIER && !renderPassOpen && !warBarrierDoneThisFrame) {
+                warBarrierDoneThisFrame = true;
+                memoryBarrier(stack);
+                LavaFlowFrameStats.barrierRecorded();
+            }
             VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack).srcOffset(source.offset())
                     .dstOffset(destination.offset()).size(source.length());
             vkCmdCopyBuffer(commandBuffer, buffer(source).handle(), buffer(destination).handle(), copy);
