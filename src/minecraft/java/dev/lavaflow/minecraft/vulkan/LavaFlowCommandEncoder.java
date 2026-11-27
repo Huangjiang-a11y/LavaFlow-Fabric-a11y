@@ -35,6 +35,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+    /** 同一批连续转换合成一条屏障（-Dlavaflow.noTransitionBatch=true 退回逐条发）。 */
+    private static final boolean TRANSITION_BATCH = !Boolean.getBoolean("lavaflow.noTransitionBatch");
+    private final java.util.List<PendingTransition> transitionBatch = new java.util.ArrayList<>(8);
+    private boolean transitionBatching;
     /** 本帧是否已经为拷贝发过 WAR 屏障（见 LavaFlowSync.COPY_WAR_BARRIER）。 */
     private boolean warBarrierDoneThisFrame;
     /** 自上次屏障以来被拷贝写过的缓冲句柄（整缓冲粒度，保守）。 */
@@ -507,6 +511,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void transition(LavaFlowGpuTexture texture, int targetLayout) {
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
+        if (transitionBatching) {
+            // 同一张图在一批里出现第二次时先把这批发掉：分组发送会打乱顺序，链式的两次转换
+            // 必须保持先后。这种情况实际不会出现，留着是为了不依赖"不会出现"。
+            for (PendingTransition pending : transitionBatch) {
+                if (pending.texture == texture) { flushTransitionBatch(); break; }
+            }
+            transitionBatch.add(new PendingTransition(texture, sourceLayout, targetLayout));
+            texture.layout(targetLayout);
+            return;
+        }
         LavaFlowFrameStats.barrierRecorded();
         try (MemoryStack stack = stackPush()) {
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
@@ -824,6 +838,88 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private void restoreSampledLayout(LavaFlowGpuTexture texture) {
         if ((texture.usage() & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
             transition(texture, LavaFlowVk.sampledLayout());
+        }
+    }
+
+    /**
+     * 开始一批连续转换。批内的 {@link #transition} 只记账不发命令，由 {@link #transitionBatchEnd}
+     * 按"源阶段→目的阶段"分组，每组只发一条 vkCmdPipelineBarrier。
+     *
+     * <p>为什么能合：一张通道开始前要转的附件/采样纹理是连着的几条转换，彼此之间没有数据依赖，
+     * 位置也一样（都在同一个 vkCmdBeginRenderPass 之前）。逐条发时每一条都是一次全图转换 + 一次
+     * tile 冲刷，合起来只是把同样的事一次说完。
+     */
+    void transitionBatchBegin() {
+        if (!TRANSITION_BATCH) return;
+        transitionBatching = true;
+        transitionBatch.clear();
+    }
+
+    /** 结束一批：把攒下的转换按阶段对分组发掉。 */
+    void transitionBatchEnd() {
+        if (!transitionBatching) return;
+        transitionBatching = false;
+        flushTransitionBatch();
+    }
+
+    private void flushTransitionBatch() {
+        if (transitionBatch.isEmpty()) return;
+        try (MemoryStack stack = stackPush()) {
+            emitTransitionGroups(stack, transitionBatch);
+        }
+        transitionBatch.clear();
+    }
+
+    private void emitTransitionGroups(MemoryStack stack, java.util.List<PendingTransition> batch) {
+        java.util.List<java.util.List<PendingTransition>> groups = new java.util.ArrayList<>();
+        java.util.List<Integer> srcStages = new java.util.ArrayList<>();
+        java.util.List<Integer> dstStages = new java.util.ArrayList<>();
+        for (PendingTransition pt : batch) {
+            int src = sourceStageForLayout(pt.sourceLayout);
+            int dst = destinationStageForLayout(pt.targetLayout);
+            int group = -1;
+            for (int i = 0; i < srcStages.size(); i++) {
+                if (srcStages.get(i) == src && dstStages.get(i) == dst) { group = i; break; }
+            }
+            if (group == -1) {
+                group = srcStages.size();
+                srcStages.add(src);
+                dstStages.add(dst);
+                groups.add(new java.util.ArrayList<>());
+            }
+            groups.get(group).add(pt);
+        }
+        for (int g = 0; g < groups.size(); g++) {
+            java.util.List<PendingTransition> members = groups.get(g);
+            VkImageMemoryBarrier.Buffer barriers = VkImageMemoryBarrier.calloc(members.size(), stack);
+            for (int i = 0; i < members.size(); i++) {
+                PendingTransition pt = members.get(i);
+                barriers.get(i).sType$Default()
+                        .oldLayout(pt.sourceLayout).newLayout(pt.targetLayout)
+                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .image(pt.texture.handle());
+                barriers.get(i).subresourceRange().aspectMask(LavaFlowVk.aspect(pt.texture.getFormat()))
+                        .baseMipLevel(0).levelCount(pt.texture.getMipLevels())
+                        .baseArrayLayer(0).layerCount(pt.texture.getDepthOrLayers());
+                barriers.get(i).srcAccessMask(sourceAccessForLayout(pt.sourceLayout));
+                barriers.get(i).dstAccessMask(destinationAccessForLayout(pt.targetLayout));
+            }
+            barriers.flip();
+            vkCmdPipelineBarrier(commandBuffer, srcStages.get(g), dstStages.get(g), 0, null, null, barriers);
+            LavaFlowFrameStats.barrierRecorded();
+        }
+    }
+
+    /** 一笔待发的布局转换。 */
+    private static final class PendingTransition {
+        final LavaFlowGpuTexture texture;
+        final int sourceLayout;
+        final int targetLayout;
+
+        PendingTransition(LavaFlowGpuTexture texture, int sourceLayout, int targetLayout) {
+            this.texture = texture;
+            this.sourceLayout = sourceLayout;
+            this.targetLayout = targetLayout;
         }
     }
 

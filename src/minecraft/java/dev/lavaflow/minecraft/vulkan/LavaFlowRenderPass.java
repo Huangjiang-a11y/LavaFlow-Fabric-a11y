@@ -187,17 +187,24 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     void ensureBegun() {
         if (begun) return;
         begun = true;
-        for (LavaFlowGpuTexture sampled : sampledTextures()) {
-            int layout = LavaFlowVk.sampledLayout();
-            if (sampled.layout() != layout) {
-                encoder.transition(sampled, layout);
+        // 这些转换位置相同（都在同一个 vkCmdBeginRenderPass 之前）且互不依赖，交一批发：
+        // 每条各发一次全图转换就是多次 tile 冲刷，合起来只发几条按阶段对分组的屏障。
+        encoder.transitionBatchBegin();
+        try {
+            for (LavaFlowGpuTexture sampled : sampledTextures()) {
+                int layout = LavaFlowVk.sampledLayout();
+                if (sampled.layout() != layout) {
+                    encoder.transition(sampled, layout);
+                }
             }
-        }
-        for (LavaFlowGpuTextureView view : colorViews) {
-            if (view != null) encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        }
-        if (depthView != null) {
-            encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            for (LavaFlowGpuTextureView view : colorViews) {
+                if (view != null) encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            }
+            if (depthView != null) {
+                encoder.transition(depthView.texture(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            }
+        } finally {
+            encoder.transitionBatchEnd();
         }
         if (!LAYOUT_DEBUG.isEmpty()) debugValidateLayouts();
         // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
@@ -388,11 +395,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         LavaFlowFrameStats.passSplit();
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (LavaFlowGpuTexture texture : sampled) {
-            int layout = LavaFlowVk.sampledLayout();
-            if (texture.layout() != layout) {
-                encoder.transition(texture, layout);
+        encoder.transitionBatchBegin();
+        try {
+            for (LavaFlowGpuTexture texture : sampled) {
+                int layout = LavaFlowVk.sampledLayout();
+                if (texture.layout() != layout) {
+                    encoder.transition(texture, layout);
+                }
             }
+        } finally {
+            encoder.transitionBatchEnd();
         }
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, true);
