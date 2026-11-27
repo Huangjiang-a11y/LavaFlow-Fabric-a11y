@@ -188,12 +188,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     void ensureBegun() {
         if (begun) return;
         begun = true;
-        for (TextureBinding binding : textures.values()) {
-            LavaFlowGpuTexture sampled = binding.view.texture();
-            int layout = LavaFlowVk.sampledLayout();
-            if (sampled.layout() != layout) {
-                encoder.transition(sampled, layout);
+        encoder.transitionBatchBegin();
+        try {
+            for (TextureBinding binding : textures.values()) {
+                LavaFlowGpuTexture sampled = binding.view.texture();
+                int layout = LavaFlowVk.sampledLayout();
+                if (sampled.layout() != layout) {
+                    encoder.transition(sampled, layout);
+                }
             }
+        } finally {
+            encoder.transitionBatchEnd();
         }
         for (LavaFlowGpuTextureView view : colorViews) {
             if (view != null) encoder.transition(view.texture(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -389,12 +394,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         LavaFlowFrameStats.passSplit();
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
-        for (TextureBinding binding : textures.values()) {
-            LavaFlowGpuTexture sampled = binding.view.texture();
-            int layout = LavaFlowVk.sampledLayout();
-            if (sampled.layout() != layout) {
-                encoder.transition(sampled, layout);
+        encoder.transitionBatchBegin();
+        try {
+            for (TextureBinding binding : textures.values()) {
+                LavaFlowGpuTexture sampled = binding.view.texture();
+                int layout = LavaFlowVk.sampledLayout();
+                if (sampled.layout() != layout) {
+                    encoder.transition(sampled, layout);
+                }
             }
+        } finally {
+            encoder.transitionBatchEnd();
         }
         try (MemoryStack stack = stackPush()) {
             if (context.dynamicRendering()) beginDynamic(stack, true);
