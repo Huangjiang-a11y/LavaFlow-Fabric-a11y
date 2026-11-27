@@ -84,6 +84,23 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // 合并机制保留，但白名单为空：实测 Main->手持物品 会闪水面，手持物品->HUD 之间必有布局转换
     // （屏障不能在开着的通道里发），两对都不可合。要再试就改这里。
     private static final java.util.Set<String> MERGEABLE = java.util.Set.of();
+    /**
+     * 只合 "Main -> Item in hand" 这一对（-Dlavaflow.mergeMainHand=true 打开，默认关）。
+     *
+     * <p>收益：手持物品通道现在 0.75ms 里几乎全是 1080p 颜色的 load+store（8.3MB 读 + 8.3MB 写）。
+     * 合进 Main 之后这份搬运整个消失，深度也不需要重新载入。
+     *
+     * <p>为什么只试这一对："手持物品 -> HUD" 合不了是结构性的——HUD 要把 Main 当采样输入，
+     * 布局转换不能在开着的通道里发，只能在两段之间发，所以那一段必须真的有边界。
+     */
+    private static final boolean MERGE_MAIN_HAND = Boolean.getBoolean("lavaflow.mergeMainHand");
+    private static final String MERGE_PAIR = "Main->Item in hand";
+    /** 被推迟的 end 所依据的通道形状：附件格式/写回、深度、渲染区域。 */
+    private String pendingShape;
+    private static boolean mergeReported;
+    private static boolean mergeRefusedReported;
+    /** createRenderPass 为合并候选让路、跳过了通道外屏障的落地，等 ensureBegun 定夺。 */
+    private boolean outsideFlushSkipped;
     private boolean pendingPassEnd;
     private boolean pendingPassDynamic;
     private long pendingRenderPass = -1;
@@ -551,7 +568,21 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     @Override public TransientMemory transientMemory() { return transientMemory; }
     @Override public RenderPassBackend createRenderPass(RenderPassDescriptor descriptor) {
         if (renderPassOpen) throw new IllegalStateException("A render pass is already open");
-        flushBufferWriteBarrier();
+        // 先把 pass 对象取出来：合并判据要问它标签和形状，而这两样只有它知道。
+        // reset 只动 Java 状态，不会碰命令缓冲，所以此时还开着的上一个通道不受影响。
+        LavaFlowRenderPass recycled = passPool.pollFirst();
+        LavaFlowRenderPass pass = recycled == null
+                ? new LavaFlowRenderPass(this, descriptor) : recycled.reset(descriptor);
+        // 只在"标签配对"这个必要条件成立时先不下手；形状与待落屏障的判据必须等手持物品自己
+        // 做完顶点/采样布局转换才能定，所以真正的决策在 ensureBegun 里。
+        boolean candidate = pendingPassEnd && MERGE_MAIN_HAND
+                && MERGE_PAIR.equals(pendingLabel + "->" + labelOf(descriptor));
+        pass.markMergeCandidate(candidate);
+        outsideFlushSkipped = candidate;
+        if (!candidate) {
+            // 合并不成，先把还开着的那个通道收干净，再落地通道外的屏障。
+            if (pendingPassEnd) endPassNow();
+            flushBufferWriteBarrier();
         // 通道外积压的转换和屏障必须在这里落地，不能留到 submit() 末尾。
         //
         // 原因：顶点/间接参数是用 vkCmdCopyBuffer 写进去的，那是 TRANSFER 阶段；而通道内的
@@ -562,11 +593,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         // 顶点——真机表现就是个别三角形被拉长（水面/半透明表面最明显）。Out 屏障用的
         // srcStageMask=BOTTOM_OF_PIPE 展开后含 TRANSFER，dstStageMask 是 VERTEX|FRAGMENT，
         // 放在通道前正好构成完整依赖。
-        try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
+            try (MemoryStack stack = stackPush()) { flushPendingBarriersOut(stack); }
+        }
         renderPassOpen = true;
-        LavaFlowRenderPass recycled = passPool.pollFirst();
-        activeRenderPass = recycled == null ? new LavaFlowRenderPass(this, descriptor) : recycled.reset(descriptor);
-        return activeRenderPass;
+        activeRenderPass = pass;
+        return pass;
     }
 
     /** 这张深度图有没有一笔推迟下来的清屏在等通道。 */
@@ -584,15 +615,87 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 一份 pass 录完了，对象交回池子，下一个通道直接 reset 复用。 */
     /** 通道结束时问一句：能不能先不结束、留给下一份同附件通道接着画。 */
     boolean closePassForMerge(boolean dynamic, long renderPass, long framebuffer,
-                              int x, int y, int width, int height, boolean allStored, String label) {
-        if (!PASS_MERGE || dynamic || !allStored || !MERGEABLE.contains(label)) {
+                              int x, int y, int width, int height, boolean allStored, String label,
+                              String shape) {
+        boolean whitelisted = MERGEABLE.contains(label)
+                || (MERGE_MAIN_HAND && "Main".equals(label));
+        if (!PASS_MERGE || dynamic || !allStored || !whitelisted) {
             endPassNow(); return false;
         }
         pendingPassEnd = true; pendingPassDynamic = dynamic; pendingRenderPass = renderPass;
         pendingFramebuffer = framebuffer; pendingX = x; pendingY = y; pendingW = width; pendingH = height;
-        pendingLabel = label;
+        pendingLabel = label; pendingShape = shape;
         return true;
     }
+
+    /**
+     * 判断能不能直接接在上一个（被推迟结束的）通道后面画。只做判断，不结束通道——调用点在
+     * {@link #createRenderPass}，它要在刷通道外屏障之前就拿到结论。
+     *
+     * <p>判据是形状签名相等 + 标签配对，而不是 RenderPass 句柄相等：Main 的深度声明 CLEAR，
+     * 手持物品声明 LOAD，两者句柄不同，但按 Vulkan 的兼容性定义可以直接接着画。
+     *
+     * <p>还有一条硬条件：两边都不能有待落的屏障。
+     * <ul>
+     *   <li>通道内的（{@code pendingTransitionsIn}）：合并不结束通道，而它们的合法落点是通道结束
+     *       之后；边界一没，就只能在通道里发（布局转换不合法）或推到末尾（用的人早读过了）。</li>
+     *   <li>通道外的（缓冲写可见性等）：它们必须在手持物品的第一笔绘制之前落地，因为等的就是那
+     *       批顶点/间接参数。可合并后它们只能落在合并通道的末尾，也就是画完之后——那正是
+     *       "个别三角形被拉长"的形状。</li>
+     * </ul>
+     */
+    private boolean mergeAllowed(String label, String shape) {
+        if (!MERGE_MAIN_HAND) return false;
+        if (!MERGE_PAIR.equals(pendingLabel + "->" + label)) return false;
+        if (pendingShape == null || !pendingShape.equals(shape)) return false;
+        if (!pendingTransitionsIn.isEmpty() || pendingBufferWriteBarriersIn != 0
+                || !pendingTransitionsOut.isEmpty() || pendingBufferWriteBarriersOut != 0
+                || bufferWriteBarrierPending) {
+            if (!mergeRefusedReported) {
+                mergeRefusedReported = true;
+                System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
+                        "[merge] " + pendingLabel + "->" + label + " 这一次不合：还有待落的屏障");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    /** 采纳这次合并：撤掉推迟的结束，形状作废。 */
+    private void commitMerge(String label) {
+        pendingPassEnd = false;
+        pendingShape = null;
+        if (!mergeReported) {
+            mergeReported = true;
+            System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                    "[merge] " + pendingLabel + "->" + label + " 合成一个通道：省下一次整屏颜色的 load+store");
+        }
+    }
+
+    /** 合并没成时的收尾：结束还开着的通道，再把通道外的屏障落地。必须在起新通道之前调。 */
+    void finishDeferredOutsideWork(MemoryStack stack) {
+        if (pendingPassEnd) endPassNow();
+        if (!outsideFlushSkipped) return;
+        outsideFlushSkipped = false;
+        flushBufferWriteBarrier();
+        flushPendingBarriersOut(stack);
+    }
+
+    /** 最终的合并决策：形状配对且两边都没有待落的屏障才成立。 */
+    boolean tryMergeIntoPrevious(String label, String shape) {
+        if (!pendingPassEnd || !mergeAllowed(label, shape)) return false;
+        commitMerge(label);
+        return true;
+    }
+
+    private static String labelOf(RenderPassDescriptor descriptor) {
+        var label = descriptor.label();
+        String value = label == null ? null : label.get();
+        return value == null || value.isEmpty() ? "unnamed" : value;
+    }
+
+    long mergedRenderPass() { return pendingRenderPass; }
+    long mergedFramebuffer() { return pendingFramebuffer; }
 
     /** 下一份通道开始前问一句：能直接接着上一个通道画吗（不结束、不重开）。 */
     boolean resumeIntoPass(boolean dynamic, long renderPass, long framebuffer,
@@ -607,6 +710,18 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         if (same) return true;
         endPassNow();
         return false;
+    }
+
+    /**
+     * 通道被推迟结束时，任何真正的传输命令都必须先把它关掉。
+     *
+     * <p>合并候选期，上一个通道在命令缓冲里还是开着的（只是 {@code renderPassOpen} 已经置 false）。
+     * 此时录 {@code vkCmdCopy*}、{@code vkCmdClearColorImage} 这类命令是非法的：它们只能出现在
+     * 渲染通道之外。真机不开验证层，这种用法不会报错，只会得到未定义的结果——上一版合并"只闪水面"
+     * 就是这个形状的错误。
+     */
+    private void closeDeferredPassBeforeTransfer() {
+        if (pendingPassEnd) endPassNow();
     }
 
     /** 真正结束挂起的那份通道；布局转换、提交之前都必须先调。 */
@@ -644,9 +759,11 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 唯一的布局转换入口：统计、记录屏障、设置 pendingLayout（真正提交屏障时 commit）。 */
     void transitionTo(LavaFlowGpuTexture texture, int targetLayout) {
-        endPassNow();
+        // 先判 no-op 再收通道：布局本来就是对的时候没有任何命令要发，这时候把推迟结束的通道
+        // 收掉纯属白干——合并候选会因此每帧落空一次，普通流程也多付一次结束/重开。
         int sourceLayout = texture.effectiveLayout();
         if (sourceLayout == targetLayout) return;
+        endPassNow();
         LavaFlowFrameStats.layoutTransition(texture, sourceLayout, targetLayout);
         PendingTransition pt = new PendingTransition(texture, sourceLayout, targetLayout);
         if (renderPassOpen) {
@@ -658,6 +775,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
 
     @Override public void clearColorTexture(GpuTexture gpuTexture, Vector4fc color) {
+        closeDeferredPassBeforeTransfer();
         LavaFlowGpuTexture texture = texture(gpuTexture);
         if (renderPassOpen && !warnedClearInsidePass) {
             warnedClearInsidePass = true;
@@ -717,6 +835,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     /** 旧的清深度写法：转到 TRANSFER_DST 清掉，再回到清之前的布局。 */
     void clearDepthImmediate(LavaFlowGpuTexture texture, double value) {
+        closeDeferredPassBeforeTransfer();
         // 只有在"上次清完之后没有任何通道开过"时才跳过：那种情况下这张深度确实没人写过。
         // 中间只要开过通道（世界、实体、粒子任何一样），深度里就有新的内容，这一清必须发。
         if (SKIP_REPEAT_DEPTH_CLEAR && lastDepthCleared == texture.handle()
@@ -790,6 +909,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      *               是主机写入还是纯拷贝。
      */
     private void copyToBuffer(GpuBufferSlice source, GpuBufferSlice destination, String origin) {
+        closeDeferredPassBeforeTransfer();
         if (source.length() > destination.length()) throw new IllegalArgumentException("Destination buffer slice is too small");
         if (!LavaFlowSync.NARROW_BARRIER && !LavaFlowSync.COPY_BARRIER_EAGER) {
             long sourceHandle = buffer(source).handle();
@@ -863,6 +983,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         copyBufferToTexture(staging, 0, 0, width, height, target, x, y, width, height, mip, layer);
     }
     @Override public void copyBufferToTexture(GpuBufferSlice source, int rowOffset, int imageOffset, int rowLength, int imageHeight, GpuTexture target, int x, int y, int width, int height, int mip, int layer) {
+        closeDeferredPassBeforeTransfer();
         flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(target); transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         long offset = source.offset() + (long)(rowOffset + imageOffset * rowLength) * target.getFormat().blockSize();
@@ -881,6 +1002,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     // a readback that needs to be waited on now goes through GpuFence (createFence), so there is nothing
     // left for the backend to notify. Only the rectangle form is still abstract.
     @Override public void copyTextureToBuffer(GpuTexture source, GpuBuffer target, long offset, int mip, int x, int y, int width, int height) {
+        closeDeferredPassBeforeTransfer();
         flushBufferWriteBarrier();
         LavaFlowGpuTexture texture = texture(source); transitionTo(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         try (MemoryStack stack = stackPush()) {
@@ -893,6 +1015,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         restoreSampledLayout(texture);
     }
     @Override public void copyTextureToTexture(GpuTexture source, GpuTexture target, int mip, int targetX, int targetY, int sourceX, int sourceY, int width, int height) {
+        closeDeferredPassBeforeTransfer();
         flushBufferWriteBarrier();
         LavaFlowGpuTexture src = texture(source), dst = texture(target);
         transitionTo(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL); transitionTo(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

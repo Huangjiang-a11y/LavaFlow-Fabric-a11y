@@ -233,6 +233,10 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private int timedPass = -1;
     // 本通道是否要在 begin 之后用 vkCmdClearAttachments 清一次深度（见 ensureBegun）。
     private boolean pendingDepthClearInline;
+    // 这份通道接在上一个被推迟结束的通道后面画：不再起新通道（见 LavaFlowCommandEncoder.createRenderPass）。
+    private boolean mergedIntoPrevious;
+    // createRenderPass 认定"可能接得上"：标签配对成立，但形状/屏障还得等转换做完才能定。
+    private boolean mergeCandidate;
     private long pendingIndexBuffer;
     private int pendingIndexType = -1;
 
@@ -265,6 +269,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         resumeRenderPass = 0;
         clearDepthRenderPass = 0;
         pendingDepthClearInline = false;
+        mergedIntoPrevious = false;
+        mergeCandidate = false;
 
         int colorSlots = colorSlotCount();
         RenderPassDescriptor.Attachment depth = depthAttachment();
@@ -439,9 +445,21 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // Outside the render pass on purpose: the timestamps bracket begin..end, and recording them inside
         // would put pipeline work between the tile load and the tile store this is meant to measure.
         timedPass = encoder.beginTimedPass(this::passLabel);
+        // createRenderPass 只标记候选（标签配对）；形状与待落屏障要等上面的 transitionTo
+        // 都做完才能判，所以真正的决策在这里。合并成功就不起新通道，整屏颜色的 load/store 随之消失。
         try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-            if (context.dynamicRendering()) beginDynamic(stack, false);
-            else beginLegacy(stack, false);
+            // 决策放在这里而不是 createRenderPass：上面那几笔 transitionTo 可能已经把上一个
+            // 推迟结束的通道收掉了，只有到这一刻才知道还能不能接。
+            boolean merged = mergeCandidate
+                    && encoder.tryMergeIntoPrevious(passLabel(), passShapeSignature());
+            if (merged) {
+                adoptMerged(encoder.mergedRenderPass(), encoder.mergedFramebuffer());
+            } else {
+                // createRenderPass 当时为候选让路的通道外屏障，要在起通道之前补上。
+                encoder.finishDeferredOutsideWork(stack);
+                if (context.dynamicRendering()) beginDynamic(stack, false);
+                else beginLegacy(stack, false);
+            }
             applyViewport(stack);
             setScissor(stack, scissorX, scissorY, scissorWidth, scissorHeight);
         }
@@ -486,7 +504,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
             RenderPass.RenderArea endArea = descriptor.renderArea();
             boolean deferred = encoder.closePassForMerge(context.dynamicRendering(), renderPass,
                     legacyFramebuffer, endArea.x(), endArea.y(), endArea.width(), endArea.height(),
-                    allAttachmentsStored(), passLabel());
+                    allAttachmentsStored(), passLabel(), passShapeSignature());
             if (!deferred) {
                 if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
                 else vkCmdEndRenderPass(encoder.commandBuffer());
@@ -540,7 +558,39 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         return d == null || d.store();
     }
 
-    private String passLabel() {
+    /**
+     * 这份通道的形状指纹：颜色附件的格式与是否写回、深度的格式与是否写回、渲染区域。
+     *
+     * <p>合并只认这个，不认 RenderPass 句柄——load/store 操作按 Vulkan 规范不参与兼容性判定，
+     * 同一形状可以有多个句柄不同的通道对象，它们之间接续绘制是合法的。
+     */
+    String passShapeSignature() {
+        RenderPass.RenderArea area = descriptor.renderArea();
+        StringBuilder sb = new StringBuilder(32);
+        if (colorFormats != null) {
+            for (int i = 0; i < colorFormats.length; i++) {
+                sb.append(colorFormats[i]).append(colorStores[i] ? 'S' : 'D').append(',');
+            }
+        }
+        RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
+        sb.append("|d=").append(depthView == null ? -1 : LavaFlowVk.format(depthView.texture().getFormat()))
+                .append(depthAttachment != null && depthAttachment.store() ? "S" : "D");
+        sb.append("|a=").append(area.x()).append(',').append(area.y())
+                .append(',').append(area.width()).append('x').append(area.height());
+        return sb.toString();
+    }
+
+    /** createRenderPass 认定这份通道可能接在上一份后面（标签配对），形状还要等转换做完再判。 */
+    void markMergeCandidate(boolean candidate) { mergeCandidate = candidate; }
+
+    /** 采纳合并：沿用上一个通道的句柄，end() 要用它们判断下一次合并是否还成立。 */
+    void adoptMerged(long renderPassHandle, long framebuffer) {
+        mergedIntoPrevious = true;
+        renderPass = renderPassHandle;
+        legacyFramebuffer = framebuffer;
+    }
+
+    String passLabel() {
         var label = descriptor.label();
         String value = label == null ? null : label.get();
         return value == null || value.isEmpty() ? "unnamed" : value;
