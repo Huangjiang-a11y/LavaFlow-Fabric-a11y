@@ -749,22 +749,29 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     /**
      * 当通道带推迟的就地清深度时，开通道所用的 RenderPass 变体（depthLoadOp 为 DONT_CARE）。
      *
-     * <p>Mali-G76 这类移动 Tile 架构若传入 LOAD，会将 1080p 的整屏深度从 DDR 读回 Tile 缓存，
-     * 随后紧接着的 recordPendingDepthClear() 又立刻将其整面覆盖，白白浪费 8.3MB 带宽与 ~1ms
-     * 耗时。改为 DONT_CARE 后，Tile 缓存直接就地清屏，Vulkan 规范明文保证与原 RenderPass 兼容。
+     * <p>Mali-G76 这类移动 Tile 架构若传入 LOAD，会把 1080p 的整屏深度从 DDR 读回 Tile 缓存，
+     * 而紧接着的 {@link #recordPendingDepthClear()} 又立刻把它整面覆盖——那次读纯属白付，
+     * 1920x1080 的 32 位深度约 8.3MB/帧。改成 DONT_CARE 后 Tile 直接就地清，不产生总线读。
+     *
+     * <p>Vulkan 规范“Render Pass Compatibility”一节明文把 load/store 操作排除在兼容性判定之外，
+     * 所以用它开出来的通道与 {@code renderPass} 兼容：已有管线、已有帧缓冲都能继续用，
+     * 不需要重建任何东西。
+     *
+     * <p>两种情况退回原通道，不做这件事：
+     * <ul>
+     *   <li>多子通道 / 瞬时附件的通道（layoutFormats 非空）：深度载入方式与其它附件耦合，
+     *       改单边会和 layout 构建器打架；</li>
+     *   <li>描述符自己就带深度清屏值（loadOp=CLEAR）：那种情况本来就不读 DDR，改了反而会丢掉
+     *       描述符要求的清屏值，只剩 pendingDepthClears 里记的那一个。</li>
+     * </ul>
      */
     private long clearDepthRenderPass() {
         if (clearDepthRenderPass != 0) return clearDepthRenderPass;
-        if (layoutFormats != null) {
-            int depthLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            clearDepthRenderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(), layoutFormats,
-                    layoutLoadOps, layoutStoreFlags, depthLayoutIndex, depthLoadOp, depthStore);
-            return clearDepthRenderPass;
-        }
-        int depthFormat = depthView == null ? VK_FORMAT_UNDEFINED
-                : LavaFlowVk.format(depthView.texture().getFormat());
-        RenderPassDescriptor.Attachment depthAttachment = depthView == null ? null : depthAttachment();
-        boolean depthStoreFlag = depthAttachment == null || depthAttachment.store();
+        if (layoutFormats != null) return renderPass;
+        RenderPassDescriptor.Attachment depthAttachment = depthAttachment();
+        if (depthAttachment == null || clears(depthAttachment, false)) return renderPass;
+        int depthFormat = LavaFlowVk.format(depthView.texture().getFormat());
+        boolean depthStoreFlag = depthAttachment.store();
         clearDepthRenderPass = context.legacyRenderPass(colorFormats, colorLoadOps, colorStores, depthFormat,
                 VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStoreFlag);
         return clearDepthRenderPass;
