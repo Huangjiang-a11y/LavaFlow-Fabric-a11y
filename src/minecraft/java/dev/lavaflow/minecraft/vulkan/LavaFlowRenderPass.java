@@ -396,21 +396,21 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // 有推迟下来的深度清屏时，先判断这个通道能不能就地清：要求渲染区域覆盖整张深度图，
         // 否则被裁掉的部分会留下旧内容——那种情况退回"进通道前先转 TRANSFER_DST 清掉"。
         //
-        // 多子通道通道（layoutFormats != null）没有专门的 clearDepthRenderPass 变体：
-        // clearDepthRenderPass() 会直接返回原通道，load op 是 LOAD/DONT_CARE 而非 DONT_CARE，
-        // 结果是"先 LOAD 旧深度、再 CLEAR"——顺序反了，OIT 的 Depth Bounds 子通道读到的全是
-        // 垃圾，导致全透明场景闪烁。这类通道直接 flushPendingDepthClear，在通道外清完再 LOAD。
+        // 有推迟下来的深度清屏时，先判断这个通道能不能就地清：要求渲染区域覆盖整张深度图，
+        // 否则被裁掉的部分会留下旧内容——那种情况退回"进通道前先转 TRANSFER_DST 清掉"。
+        //
+        // 多子通道通道也能就地清：clearDepthRenderPass() 会给它建一个"深度附件 DONT_CARE 载入、
+        // 其余附件载入方式不变"的变体。这条路径比在通道外清更省——通道外清是一次全屏
+        // TRANSFER_DST 写外加两条布局转换，而 DONT_CARE 载入让 tile 直接就地清，不产生总线写。
         if (depthView != null && encoder.hasPendingDepthClear(depthView.texture())) {
             RenderPass.RenderArea area = descriptor.renderArea();
+            // 按深度图自己的尺寸判断，不是颜色附件的：两者分辨率不同（半分辨率深度、
+            // mip 链）时，用 output 尺寸会把"只覆盖一部分"误判成整张覆盖，剩下那块留旧值。
             boolean fullArea = area.x() == 0 && area.y() == 0
                     && area.width() == depthView.texture().getWidth(0)
                     && area.height() == depthView.texture().getHeight(0);
-            boolean multiSubpass = layoutFormats != null;
-            if (fullArea && !multiSubpass) {
-                pendingDepthClearInline = true;
-            } else {
-                encoder.flushPendingDepthClear(depthView.texture());
-            }
+            if (fullArea) pendingDepthClearInline = true;
+            else encoder.flushPendingDepthClear(depthView.texture());
         }
         // Collect color attachment textures to avoid double-transition
         java.util.Set<LavaFlowGpuTexture> colorAttachmentTextures = new java.util.HashSet<>();
@@ -780,7 +780,19 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     private long clearDepthRenderPass() {
         if (clearDepthRenderPass != 0) return clearDepthRenderPass;
-        if (layoutFormats != null) return renderPass;
+        if (layoutFormats != null) {
+            // 多子通道通道：只把深度附件的载入方式换成 DONT_CARE，其余附件的格式、载入方式、
+            // 存储标志原样带过去。绝不能整条通道返回原 renderPass —— 那样深度是按 LOAD 载入的，
+            // 紧接着的 vkCmdClearAttachments 才是 CLEAR，顺序反了：读进来的是上一帧的脏深度，
+            // OIT 的 Depth Bounds 子通道据此算出的边界全错，全透明场景就会闪。
+            RenderPassDescriptor.Attachment depthAttachment =
+                    depthLayoutIndex >= 0 ? descriptor.attachments().get(depthLayoutIndex) : null;
+            if (depthAttachment == null || clears(depthAttachment, false)) return renderPass;
+            clearDepthRenderPass = context.legacyRenderPassLayout(descriptor.layout().subpasses(),
+                    layoutFormats, layoutLoadOps, layoutStoreFlags, depthLayoutIndex,
+                    VK_ATTACHMENT_LOAD_OP_DONT_CARE, depthStore);
+            return clearDepthRenderPass;
+        }
         RenderPassDescriptor.Attachment depthAttachment = depthAttachment();
         if (depthAttachment == null || clears(depthAttachment, false)) return renderPass;
         int depthFormat = LavaFlowVk.format(depthView.texture().getFormat());
