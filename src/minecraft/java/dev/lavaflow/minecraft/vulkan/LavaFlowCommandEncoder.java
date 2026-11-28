@@ -35,6 +35,15 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private boolean warnedInPassBufferBarrier;
     /** 有缓冲被拷贝写过、但还没发屏障。 */
     private boolean bufferWriteBarrierPending;
+    /**
+     * 通道内录过一笔缓冲写、还没建立"写入对后续读取可见"的屏障。
+     *
+     * <p>通道内没有合法写法表达这条依赖：通道里的屏障只许命名图形阶段
+     * （VUID-vkCmdPipelineBarrier-None-07892），而写缓冲区的是 vkCmdCopyBuffer，属于 TRANSFER 阶段。
+     * ALL_GRAPHICS 覆盖不到它，BOTTOM_OF_PIPE 又什么都不等，所以只能把账搬到通道外，
+     * 由 LavaFlowRenderPass 在下一个绘制前拆开通道、用 ALL_COMMANDS 发出去。
+     */
+    private boolean inPassBufferWritePending;
     /** 同一批连续转换合成一条屏障（-Dlavaflow.noTransitionBatch=true 退回逐条发）。 */
     private static final boolean TRANSITION_BATCH = !Boolean.getBoolean("lavaflow.noTransitionBatch");
     private final java.util.List<PendingTransition> transitionBatch = new java.util.ArrayList<>(8);
@@ -181,6 +190,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         boundIndexType = -1;
         lastDepthCleared = 0;
         warBarrierDoneThisFrame = false;
+        inPassBufferWritePending = false;
         if (timestampPool != 0) {
             vkCmdResetQueryPool(commandBuffer, timestampPool, index * 2, 2);
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestampPool, index * 2);
@@ -842,16 +852,25 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     boolean bufferWriteBarrierPending() { return bufferWriteBarrierPending; }
 
+    boolean inPassBufferWritePending() { return inPassBufferWritePending; }
+
+    /** 拆开通道后调用：把通道内记下的那几笔搬到通道外那一侧，交给 flushBufferWriteBarrier 发。 */
+    void moveInPassBufferWriteBarriersOut() {
+        if (!inPassBufferWritePending) return;
+        inPassBufferWritePending = false;
+        bufferWriteBarrierPending = true;
+    }
+
+    void markRenderPassOpen() { renderPassOpen = true; }
+
     /** 记下这笔拷贝写过的缓冲：之后若有拷贝要读它、或者要开始绘制，先补屏障。 */
     private void noteBufferWritten(GpuBufferSlice destination) {
         recentlyWrittenBuffers.add(buffer(destination).handle());
         bufferWriteBarrierPending = true;
-        // A write inside a pass cannot wait for the next flush point: the barrier would land in a later
-        // command buffer (or outside the pass altogether) while the draw in this one already reads it —
-        // for indirect draws that means the command processor reading parameters the copy has not written
-        // yet, which is a garbage index count in the hands of the GPU. The in-pass barrier is legal now that
-        // the render pass carries its self-dependency, so flush here.
-        if (renderPassOpen) flushBufferWriteBarrier();
+        // 通道内不能就地发：写缓冲区的是 vkCmdCopyBuffer（TRANSFER），而通道内的屏障只许命名图形
+        // 阶段，覆盖不到它的写。只记一笔，等下一个绘制前由 LavaFlowRenderPass 拆通道搬到外面发 ——
+        // 等通道结束也不行，同一通道里后面那个绘制读的就是刚写过的缓冲。
+        if (renderPassOpen) inPassBufferWritePending = true;
     }
 
     private static LavaFlowGpuBuffer buffer(GpuBufferSlice slice) { return (LavaFlowGpuBuffer)slice.buffer(); }
