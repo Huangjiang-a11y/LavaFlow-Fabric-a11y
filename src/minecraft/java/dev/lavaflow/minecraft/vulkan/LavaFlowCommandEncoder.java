@@ -592,8 +592,21 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         }
     }
     /** 同一帧内同一张深度图第二次清屏直接跳过（-Dlavaflow.noSkipRepeatDepthClear=true 退回）。 */
-    private static final boolean SKIP_REPEAT_DEPTH_CLEAR = !Boolean.getBoolean("lavaflow.noSkipRepeatDepthClear");
+    /**
+     * 曾经用来省掉"同帧第二次清同一张深度图"：只比 handle。但同一帧里两次清屏之间隔着一份通道，
+     * 第二次（画手持物品前那一次）被跳过之后，手臂就拿世界的深度去做深度测试，近处方块会在手臂上
+     * 切一刀。要跳过必须能证明"这张深度图自上次清屏后没有被任何东西写过"，26.3 没有那个记账
+     * （26.4 用 depthClearPassEpoch 做），所以这里干脆不清不跳。
+     */
+    private static final boolean SKIP_REPEAT_DEPTH_CLEAR = Boolean.getBoolean("lavaflow.skipRepeatDepthClear");
     private long lastDepthCleared;
+    /** 深度清屏的诊断预算：只打前若干行，够看清一次启动的路径即可。 */
+    private int depthDebugBudget = 40;
+
+    private void depthDebug(String message) {
+        if (depthDebugBudget-- <= 0) return;
+        System.getLogger("LavaFlow").log(System.Logger.Level.INFO, "[depth] " + message);
+    }
 
     private final java.util.LinkedHashMap<LavaFlowGpuTexture, Double> pendingDepthClears = new java.util.LinkedHashMap<>();
     /** 上一次当深度附件用的纹理；清它就能推迟到通道里做。 */
@@ -608,7 +621,16 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     /** 能当渲染目标的深度图：清屏推迟到通道里用 vkCmdClearAttachments 做，省掉两次整图布局转换。 */
     @Override public void clearDepthTexture(GpuTexture gpuTexture, double value) {
         LavaFlowGpuTexture texture = texture(gpuTexture);
-        if (texture.handle() == lastDepthAttachment) { pendingDepthClears.put(texture, value); return; }
+        // 推迟到通道里清只在通道已经开着时才必要（通道内不能做布局转换）。通道没开就直接清掉：
+        // 这样"画手持物品前清深度"一定发生在手持物品那份通道之前，不依赖"下一个用它的通道"是谁。
+        boolean defer = renderPassOpen && texture.handle() == lastDepthAttachment;
+        depthDebug("clear handle=" + Long.toHexString(texture.handle()) + " value=" + value
+                + " passOpen=" + renderPassOpen + " lastDepthAttachment=" + Long.toHexString(lastDepthAttachment)
+                + " -> " + (defer ? "deferred" : "immediate"));
+        if (defer) {
+            pendingDepthClears.put(texture, value);
+            return;
+        }
         clearDepthImmediate(texture, value);
     }
 

@@ -349,6 +349,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         vkCmdBeginRenderPass(encoder.commandBuffer(), begin, VK_SUBPASS_CONTENTS_INLINE);
         if (!resume && depthView != null) {
             Double pendingDepth = encoder.takePendingDepthClear(depthView.texture());
+            if (pendingDepth != null) {
+                System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                        "[depth] begin " + passLabel() + " pending=" + pendingDepth
+                                + " appliedInline=" + !depth.clearValue().isPresent());
+            }
             if (pendingDepth != null && !depth.clearValue().isPresent()) {
                 try (MemoryStack clearStack = stackPush()) {
                     VkClearAttachment.Buffer attachments = VkClearAttachment.calloc(1, clearStack);
