@@ -1658,14 +1658,25 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     /** Textures behind the sampled-image uniforms currently bound, in slot order. */
     private void sampledTexturesCollect(List<LavaFlowGpuTexture> out) {
         if (pipeline == null) return;
-        for (int index : pipeline.sampledIndices()) {
-            if (index < uniforms.size()) {
-                Object value = uniforms.get(index);
-                if (value instanceof TextureViewAndSampler binding) {
-                    out.add(((LavaFlowGpuTextureView) binding.view()).texture());
-                } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
-                    out.add(((LavaFlowGpuTextureView) view).texture());
-                }
+        // 遍历"所有 uniform 槽"，不是只遍历 pipeline.sampledIndices()。
+        //
+        // 一条通道里 MC 会换管线，后换上的管线可能把某张纹理当采样输入读（26.4 的 OIT 就是：
+        // Accumulate 阶段才用到 Lightmap），而那张纹理此刻还停在上一条通道留下的
+        // COLOR_ATTACHMENT_OPTIMAL 布局。若只在当前管线的采样槽里找，它要等通道中途被绑定时
+        // 才发现——那时已经无法安全地转布局：多子通道通道不能拆（拆了 DONT_STORE 的附件直接丢
+        // 内容、子通道位置错位），只能把转换推到通道末尾，触发那次采样读的就是旧布局。
+        //
+        // 通道开始前就把这些纹理全转成可采样布局，上述窗口就不存在了。输入附件槽位放的是本通道
+        // 的附件视图，必须跳过，否则会把正在用的附件切成采样布局。
+        List<LavaFlowRenderPipeline.Entry> entries = pipeline.entries();
+        int count = Math.min(entries.size(), uniforms.size());
+        for (int index = 0; index < count; index++) {
+            if (entries.get(index).type() == LavaFlowRenderPipeline.EntryType.INPUT_ATTACHMENT) continue;
+            Object value = uniforms.get(index);
+            if (value instanceof TextureViewAndSampler binding) {
+                out.add(((LavaFlowGpuTextureView) binding.view()).texture());
+            } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
+                out.add(((LavaFlowGpuTextureView) view).texture());
             }
         }
     }
@@ -1674,17 +1685,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     
     private List<LavaFlowGpuTexture> sampledTextures() {
         sampledScratch.clear();
-        if (pipeline == null) return sampledScratch;
-        for (int index : pipeline.sampledIndices()) {
-            if (index < uniforms.size()) {
-                Object value = uniforms.get(index);
-                if (value instanceof TextureViewAndSampler binding) {
-                    sampledScratch.add(((LavaFlowGpuTextureView) binding.view()).texture());
-                } else if (value instanceof com.mojang.renderpearl.api.textures.GpuTextureView view) {
-                    sampledScratch.add(((LavaFlowGpuTextureView) view).texture());
-                }
-            }
-        }
+        sampledTexturesCollect(sampledScratch);
         return sampledScratch;
     }
 
