@@ -233,7 +233,6 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         LOGGER.log(System.Logger.Level.INFO, line.toString());
     }
 
-    private static final java.util.concurrent.atomic.AtomicBoolean INPUT_ATTACHMENT_WARNED = new java.util.concurrent.atomic.AtomicBoolean();
 
     /**
      * One entry per {@code createInfo.uniforms()}, in that exact order.
@@ -254,18 +253,15 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                 case UNIFORM_BUFFER -> EntryType.UNIFORM_BUFFER;
                 case COMBINED_IMAGE_SAMPLER -> EntryType.SAMPLED_IMAGE;
                 case TEXEL_BUFFER -> EntryType.TEXEL_BUFFER;
-                // 6 新增：subpass 的 input attachment（片元着色器里按 subpass input 采样，Vulkan 上
-                // 需要 VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT，与采样图不是同一种描述符）。LavaFlow
-                // 目前没有这条路径，先按采样图绑定并在第一次遇到时告警——宁可画面可疑也不要静默
-                // 错绑；真用上了，补一个输入附件描述符类型即可。
-                case INPUT_ATTACHMENT -> {
-                    if (INPUT_ATTACHMENT_WARNED.compareAndSet(false, true)) {
-                        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
-                                "pipeline uniform " + uniform.name() + " is an input attachment; "
-                                        + "bound as a sampled image (input attachments are not implemented yet)");
-                    }
-                    yield EntryType.SAMPLED_IMAGE;
-                }
+                // subpass 的 input attachment（片元着色器里按 subpass input 采样）。
+                //
+                // 这里以前把它降级成 SAMPLED_IMAGE 并告警"未实现"，代价是双向的：描述符类型不对
+                // （采样图而不是输入附件），而且它会被当成被采样的纹理，在通道开始前被转成
+                // SHADER_READ_ONLY——可它同时是这张通道的颜色附件，两边对布局的约定就分叉了。
+                // 真机上 OIT 的 Transmittance/Accumulate/Composite 读的正是这些输入附件，
+                // 对不上就是透明面闪烁、深度界剔错。写路径（buildWrites）本来就有
+                // INPUT_ATTACHMENT 分支，按 LavaFlowVk.attachmentLayout() 写，所以直接保留类型即可。
+                case INPUT_ATTACHMENT -> EntryType.INPUT_ATTACHMENT;
             };
             result.add(new Entry(type, uniform.name(), uniform.gpuFormat()));
         }
