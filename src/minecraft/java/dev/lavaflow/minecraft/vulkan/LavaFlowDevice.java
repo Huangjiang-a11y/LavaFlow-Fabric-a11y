@@ -59,6 +59,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
 
     public LavaFlowDevice(long window, ShaderSource shaderSource) {
         // 启动时说明这一局用的是哪种拷贝后屏障：日志自己回答"这是开着旧窄屏障跑的，还是默认的全局屏障"。
+        LavaFlowLog.configSummary();
         LavaFlowElision.logConfiguration();
         LavaFlowSync.logConfiguration();
         this.context = new LavaFlowVulkanContext(window);

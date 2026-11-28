@@ -44,8 +44,7 @@ final class LavaFlowSync {
     private LavaFlowSync() {}
 
     static void logConfiguration() {
-        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
-                "sync policy: copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)")
+        LavaFlowLog.info("config", "sync  copyBarrier=" + (NARROW_BARRIER ? "narrow(legacy)" : "global(official)")
                         + " warBarrier=" + COPY_WAR_BARRIER
                         + " serializeSubmit=" + SERIALIZE_SUBMIT);
     }

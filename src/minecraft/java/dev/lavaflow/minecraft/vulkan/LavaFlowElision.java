@@ -45,8 +45,7 @@ final class LavaFlowElision {
 
     /** 启动时打一行，好让日志自己说明这一局跑的是哪种组合。 */
     static void logConfiguration() {
-        System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
-                "bind elision: vbuf=" + VERTEX + " ibuf=" + INDEX + " pipeline=" + PIPELINE
+        LavaFlowLog.info("config", "elision vbuf=" + VERTEX + " ibuf=" + INDEX + " pipeline=" + PIPELINE
                 + " uniform=" + UNIFORM + " descriptors=" + DESCRIPTORS
                 + " dynamicUniformOffsets=" + DYNAMIC_UNIFORM_OFFSETS
                         + (DISABLED.isEmpty() ? "" : " (disabled=" + DISABLED + ")"));

@@ -43,7 +43,7 @@ import static org.lwjgl.vulkan.VK10.*;
  */
 final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
     /** 每帧把通道序列打出来：标签、颜色附件数、有没有深度、绘制笔数、区域。 */
-    private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
+    /** 逐通道原始行只在 -Dlavaflow.logPassRaw=true 时打印；聚合进五秒汇总。 */
     private static int passSeqIndex;
     private int seqDraws;
 
@@ -247,13 +247,17 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
             if (!hasClears) return;
             ensureBegun();
         }
-        if (PASS_SEQUENCE) {
+        // 通道序列不再逐条打印：只记进五秒汇总（按通道名聚合份数与平均绘制数），
+        // 要看原始行加 -Dlavaflow.logPassRaw=true。
+        if (LavaFlowFrameStats.enabled()) {
             int colors = 0;
             for (LavaFlowGpuTextureView v : colorViews) if (v != null) colors++;
-            System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
-                    "[LavaFlow pass-seq] #" + (++passSeqIndex) + " " + passLabel() + " color=" + colors
-                            + (depthView == null ? " depth=none" : " depth=present")
-                            + " draws=" + seqDraws + " area=" + scissorWidth + "x" + scissorHeight);
+            LavaFlowFrameStats.passRecorded(passLabel(), colors, seqDraws);
+            if (LavaFlowLog.PASS_RAW) {
+                LavaFlowLog.info("pass", "#" + (++passSeqIndex) + " " + passLabel() + " color=" + colors
+                        + (depthView == null ? " depth=none" : " depth=present")
+                        + " draws=" + seqDraws + " area=" + scissorWidth + "x" + scissorHeight);
+            }
         }
         seqDraws = 0;
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
@@ -474,9 +478,8 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
 
     private static void report(String message) {
-        String full = "[LavaFlow layout-debug] " + message;
-        if (LAYOUT_DEBUG.equals("throw")) throw new IllegalStateException(full);
-        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, full);
+        if (LAYOUT_DEBUG.equals("throw")) throw new IllegalStateException("[lavaflow:layout] " + message);
+        LavaFlowLog.warn("layout", message);
     }
 
     private void setViewport(MemoryStack stack) {
@@ -631,7 +634,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
 
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
-        if (PASS_SEQUENCE) seqDraws++;
+        seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         if (LavaFlowDrawCheck.ENABLED) {
@@ -684,7 +687,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
-        if (PASS_SEQUENCE) seqDraws++;
+        seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
@@ -765,7 +768,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         }
     }
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
-        if (PASS_SEQUENCE) seqDraws++;
+        seqDraws++;
         flushPendingBufferBarrier();
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);

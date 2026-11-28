@@ -29,11 +29,27 @@ public final class LavaFlowFrameStats {
     private static int debugFrameHead;
     private static long debugPreviousFrameNanos;
     private static final long REPORT_INTERVAL_NANOS = 5_000_000_000L;
+    /** 超过这个帧时间就单独出一条热行（最快 0.5 秒一条），不等五秒汇总。 */
+    private static final double HOT_FRAME_MILLIS =
+            Double.parseDouble(System.getProperty("lavaflow.slowFrameMs", "25"));
+    private static final long HOT_THROTTLE_MILLIS = 500;
+    private static long lastFrameMillis;
 
     private static final long[] intervals = new long[WINDOW];
     private static int count;
     private static long previousFrameNanos;
     private static long lastReportNanos;
+    /** 五秒窗口内每份通道的聚合：{份数, 绘制次数, 颜色附件数}，键是通道名。以前这些逐条打印。 */
+    private static final java.util.Map<String, long[]> passCounts = new java.util.LinkedHashMap<>();
+
+    /** 通道结束时记一笔，代替逐条 [pass-seq] 行。 */
+    static void passRecorded(String label, int colors, int draws) {
+        if (!ENABLED) return;
+        long[] slot = passCounts.computeIfAbsent(label, k -> new long[3]);
+        slot[0]++;
+        slot[1] += draws;
+        if (colors > slot[2]) slot[2] = colors;
+    }
     private static long totalFrames;
     private static long descriptorSets;
     private static long descriptorSetsAtReport;
@@ -447,6 +463,7 @@ public final class LavaFlowFrameStats {
     private static synchronized void record() {
         long now = System.nanoTime();
         if (previousFrameNanos != 0) {
+            lastFrameMillis = now - previousFrameNanos;
             if (count < WINDOW) {
                 intervals[count++] = now - previousFrameNanos;
             } else {
@@ -459,6 +476,11 @@ public final class LavaFlowFrameStats {
         if (now - lastReportNanos >= REPORT_INTERVAL_NANOS && count > 1) {
             report();
             lastReportNanos = now;
+        } else if (lastFrameMillis / 1_000_000.0 >= HOT_FRAME_MILLIS) {
+            // 慢帧不等五秒：单独一条，最快 0.5 秒一条。正常帧一条都不出。
+            LavaFlowLog.throttled("hot", "slow-frame", HOT_THROTTLE_MILLIS,
+                    "frame=" + lastFrameMillis / 1_000_000.0 + "ms 超过 "
+                            + String.format("%.1f", HOT_FRAME_MILLIS) + "ms 阈值");
         }
     }
 
@@ -557,56 +579,48 @@ public final class LavaFlowFrameStats {
         double texturesPerFrame = framesSince == 0 ? 0 : (retiredTextures - retiredTexturesAtReport) / (double) framesSince;
         String topViewLabels = topRetiredViewLabels();
         updateReportBaselines();
-        LOGGER.log(System.Logger.Level.INFO,
-                "frames={0} fps_median={1} frame_ms median={2} mean={3} p99={4} min={5} gpu_ms={6}"
-                        + " sets_per_frame={7}"
-                        + " hit_rate={8} invalidations_per_frame={9} barriers_per_frame={10} submits_per_frame={11}"
-                        + " binds_per_frame={12} rebind_ratio={13} bind_records_per_frame={14} vertex_binds_per_frame={15}"
-                        + " pushes_per_frame={16} uniform_changes_per_frame={17}"
-                        + " retired_buffer={18} retired_view={19} retired_sampler={20} retired_texture={21}"
-                        + " pass_splits_per_frame={22} top_retired_view={23}"
-                        + " vertex_bind_calls_per_frame={24} vertex_rebind_ratio={25}"
-                        + " copy_barriers_per_frame={26}"
-                        + " indirect_native_per_frame={27} indirect_expanded_per_frame={28}"
-                        + " indirect_split_per_frame={29} indirect_skipped_per_frame={30}",
-                Long.toString(totalFrames),
-                String.format("%.1f", 1000.0 / medianMillis),
-                String.format("%.3f", medianMillis),
-                String.format("%.3f", meanMillis),
-                String.format("%.3f", p99Millis),
-                String.format("%.3f", minMillis),
+        double passMillisPerFrame = gpuSamplesSince == 0 ? 0
+                : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
+        double outsideMillisPerFrame = gpuMillisPerFrame - passMillisPerFrame;
+        List<String> lines = new ArrayList<>();
+        lines.add(String.format(
+                "[lavaflow:frame] %.0fs %d帧 fps=%.1f p50=%.2fms mean=%.2f p99=%.2f min=%.2f"
+                        + " gpu=%s outside=%.2f passes=%.1f splits=%.2f",
+                REPORT_INTERVAL_NANOS / 1e9, framesSince, 1000.0 / medianMillis, medianMillis, meanMillis,
+                p99Millis, minMillis,
                 gpuSamplesSince == 0 ? "-" : String.format("%.2f", gpuMillisPerFrame),
-                String.format("%.1f", setsPerFrame),
-                String.format("%.3f", hitRate),
-                String.format("%.2f", invalidationsPerFrame),
-                String.format("%.1f", barriersPerFrame),
-                String.format("%.1f", submitsPerFrame),
-                String.format("%.1f", bindsPerFrame),
-                String.format("%.3f", rebindRatio),
-                String.format("%.1f", bindRecordsPerFrame),
-                String.format("%.1f", vertexBindsPerFrame),
-                String.format("%.1f", pushesPerFrame),
-                String.format("%.1f", uniformChangesPerFrame),
-                String.format("%.2f", buffersPerFrame),
-                String.format("%.2f", viewsPerFrame),
-                String.format("%.2f", samplersPerFrame),
-                String.format("%.2f", texturesPerFrame),
-                String.format("%.2f", passSplitsPerFrame),
-                topViewLabels,
-                String.format("%.1f", vertexBindCallsPerFrame),
-                String.format("%.3f", vertexRebindRatio),
-                String.format("%.1f", copyBarriersPerFrame),
-                String.format("%.1f", indirectNativePerFrame),
-                String.format("%.1f", indirectExpandedPerFrame),
-                String.format("%.1f", indirectSplitPerFrame),
-                String.format("%.1f", indirectSkippedPerFrame));
-        if (timedPasses != timedPassesAtReport) {
-            double passMillisPerFrame = gpuSamplesSince == 0 ? 0
-                    : (passGpuFrameMillis - passGpuFrameMillisAtReport) / gpuSamplesSince;
-            double outsideMillisPerFrame = gpuMillisPerFrame - passMillisPerFrame;
-            LOGGER.log(System.Logger.Level.INFO, passGpuLine(passesPerFrame, outsideMillisPerFrame));
-            passGpuFrameMillisAtReport = passGpuFrameMillis;
+                outsideMillisPerFrame, passesPerFrame, passSplitsPerFrame));
+        if (!passCounts.isEmpty()) {
+            lines.add(passCountLine(framesSince));
+            passCounts.clear();
         }
+        if (timedPasses != timedPassesAtReport) {
+            lines.add("[lavaflow:gpu] " + passGpuLine(passesPerFrame, outsideMillisPerFrame));
+        }
+        lines.add("[lavaflow:draw] " + String.format(
+                "binds=%.1f rebind=%.3f records=%.1f vb=%.1f/%.1f rb=%.3f pushes=%.1f uniform=%.1f",
+                bindsPerFrame, rebindRatio, bindRecordsPerFrame, vertexBindsPerFrame,
+                vertexBindCallsPerFrame, vertexRebindRatio, pushesPerFrame, uniformChangesPerFrame));
+        StringBuilder sync = new StringBuilder("[lavaflow:sync] ").append(String.format(
+                "barriers=%.1f copy=%.1f submits=%.1f", barriersPerFrame, copyBarriersPerFrame,
+                submitsPerFrame));
+        if (indirectNativePerFrame + indirectExpandedPerFrame + indirectSplitPerFrame
+                + indirectSkippedPerFrame > 0) {
+            sync.append(String.format(" indirect=n%.1f/e%.1f/s%.1f/k%.1f", indirectNativePerFrame,
+                    indirectExpandedPerFrame, indirectSplitPerFrame, indirectSkippedPerFrame));
+        }
+        lines.add(sync.toString());
+        StringBuilder mem = new StringBuilder("[lavaflow:mem] ");
+        if (buffersPerFrame + viewsPerFrame + samplersPerFrame + texturesPerFrame > 0) {
+            mem.append(String.format("retired=b%.2f v%.2f s%.2f t%.2f ", buffersPerFrame, viewsPerFrame,
+                    samplersPerFrame, texturesPerFrame));
+        }
+        mem.append(String.format("sets=%.1f hit=%.3f invalidations=%.2f", setsPerFrame, hitRate,
+                invalidationsPerFrame));
+        if (!"-".equals(topViewLabels)) mem.append(" top_view=").append(topViewLabels);
+        lines.add(mem.toString());
+        LavaFlowLog.block(lines);
+        if (timedPasses != timedPassesAtReport) passGpuFrameMillisAtReport = passGpuFrameMillis;
         passGpuMillisAtReport.clear();
         for (Map.Entry<String, double[]> entry : passGpuMillis.entrySet()) {
             passGpuMillisAtReport.put(entry.getKey(), entry.getValue().clone());
@@ -619,6 +633,35 @@ public final class LavaFlowFrameStats {
      * {@code other} so the line stays one readable screen. Labels are the frontend's own pass names, with
      * spaces turned into underscores so the line stays tokenisable.
      */
+    /** 窗口内的通道聚合：按份数排，前八个列出，其余折成 +N。 */
+    private static String passCountLine(long framesSince) {
+        List<Map.Entry<String, long[]>> entries = new ArrayList<>(passCounts.entrySet());
+        entries.sort((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]));
+        long total = 0;
+        for (Map.Entry<String, long[]> entry : entries) total += entry.getValue()[0];
+        StringBuilder line = new StringBuilder("[lavaflow:pass] ").append(total).append("份/")
+                .append(framesSince).append("帧");
+        int shown = 0;
+        long restCount = 0;
+        long restDraws = 0;
+        for (Map.Entry<String, long[]> entry : entries) {
+            long[] value = entry.getValue();
+            if (shown < 8) {
+                line.append(shown == 0 ? " " : " | ").append(entry.getKey().replace(' ', '_'))
+                        .append('\u00d7').append(value[0])
+                        .append(" d=").append(value[1] / Math.max(1, value[0]));
+                shown++;
+            } else {
+                restCount += value[0];
+                restDraws += value[1];
+            }
+        }
+        if (restCount > 0) {
+            line.append(" | +").append(restCount).append("份 d=").append(restDraws / restCount);
+        }
+        return line.toString();
+    }
+
     private static String passGpuLine(double passesPerFrame, double outsideMillisPerFrame) {
         List<Map.Entry<String, double[]>> entries = new ArrayList<>(passGpuMillis.entrySet());
         entries.sort((a, b) -> Double.compare(windowAverage(b), windowAverage(a)));
