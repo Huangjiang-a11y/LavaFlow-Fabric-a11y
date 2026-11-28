@@ -178,6 +178,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     private boolean descriptorsDirty = true;
     private boolean begun;
     private boolean ended;
+    /** 当前子通道下标：nextSubpass() 推进，begin 时归零。 */
+    private int activeSubpass;
 
     // Fixed-function state buffered until the pass begins; recorded directly afterwards.
     private int scissorX;
@@ -389,6 +391,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     void ensureBegun() {
         if (begun) return;
         begun = true;
+        activeSubpass = 0;
         if (LavaFlowFrameStats.tracingPasses()) LavaFlowFrameStats.notePass(passLabel());
         // 有推迟下来的深度清屏时，先判断这个通道能不能就地清：要求渲染区域覆盖整张深度图，
         // 否则被裁掉的部分会留下旧内容——那种情况退回"进通道前先转 TRANSFER_DST 清掉"。
@@ -976,7 +979,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         // 旧版渲染通道的子通道颜色附件数是写死的，VkPipelineColorBlendStateCreateInfo 必须正好
         // 报这么多。数量能对上就不必多说；对不上时驱动可能读越界（Mali 上是空指针），这一行是
         // 崩溃前唯一能落盘的证词，所以只说一次、直接 WARNING。
-        int passColorTargets = colorSlotCount();
+        int passColorTargets = activeColorTargetCount();
         if (passColorTargets != pipeline.colorTargetCount() && !colorTargetMismatchReported) {
             colorTargetMismatchReported = true;
             System.getLogger("LavaFlow").log(System.Logger.Level.WARNING,
@@ -985,7 +988,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                             + "; padding the blend state to the larger count");
         }
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline.pipelineFor(depthVkFormat, renderPass, passColorTargets));
+                pipeline.pipelineFor(depthVkFormat, renderPass, passColorTargets, activeSubpass));
     }
 
     // ---- snapshot-6 的附件模型 ------------------------------------------------------------
@@ -1011,6 +1014,16 @@ final class LavaFlowRenderPass implements RenderPassBackend {
 
     private int colorSlotCount() { return subpass0().colorAttachments().size(); }
 
+    /**
+     * 当前子通道的颜色附件数。多子通道 layout 下每个子通道的附件集不同（OIT 的 Depth Bounds 是 1、
+     * Transmittance 是 2），绑管线时必须按"现在在哪个子通道"取，否则拿到的是给别的子通道建的变体。
+     */
+    private int activeColorTargetCount() {
+        var layout = descriptor.layout();
+        if (activeSubpass <= 0 || activeSubpass >= layout.subpasses().size()) return colorSlotCount();
+        return layout.subpass(activeSubpass).colorAttachments().size();
+    }
+
     /** 该附件这一帧要不要清：有 clear 值且不是续录。 */
     private static boolean clears(RenderPassDescriptor.Attachment attachment, boolean resume) {
         return !resume && attachment != null && attachment.clearValue() != null;
@@ -1033,6 +1046,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     @Override public void nextSubpass() {
         if (descriptor.layout().subpasses().size() <= 1 || !begun || ended) return;
         vkCmdNextSubpass(encoder.commandBuffer(), VK_SUBPASS_CONTENTS_INLINE);
+        activeSubpass++;
     }
 
 

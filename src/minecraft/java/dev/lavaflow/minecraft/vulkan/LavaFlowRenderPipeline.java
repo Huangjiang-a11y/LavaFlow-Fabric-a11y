@@ -84,6 +84,10 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
     private int dynamicPipelineCount;
     private long[] legacyRenderPasses = new long[4];
     private long[] legacyPipelines = new long[4];
+    // 子通道也要进键：同一份 render pass 有多个子通道时（OIT：Depth Bounds 1 个颜色附件、
+    // Transmittance 2 个），每个子通道要一份自己的管线变体，sp 字段在创建时就得写对，
+    // 否则是"用 subpass 0 的管线去子通道 3 里画"——Mali 上直接画花，表现就是地形一闪一闪。
+    private int[] legacySubpasses = new int[4];
     private int legacyPipelineCount;
     private final boolean dynamicUniforms;
     private boolean closed;
@@ -345,22 +349,24 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      *                      format the render pass uses.
      * @param renderPass    the legacy render pass handle, or {@code 0} for dynamic rendering.
      */
-    long pipelineFor(int depthVkFormat, long renderPass, int passColorTargets) {
+    long pipelineFor(int depthVkFormat, long renderPass, int passColorTargets, int subpass) {
         if (closed) throw new IllegalStateException("Pipeline is closed");
         if (device.context().dynamicRendering()) {
             long cached = lookupDynamicPipeline(depthVkFormat);
             return cached != 0 ? cached : createDynamicPipeline(depthVkFormat);
         }
         for (int i = 0; i < legacyPipelineCount; i++) {
-            if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
+            if (legacyRenderPasses[i] == renderPass && legacySubpasses[i] == subpass) {
+                return legacyPipelines[i];
+            }
         }
-        return createLegacyPipeline(depthVkFormat != 0, renderPass, passColorTargets);
+        return createLegacyPipeline(depthVkFormat != 0, renderPass, passColorTargets, subpass);
     }
 
     private synchronized long createDynamicPipeline(int depthVkFormat) {
         long cached = lookupDynamicPipeline(depthVkFormat);
         if (cached != 0) return cached;
-        long pipeline = createGraphicsPipeline(depthVkFormat, 0, 0);
+        long pipeline = createGraphicsPipeline(depthVkFormat, 0, 0, 0);
         if (dynamicPipelineCount == dynamicPipelines.length) {
             int grown = Math.max(4, dynamicPipelineCount * 2);
             dynamicFormats = Arrays.copyOf(dynamicFormats, grown);
@@ -384,19 +390,24 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
         return info.colorTargetStates().size();
     }
 
-    private synchronized long createLegacyPipeline(boolean hasDepth, long renderPass, int passColorTargets) {
+    private synchronized long createLegacyPipeline(boolean hasDepth, long renderPass, int passColorTargets,
+            int subpass) {
         for (int i = 0; i < legacyPipelineCount; i++) {
-            if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
+            if (legacyRenderPasses[i] == renderPass && legacySubpasses[i] == subpass) {
+                return legacyPipelines[i];
+            }
         }
         // For legacy render passes, depth is a binary yes/no encoded in the render pass object itself;
         // the actual format is implicit in the render pass handle used as the key.
-        long pipeline = createGraphicsPipeline(hasDepth ? 1 : 0, renderPass, passColorTargets);
+        long pipeline = createGraphicsPipeline(hasDepth ? 1 : 0, renderPass, passColorTargets, subpass);
         if (legacyPipelineCount == legacyRenderPasses.length) {
             legacyRenderPasses = Arrays.copyOf(legacyRenderPasses, legacyPipelineCount * 2);
             legacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount * 2);
+            legacySubpasses = Arrays.copyOf(legacySubpasses, legacyPipelineCount * 2);
         }
         legacyRenderPasses[legacyPipelineCount] = renderPass;
         legacyPipelines[legacyPipelineCount] = pipeline;
+        legacySubpasses[legacyPipelineCount] = subpass;
         legacyPipelineCount++;
         return pipeline;
     }
@@ -409,8 +420,11 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
      *                      {@code 0} for no depth, any non-zero sentinel for "has depth" (the actual
      *                      format is already encoded in the render pass object).
      * @param renderPass    legacy render pass handle, or {@code 0} for dynamic rendering.
+     * @param subpass       subpass index the pipeline is created for (legacy only); multi-subpass
+     *                      pass layouts need one variant per subpass.
      */
-    private long createGraphicsPipeline(int depthVkFormat, long renderPass, int passColorTargets) {
+    private long createGraphicsPipeline(int depthVkFormat, long renderPass, int passColorTargets,
+            int subpass) {
         try (MemoryStack stack = stackPush()) {
             List<CompiledRenderPipeline.CreateInfo.VertexBuffer> vertexBufferDescs = info.vertexBuffers();
             List<CompiledRenderPipeline.CreateInfo.AttribBinding> attribDescs = info.attribBindings();
@@ -516,7 +530,9 @@ final class LavaFlowRenderPipeline implements BackendRenderPipeline {
                         .depthAttachmentFormat(depthVkFormat);
                 create.pNext(rendering);
             } else {
-                create.renderPass(renderPass).subpass(info.subpass().index());
+                // 旧路径按子通道建：动态渲染没有子通道，用 create info 里的那个；
+                // 传统渲染通道必须用调用方给的子通道下标，否则管线只对 subpass 0 合法。
+                create.renderPass(renderPass).subpass(renderPass == 0 ? info.subpass().index() : subpass);
             }
             LongBuffer out = stack.mallocLong(1);
             check(vkCreateGraphicsPipelines(device.context().device(), 0, create, null, out),
