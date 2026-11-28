@@ -115,11 +115,16 @@ final class LavaFlowDescriptorCache {
         LavaFlowFrameStats.descriptorSetAllocated();
         if (pools.isEmpty()) pools.add(createPool());
         try (MemoryStack stack = stackPush()) {
+            // 分配请求和输出槽只建一次：它们放在循环里allocate的话，每轮都会在这一个栈帧里再占一块，
+            // 池子永远分配不出来时就会一路涨到 LWJGL 的栈上限（真机上是 "OutOfMemoryError: Out of
+            // stack space"，然后渲染线程每帧抛一次、空转）。
+            VkDescriptorSetAllocateInfo allocation = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default();
+            LongBuffer out = stack.mallocLong(1);
+            LongBuffer setLayouts = stack.longs(layout);
+            allocation.pSetLayouts(setLayouts);
+            boolean triedFreshPool = false;
             while (true) {
-                VkDescriptorSetAllocateInfo allocation = VkDescriptorSetAllocateInfo.calloc(stack)
-                        .sType$Default().descriptorPool(pools.get(poolIndex))
-                        .pSetLayouts(stack.longs(layout));
-                LongBuffer out = stack.mallocLong(1);
+                allocation.descriptorPool(pools.get(poolIndex));
                 int result = vkAllocateDescriptorSets(context.device(), allocation, out);
                 if (result == VK_SUCCESS) {
                     long set = out.get(0);
@@ -136,8 +141,19 @@ final class LavaFlowDescriptorCache {
                 if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
                     throw new IllegalStateException(VulkanException.describe("vkAllocateDescriptorSets", result));
                 }
+                if (triedFreshPool) {
+                    // 刚建的空池也装不下：池的类型清单和这个布局对不上（例如布局里有池里没声明的
+                    // 描述符类型）。以前这里会不停地新建池、永不返回，真机上就是渲染线程卡死；
+                    // 现在直接说清楚，别再静默吃掉整局游戏。
+                    throw new IllegalStateException("descriptor pool cannot satisfy a set layout "
+                            + "(pool sizes: uniform buffer, dynamic uniform buffer, combined image sampler, "
+                            + "uniform texel buffer, input attachment); layout handle " + layout);
+                }
                 poolIndex++;
-                if (poolIndex == pools.size()) pools.add(createPool());
+                if (poolIndex == pools.size()) {
+                    pools.add(createPool());
+                    triedFreshPool = true;
+                }
             }
         }
     }
@@ -272,11 +288,15 @@ final class LavaFlowDescriptorCache {
 
     private long createPool() {
         try (MemoryStack stack = stackPush()) {
-            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(4, stack);
+            // 池的尺寸清单必须覆盖布局里可能出现的每一种描述符：漏一种，含那种描述的 set 就永远
+            // 分配不出来（vkAllocateDescriptorSets 报 OUT_OF_POOL_MEMORY），而不只是慢一点。
+            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(5, stack);
             sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(SETS_PER_POOL * 4);
             sizes.get(1).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC).descriptorCount(SETS_PER_POOL * 8);
             sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(SETS_PER_POOL * 4);
             sizes.get(3).type(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER).descriptorCount(SETS_PER_POOL * 2);
+            // 26.4 的 OIT 通道把子通道的输入附件当描述符绑（subpassLoad），没有它整条通道都建不出 set。
+            sizes.get(4).type(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT).descriptorCount(SETS_PER_POOL * 4);
             VkDescriptorPoolCreateInfo info = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                     .flags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)
                     .maxSets(SETS_PER_POOL).pPoolSizes(sizes);
