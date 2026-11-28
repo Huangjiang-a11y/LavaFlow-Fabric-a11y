@@ -77,7 +77,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // 哪条管线、参数从哪个偏移开始"对上号。只在开头若干帧记录，避免刷屏。
     private static final boolean DEBUG_DRAWS = Boolean.getBoolean("lavaflow.debugDraws");
     /** 每帧把通道序列打出来：标签、颜色附件数/写回数、深度、绘制笔数。 */
-    private static final boolean PASS_SEQUENCE = Boolean.getBoolean("lavaflow.passSequence");
+    /** 逐通道原始行只在 -Dlavaflow.logPassRaw=true 时打印；聚合进五秒汇总。 */
     /**
      * 通道构成一次性报告：每个标签第一次建通道时打一行，说明它的颜色/深度附件到底是谁。
      *
@@ -491,8 +491,11 @@ final class LavaFlowRenderPass implements RenderPassBackend {
                 if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
                 else vkCmdEndRenderPass(encoder.commandBuffer());
             }
-            if (PASS_SEQUENCE) {
-                reportPassSeq(passSequenceLine());
+            // 通道序列不再逐条打印：只记进五秒汇总（按通道名聚合份数与平均绘制数），
+            // 要看原始行加 -Dlavaflow.logPassRaw=true。
+            if (LavaFlowFrameStats.enabled()) {
+                LavaFlowFrameStats.passRecorded(passLabel(), colorSlotCount(), seqDraws);
+                if (LavaFlowLog.PASS_RAW) reportPassSeq(passSequenceLine());
                 // 每份通道结束时归零：上一版忘了这一步，笔数在整局里累加，
                 // 于是 Main 报出十七万笔这种明显不可能是真的数字。
                 seqDraws = 0;
@@ -565,7 +568,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     private static void reportPassSeq(String message) {
-        System.getLogger("LavaFlow").log(System.Logger.Level.WARNING, "[LavaFlow pass-seq] " + message);
+        LavaFlowLog.info("pass", message);
     }
 
     private void beginDynamic(MemoryStack stack, boolean resume) {
@@ -1152,7 +1155,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         }
     }
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
-        if (PASS_SEQUENCE) seqDraws++;
+        seqDraws++;
         // 和两条 indirect 路径同一件事：绘制前必须把"缓冲被写过"的依赖建立起来。
         // 这条以前漏了 —— 只有 drawIndirect / drawIndexedIndirect 会调它，于是凡是通过
         // drawIndexed 读刚上传的顶点/索引缓冲的绘制都没有同步。快照-10 把地形改成 indirect
@@ -1195,7 +1198,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
         if (drawCount <= 0) return;
-        if (PASS_SEQUENCE) seqDraws += drawCount;
+        seqDraws += drawCount;
         flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
@@ -1313,7 +1316,7 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     // drawMultipleIndexed is frontend work in 26.3 -- FrontendRenderPass walks the draws itself and
     // drives setVertexBuffer / setIndexBuffer / drawIndexed, so RenderPassBackend no longer has it.
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
-        if (PASS_SEQUENCE) seqDraws++;
+        seqDraws++;
         flushPendingBufferBarrier();
         if (encoder.renderPassOpen()) {
             try (MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) { encoder.flushPendingBarriersIn(stack); }
