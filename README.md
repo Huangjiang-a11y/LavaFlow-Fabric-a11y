@@ -10,7 +10,7 @@
 
 | 分支 | Minecraft | 当前版本 | 定位 |
 | --- | --- | --- | --- |
-| `26.4` | 26.4-snapshot-10 | 0.1.7-alpha | 主开发分支，新特性先落这里 |
+| `26.4` | 26.4-pre-2 | 0.1.7-alpha | 主开发分支，新特性先落这里 |
 | `26.3` | 26.3 | 0.1.7-beta | 跟随 26.3 稳定版 |
 | `26.2` | 26.2 | 0.1.7-beta | 跟随 26.2 稳定版 |
 
@@ -44,7 +44,7 @@ LavaFlow 是 Minecraft Blaze3D API 的实验性 Vulkan 1.1 图形后端。它用
 
 | 组件 | 目标 |
 | --- | --- |
-| Minecraft | 26.4-snapshot-10（`26.4` 分支）；26.3（`26.3` 分支）；26.2（`26.2` 分支） |
+| Minecraft | 26.4-pre-2（`26.4` 分支）；26.3（`26.3` 分支）；26.2（`26.2` 分支） |
 | 模组加载器 | Fabric Loader 0.19.5 或更高 |
 | Minecraft 运行时 | Java 25 |
 | 图形 API | Vulkan 1.1 |
@@ -238,7 +238,7 @@ Sodium 0.9.2 通过 Blaze3D 渲染通道 API 发起地形绘制（`RenderPass.mu
 - Vulkan 1.1 loader 与驱动
 - Gradle 9.5.1 或兼容版本
 
-Fabric Loom 会在首次构建时自动下载对应版本的 Minecraft 客户端（本分支为 26.4-snapshot-10）。
+Fabric Loom 会在首次构建时自动下载对应版本的 Minecraft 客户端（本分支为 26.4-pre-2）。
 
 构建并完整测试项目：
 
@@ -476,7 +476,7 @@ top_retired_view=UI items atlas=481, UI items atlas depth=481
 
 ## 在 Fabric 上安装
 
-1. 将 `build/libs/lavaflow-26.4-0.1.7-alpha.jar` 复制到 Minecraft 26.4-snapshot-10 实例的 `mods` 目录。
+1. 将 `build/libs/lavaflow-26.4-pre-2-0.1.7-alpha.jar` 复制到 Minecraft 26.4-pre-2 实例的 `mods` 目录。
 2. 选择 Vulkan 作为实例的图形后端。
 3. 使用 Java 25 启动 Minecraft。
 
@@ -485,7 +485,7 @@ Sodium 为可选依赖，装上可启用 LavaFlow 上的 Vulkan 地形渲染路�
 对于 Android 上的 FCL，典型的模组路径为：
 
 ```text
-/storage/emulated/0/FCL/.minecraft/versions/26.4-snapshot-10-Fabric/mods/
+/storage/emulated/0/FCL/.minecraft/versions/26.4-pre-2-Fabric/mods/
 ```
 
 具体实例目录可能因启动器配置而异。
