@@ -616,7 +616,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     void depthDebug(String message) {
         if (!DEPTH_DEBUG || depthDebugBudget-- <= 0) return;
-        System.getLogger("LavaFlow").log(System.Logger.Level.INFO, "[depth] " + message);
+        LavaFlowLog.info("depth", message);
     }
 
     private final java.util.LinkedHashMap<LavaFlowGpuTexture, Double> pendingDepthClears = new java.util.LinkedHashMap<>();
