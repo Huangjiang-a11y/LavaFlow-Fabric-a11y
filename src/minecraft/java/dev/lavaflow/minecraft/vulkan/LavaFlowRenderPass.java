@@ -382,7 +382,34 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         return resumeRenderPass;
     }
 
-    /**
+        /**
+     * 绘制前把"缓冲写对后续读取可见"结掉：通道外直接发全局屏障；通道内必须先拆开再发。
+     */
+    private void flushPendingBufferBarrier() {
+        if (!encoder.bufferWriteBarrierPending() && !encoder.inPassBufferWritePending()) return;
+        if (begun && !ended && encoder.inPassBufferWritePending()) {
+            splitPassForBufferBarrier();
+            return;
+        }
+        encoder.flushBufferWriteBarrier();
+    }
+
+    /** 结束通道，在通道外发掉缓冲写屏障，再带着载入操作重开。设备状态跨边界保持，不用重绑。 */
+    private void splitPassForBufferBarrier() {
+        LavaFlowFrameStats.passSplit();
+        if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
+        else vkCmdEndRenderPass(encoder.commandBuffer());
+        encoder.markRenderPassClosed();
+        try (MemoryStack stack = stackPush()) {
+            encoder.moveInPassBufferWriteBarriersOut();
+            encoder.flushBufferWriteBarrier();
+            if (context.dynamicRendering()) beginDynamic(stack, true);
+            else beginLegacy(stack, true);
+        }
+        encoder.markRenderPassOpen();
+    }
+
+/**
      * Ends the running pass, transitions every bound texture to the sampled layout, and resumes the
      * pass with load ops so no contents are lost.
      *
@@ -605,7 +632,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
 
     @Override public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         if (LavaFlowDrawCheck.ENABLED) {
             LavaFlowDrawCheck.check(LavaFlowFrameStats.totalFrames(), pipelineName(),
@@ -624,7 +651,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
      * host-visible memory the GPU has to read back per draw.
      */
     @Override public void multiDrawIndexed(IntBuffer indexInfo, int instanceCount, int firstInstance, int drawCount) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         if (drawCount <= 0) return;
         pushDescriptors();
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
@@ -658,7 +685,7 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     @Override public void multiDrawIndexed(PointerBuffer buffers, IntBuffer counts, IntBuffer baseVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndexedIndirect(GpuBufferSlice buffer, int count) {
         if (PASS_SEQUENCE) seqDraws++;
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
@@ -739,14 +766,14 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
     @Override public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (PASS_SEQUENCE) seqDraws++;
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         vkCmdDraw(encoder.commandBuffer(), vertexCount, instanceCount, firstVertex, firstInstance);
     }
     @Override public void multiDraw(IntBuffer counts, int firstInstance, int instanceCount, int firstVertex) { unsupported(); }
     @Override public void multiDraw(IntBuffer counts, IntBuffer firstVertices, int instanceCount) { unsupported(); }
     @Override public void drawIndirect(GpuBufferSlice buffer, int count) {
-        encoder.flushBufferWriteBarrier();
+        flushPendingBufferBarrier();
         pushDescriptors();
         LavaFlowGpuBuffer parameters = (LavaFlowGpuBuffer) buffer.buffer();
         if (count <= 1 || context.multiDrawIndirect()) {
