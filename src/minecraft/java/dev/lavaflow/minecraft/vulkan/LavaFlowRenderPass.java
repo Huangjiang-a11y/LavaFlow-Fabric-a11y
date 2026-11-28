@@ -857,6 +857,8 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     /** Ends the pass, flushes the buffer-write barrier outside it, and resumes with load ops. */
 
     /** 每帧都在拆通道时，这里只打印一次"是谁拆的"，省得靠猜。 */
+    private static final java.util.concurrent.atomic.AtomicBoolean MULTISUBPASS_SPLIT_REPORTED =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private static final java.util.Set<String> SPLIT_REPORTED = new java.util.HashSet<>();
 
     private boolean isColorAttachment(LavaFlowGpuTexture t) {
@@ -887,6 +889,23 @@ final class LavaFlowRenderPass implements RenderPassBackend {
         if (SPLIT_REPORTED.add(line)) {
             System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
                     "[split] " + line + " (want=" + want + ")");
+        }
+        // 多子通道通道不能拆：拆 = 结束通道再 beginLegacy(resume=true)，而 resume 变体把
+        // DONT_STORE 的附件按 DONT_CARE 载入 —— OIT 的 depthBounds / transmittance / accumulate
+        // 全是 DONT_STORE，内容当场丢；更致命的是重开后 Vulkan 子通道回到 0，跟前端（以及我们
+        // 记的 activeSubpass）已经不在同一位置，后续 nextSubpass 全部错位。
+        // 真机表现：全透明场景（Lightmap 第一次被采样发生在 OIT 内部）时地形一闪一闪，
+        // 放一个不透明方块（Solid 通道先采样、提前转过布局）就立刻不闪。
+        // 这里改成把采样转换排到通道末尾，让编码器在 endPassNow 里发出去。
+        if (descriptor.layout().subpasses().size() > 1) {
+            if (MULTISUBPASS_SPLIT_REPORTED.compareAndSet(false, true)) {
+                System.getLogger("LavaFlow").log(System.Logger.Level.INFO,
+                        "[split] 多子通道通道不拆，采样转换推迟到通道末尾: " + line);
+            }
+            for (LavaFlowGpuTexture texture : sampled) {
+                if (texture.effectiveLayout() != want) encoder.transitionTo(texture, want);
+            }
+            return;
         }
         if (context.dynamicRendering()) vkCmdEndRenderingKHR(encoder.commandBuffer());
         else vkCmdEndRenderPass(encoder.commandBuffer());
