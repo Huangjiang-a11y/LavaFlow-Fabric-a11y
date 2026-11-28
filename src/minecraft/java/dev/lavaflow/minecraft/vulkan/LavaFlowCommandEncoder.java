@@ -604,11 +604,12 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
      */
     private static final boolean SKIP_REPEAT_DEPTH_CLEAR = Boolean.getBoolean("lavaflow.skipRepeatDepthClear");
     private long lastDepthCleared;
-    /** 深度清屏的诊断预算：只打前若干行，够看清一次启动的路径即可。 */
+    /** 深度清屏诊断，默认关闭：{@code -Dlavaflow.depthDebug=true} 才打，且只打前若干行。 */
+    private static final boolean DEPTH_DEBUG = Boolean.getBoolean("lavaflow.depthDebug");
     private int depthDebugBudget = 40;
 
-    private void depthDebug(String message) {
-        if (depthDebugBudget-- <= 0) return;
+    void depthDebug(String message) {
+        if (!DEPTH_DEBUG || depthDebugBudget-- <= 0) return;
         System.getLogger("LavaFlow").log(System.Logger.Level.INFO, "[depth] " + message);
     }
 
